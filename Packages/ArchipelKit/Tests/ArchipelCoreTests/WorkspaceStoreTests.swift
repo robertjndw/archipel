@@ -24,9 +24,12 @@ struct WorkspaceStoreTests {
         s.agentTitle = "Fix login"
         s.hasCustomTitle = true
         ws.addSession(s, to: extra.id)
+        let file = try ws.openTab(.file(URL(fileURLWithPath: "/tmp/a.swift")), in: extra.id, preview: true).unwrapped()
+        _ = ws.splitTab(id: file)
 
         try store.save(ws)
         #expect(try store.load() == ws)
+        #expect(ws.schemaVersion == 3)
 
         let text = try String(contentsOf: url, encoding: .utf8)
         #expect(text.contains("\n"))
@@ -91,7 +94,11 @@ struct WorkspaceStoreTests {
         #expect(project.worktrees[0].sessions[0].agentSessionID == "abc")
         #expect(project.worktrees[1].branch == "feat/x")
         #expect(ws.selectedWorktreeID == project.worktrees[1].id)
-        #expect(ws.selectedSessionID(in: project.worktrees[1].id) == UUID(uuidString: shell))
+        #expect(ws.focusedSessionID(in: project.worktrees[1].id) == UUID(uuidString: shell))
+        for worktree in project.worktrees {
+            #expect(worktree.panes.count == 1)
+            #expect(worktree.panes[0].tabs.map(\.content) == worktree.sessions.map { .session($0.id) })
+        }
         // Nothing was quarantined: the old file is still the workspace file.
         #expect(FileManager.default.fileExists(atPath: url.path))
     }

@@ -5,6 +5,7 @@ import SwiftUI
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
     @Binding var isAddingProject: Bool
+    let toggleSidebar: () -> Void
     @State private var renaming: RenameTarget?
     @State private var addingWorktreeTo: Project?
     @State private var deleting: Worktree?
@@ -35,10 +36,12 @@ struct SidebarView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            header(island)
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             IslandSwitcher()
         }
-        .navigationTitle(island?.name ?? "Archipel")
         .renameAlert($renaming)
         .sheet(item: $addingWorktreeTo) { project in
             WorktreeSheet(project: project)
@@ -54,6 +57,26 @@ struct SidebarView: View {
         } message: { worktree in
             Text("The folder \(worktree.path.path) is removed and its sessions are closed. The branch is kept. Git refuses if the worktree has uncommitted changes.")
         }
+    }
+
+    /// Sits in the strip next to the window buttons, where a toolbar would be.
+    private func header(_ island: Island?) -> some View {
+        HStack(spacing: 10) {
+            Text(island?.name ?? "Archipel")
+                .font(.headline)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button("Add Project", systemImage: "folder.badge.plus") { isAddingProject = true }
+                .help("Add a folder to this island")
+            Button("Hide Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
+                .help("Hide Sidebar")
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        // Leaves the window buttons their corner.
+        .padding(.leading, 78)
+        .padding(.trailing, 12)
+        .frame(height: PaneTabBar.height)
     }
 
     private var selection: Binding<Worktree.ID?> {
@@ -178,11 +201,12 @@ private struct WorktreeRow: View {
 struct NewSessionButtons: View {
     @Environment(AppModel.self) private var model
     let worktree: Worktree.ID
+    var pane: Pane.ID?
 
     var body: some View {
         ForEach(AgentDefinition.builtIns) { agent in
             Button("New \(agent.displayName) Session", systemImage: agent.symbolName) {
-                model.newSession(in: worktree, agent: agent)
+                model.newSession(in: worktree, agent: agent, pane: pane)
             }
         }
     }

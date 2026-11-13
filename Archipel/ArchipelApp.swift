@@ -7,6 +7,7 @@ struct ArchipelApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var model = AppModel()
     @State private var isAddingProject = false
+    @AppStorage("showInspector") private var showInspector = true
 
     var body: some Scene {
         Window("Archipel", id: "main") {
@@ -15,8 +16,10 @@ struct ArchipelApp: App {
                 .frame(minWidth: 720, minHeight: 420)
                 .onAppear { delegate.model = model }
         }
-        .defaultSize(width: 1180, height: 760)
+        .defaultSize(width: 1280, height: 800)
+        .windowStyle(.hiddenTitleBar)
         .commands {
+            SidebarCommands()
             CommandGroup(replacing: .newItem) {
                 if let worktree = model.selectedWorktree {
                     Button("New Claude Code Session", systemImage: AgentDefinition.claude.symbolName) {
@@ -35,11 +38,31 @@ struct ArchipelApp: App {
                 }
                 Button("Add Project…", systemImage: "folder.badge.plus") { isAddingProject = true }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
-                if let session = model.selectedSessionID {
+                if let tab = model.focusedTab {
                     Divider()
-                    Button("Close Session", systemImage: "xmark") { model.removeSession(session) }
+                    Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
                         .keyboardShortcut("w")
                 }
+            }
+            CommandGroup(replacing: .saveItem) {
+                // Sent up the responder chain so it reaches whichever editor has the keyboard focus.
+                Button("Save", systemImage: "square.and.arrow.down") {
+                    NSApp.sendAction(Selector(("saveDocument:")), to: nil, from: nil)
+                }
+                .keyboardShortcut("s")
+                Button("Save All") {
+                    do {
+                        try model.documents.saveAll()
+                    } catch {
+                        model.problem = "Not every file could be saved. \(error.localizedDescription)"
+                    }
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                .disabled(model.documents.dirtyURLs.isEmpty)
+            }
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Inspector", systemImage: "sidebar.trailing") { showInspector.toggle() }
+                    .keyboardShortcut("0", modifiers: [.command, .option])
             }
             CommandMenu("Islands") {
                 ForEach(Array(model.workspace.islands.prefix(9).enumerated()), id: \.element.id) { index, island in
@@ -47,11 +70,17 @@ struct ArchipelApp: App {
                         .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .control)
                 }
             }
-            CommandMenu("Session") {
-                Button("Next Session", systemImage: "chevron.right") { model.selectAdjacentSession(offset: 1) }
+            CommandMenu("Tab") {
+                Button("Next Tab", systemImage: "chevron.right") { model.selectAdjacentTab(offset: 1) }
                     .keyboardShortcut("]", modifiers: [.command, .shift])
-                Button("Previous Session", systemImage: "chevron.left") { model.selectAdjacentSession(offset: -1) }
+                Button("Previous Tab", systemImage: "chevron.left") { model.selectAdjacentTab(offset: -1) }
                     .keyboardShortcut("[", modifiers: [.command, .shift])
+                Divider()
+                Button("Split Right", systemImage: "rectangle.split.2x1") {
+                    if let tab = model.focusedTab { model.split(tab: tab.id) }
+                }
+                .keyboardShortcut("\\")
+                .disabled((model.selectedWorktree?.focusedPane?.tabs.count ?? 0) < 2)
                 Divider()
                 Button("Next Session Needing Attention", systemImage: "bell.badge") { model.selectNextNeedingAttention() }
                     .keyboardShortcut("u", modifiers: [.command, .shift])
@@ -64,7 +93,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var model: AppModel?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model, model.hasWorkingSessions else { return .terminateNow }
+        guard let model else { return .terminateNow }
+        if !model.documents.dirtyURLs.isEmpty {
+            let count = model.documents.dirtyURLs.count
+            let alert = NSAlert()
+            alert.messageText = count == 1 ? "You have a file with unsaved changes." : "You have \(count) files with unsaved changes."
+            alert.informativeText = "Your changes will be lost if you don't save them."
+            alert.addButton(withTitle: "Save All")
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Discard Changes")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                do {
+                    try model.documents.saveAll()
+                } catch {
+                    model.problem = "Not every file could be saved. \(error.localizedDescription)"
+                    return .terminateCancel
+                }
+            case .alertSecondButtonReturn:
+                return .terminateCancel
+            default:
+                break
+            }
+        }
+        guard model.hasWorkingSessions else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Quit Archipel while agents are working?"
         alert.informativeText = "Running agents will be stopped. Their conversations are kept and resume the next time you open the session."

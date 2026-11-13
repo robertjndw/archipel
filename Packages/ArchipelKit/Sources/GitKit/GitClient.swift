@@ -74,6 +74,36 @@ public struct GitClient: Sendable {
         return try await run(base + ["--no-index", "--", "/dev/null", path], in: URL(filePath: top), acceptedExitCodes: [0, 1])
     }
 
+    /// The whole file as one hunk, for showing a full comparison. Staged compares HEAD with the index,
+    /// unstaged compares the index with the working tree, and an untracked file comes back as added.
+    /// Returns nil when there is no difference.
+    ///
+    /// One git call yields both sides, so they always come from the same moment even while an agent
+    /// keeps writing.
+    public func fileDiff(path: String, staged: Bool, in folder: URL) async throws -> GitFileDiff? {
+        // Explicit prefixes and no textconv keep the output parseable whatever the user's diff config says.
+        let base = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
+                    "--unified=\(Self.wholeFileContext)"]
+        let output: String
+        if staged {
+            // A pathspec of just the new name would hide the rename, so look for its source first.
+            let renames = try await run(["diff", "--cached", "--name-status", "-z", "-M", "--diff-filter=R"], in: folder)
+            let origin = GitParser.renameOrigin(of: path, in: renames)
+            output = try await run(base + ["--cached", "-M", "--"] + pathspecs([path] + [origin].compactMap(\.self)), in: folder)
+        } else if try await !run(["ls-files", "--"] + pathspecs([path]), in: folder).isEmpty {
+            output = try await run(base + ["--"] + pathspecs([path]), in: folder)
+        } else {
+            let top = try await run(["rev-parse", "--show-toplevel"], in: folder).trimmingCharacters(in: .newlines)
+            let topURL = URL(filePath: top, directoryHint: .isDirectory)
+            guard FileManager.default.fileExists(atPath: topURL.appending(path: path).path) else { return nil }
+            output = try await run(base + ["--no-index", "--", "/dev/null", path], in: topURL, acceptedExitCodes: [0, 1])
+        }
+        return GitParser.fileDiffs(output).first
+    }
+
+    /// Large enough that any text file fits in a single hunk.
+    private static let wholeFileContext = 100_000_000
+
     /// Status paths are relative to the repository root, so pin them there with `top`, and use `literal`
     /// so names containing `*`, `?` or `[` are not treated as globs.
     private func pathspecs(_ paths: [String]) -> [String] {

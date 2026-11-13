@@ -2,8 +2,9 @@
 MacOS-native agent manager with Arc style sidebar
 
 Archipel runs CLI coding agents (Claude Code, Codex, plain shells) in embedded
-Ghostty terminals. Work is grouped as Islands > Projects > Worktrees, and each
-worktree has its sessions as tabs. Switching islands shows only that island's
+Ghostty terminals. Work is grouped as Islands > Projects > Worktrees. A
+worktree's content area holds tabs for agent sessions, files and diffs, and
+can be split into panes shown side by side. Switching islands shows only that island's
 projects. Agents in the other islands keep running, and when one needs you it
 marks its island, the Dock icon and Notification Center.
 
@@ -25,9 +26,12 @@ git.
 - `Archipel/` - the SwiftUI app.
 - `Packages/ArchipelKit` - `ArchipelCore` (model, status logic, persistence),
   `AgentKit` (agent launch commands, hook decoding, hook socket server),
-  `GitKit` (async wrapper over git: status, staging, worktrees), `InspectorUI`
-  (the Files and Changes sidebar) and the `archipel-hook` helper that agents
-  call. Run `swift test` here.
+  `GitKit` (async wrapper over git: status, staging, diffs, worktrees),
+  `InspectorUI` (the Files and Changes sidebar), `EditorUI` (the file editor
+  and the side-by-side diff view; syntax highlighting comes from highlight.js
+  through the HighlighterSwift package) and the `archipel-hook` helper that
+  agents call. Run `swift test` here. `editor-demo` opens an editor or diff
+  in a window of its own.
 - `Packages/TerminalKit` - the only code that talks to Ghostty. Includes
   `terminal-demo`, a one-window harness for testing a surface in isolation.
 

@@ -1,6 +1,7 @@
 import AgentKit
 import AppKit
 import ArchipelCore
+import EditorUI
 import GitKit
 import Observation
 import TerminalKit
@@ -15,6 +16,11 @@ final class AppModel {
     var problem: String?
 
     let git = GitClient()
+    /// Open file buffers. They live here and not in the editor views because
+    /// a view only exists while its tab is selected.
+    let documents = FileDocumentStore()
+    /// A file tab with unsaved edits that the user asked to close.
+    var tabAwaitingCloseDecision: Tab?
     private let store: WorkspaceStore
     private let terminalApp: TerminalApp?
     private let hookServer: HookServer
@@ -70,8 +76,9 @@ final class AppModel {
                 self?.receive(message)
             }
         }
-        if let selectedSessionID { ensureRunning(selectedSessionID) }
+        for id in visibleSessionIDs { ensureRunning(id) }
         refreshBranches()
+        watchPaneClicks()
     }
 
     // MARK: Selection
@@ -84,12 +91,17 @@ final class AppModel {
         workspace.selectedWorktreeID.flatMap { workspace.worktree(id: $0) }
     }
 
-    var selectedSessionID: Session.ID? {
-        selectedWorktree.flatMap { workspace.selectedSessionID(in: $0.id) }
+    /// The sessions on screen right now: the selected tab of every pane.
+    var visibleSessionIDs: [Session.ID] {
+        selectedWorktree.map { workspace.visibleSessionIDs(in: $0.id) } ?? []
     }
 
-    var selectedSession: Session? {
-        selectedSessionID.flatMap { workspace.session(id: $0) }
+    var focusedSessionID: Session.ID? {
+        selectedWorktree.flatMap { workspace.focusedSessionID(in: $0.id) }
+    }
+
+    var focusedTab: Tab? {
+        selectedWorktree?.focusedPane?.selectedTab
     }
 
     func select(island id: Island.ID) {
@@ -112,22 +124,32 @@ final class AppModel {
     }
 
     func selectNextNeedingAttention() {
-        let next = nextSessionNeedingAttention(after: selectedSessionID, in: workspace, activities: activities)
+        let next = nextSessionNeedingAttention(after: focusedSessionID, in: workspace, activities: activities)
         if let next { select(session: next) }
     }
 
-    /// Moves to the tab before or after the current one, wrapping around.
-    func selectAdjacentSession(offset: Int) {
-        guard let worktree = selectedWorktree, let current = selectedSessionID,
-              let index = worktree.sessions.firstIndex(where: { $0.id == current })
+    func select(tab id: Tab.ID) {
+        changingSelection { $0.selectTab(id: id) }
+    }
+
+    func focus(pane id: Pane.ID) {
+        guard selectedWorktree?.focusedPaneID != id else { return }
+        mutate { $0.focusPane(id: id) }
+    }
+
+    /// Moves to the tab before or after the current one in the focused pane,
+    /// wrapping around.
+    func selectAdjacentTab(offset: Int) {
+        guard let pane = selectedWorktree?.focusedPane, let current = pane.selectedTab,
+              let index = pane.tabs.firstIndex(where: { $0.id == current.id })
         else { return }
-        let count = worktree.sessions.count
-        select(session: worktree.sessions[(index + offset + count) % count].id)
+        let count = pane.tabs.count
+        select(tab: pane.tabs[(index + offset + count) % count].id)
     }
 
     func appDidBecomeActive() {
         terminalApp?.setAppFocused(true)
-        if let selectedSessionID { markViewed(selectedSessionID) }
+        for id in visibleSessionIDs { markViewed(id) }
         refreshBranches()
     }
 
@@ -139,14 +161,15 @@ final class AppModel {
     /// here, so the terminal that left the screen stops rendering and the one
     /// that entered it is started and marked as seen.
     private func changingSelection(_ change: (inout Workspace) -> Void) {
-        let previous = selectedSessionID
+        let previous = Set(visibleSessionIDs)
         mutate(change)
-        let current = selectedSessionID
-        if previous != current, let previous { terminals[previous]?.setOccluded(true) }
-        guard let current else { return }
-        ensureRunning(current)
-        terminals[current]?.setOccluded(false)
-        markViewed(current)
+        let current = Set(visibleSessionIDs)
+        for id in previous.subtracting(current) { terminals[id]?.setOccluded(true) }
+        for id in current {
+            ensureRunning(id)
+            terminals[id]?.setOccluded(false)
+            markViewed(id)
+        }
     }
 
     private func markViewed(_ id: Session.ID) {
@@ -161,7 +184,7 @@ final class AppModel {
     }
 
     private func isBeingViewed(_ id: Session.ID) -> Bool {
-        NSApp.isActive && selectedSessionID == id
+        NSApp.isActive && visibleSessionIDs.contains(id)
     }
 
     // MARK: Islands
@@ -280,7 +303,7 @@ final class AppModel {
 
     // MARK: Sessions
 
-    func newSession(in worktreeID: Worktree.ID, agent: AgentDefinition) {
+    func newSession(in worktreeID: Worktree.ID, agent: AgentDefinition, pane: Pane.ID? = nil) {
         guard let worktree = workspace.worktree(id: worktreeID) else { return }
         let count = worktree.sessions.count { $0.agent.rawValue == agent.id }
         let session = Session(
@@ -288,7 +311,7 @@ final class AppModel {
             agent: AgentKind(rawValue: agent.id)
         )
         changingSelection {
-            _ = $0.addSession(session, to: worktreeID)
+            _ = $0.addSession(session, to: worktreeID, pane: pane)
             $0.selectSession(session.id)
         }
     }
@@ -302,9 +325,73 @@ final class AppModel {
         }
     }
 
-    func removeSession(_ id: Session.ID) {
-        tearDown(id)
-        changingSelection { $0.removeSession(id: id) }
+    // MARK: Tabs
+
+    func openFile(_ url: URL, preview: Bool) {
+        open(.file(url), preview: preview)
+    }
+
+    func openDiff(path: String, staged: Bool, preview: Bool) {
+        open(.diff(path: path, staged: staged), preview: preview)
+    }
+
+    private func open(_ content: TabContent, preview: Bool) {
+        guard let worktree = selectedWorktree else { return }
+        changingSelection { _ = $0.openTab(content, in: worktree.id, preview: preview) }
+    }
+
+    func pin(tab id: Tab.ID) {
+        mutate { $0.pinTab(id: id) }
+    }
+
+    /// Closing a session tab ends the session. A file with unsaved edits is
+    /// not closed here; the user is asked first.
+    func close(tab id: Tab.ID) {
+        guard let tab = workspace.tab(id: id) else { return }
+        if case .file(let url) = tab.content, documents.isDirty(url) {
+            tabAwaitingCloseDecision = tab
+            return
+        }
+        closeNow(tab)
+    }
+
+    func resolveClose(of tab: Tab, saving: Bool) {
+        guard case .file(let url) = tab.content else { return }
+        if saving {
+            do {
+                try documents.save(url)
+            } catch {
+                problem = "The file could not be saved, so its tab was kept open. \(error.localizedDescription)"
+                return
+            }
+        } else {
+            documents.discardChanges(url)
+        }
+        closeNow(tab)
+    }
+
+    private func closeNow(_ tab: Tab) {
+        switch tab.content {
+        case .session(let session):
+            tearDown(session)
+        case .file(let url):
+            documents.close(url)
+        case .diff:
+            break
+        }
+        changingSelection { $0.closeTab(id: tab.id) }
+    }
+
+    func closeFocusedTab() {
+        if let focusedTab { close(tab: focusedTab.id) }
+    }
+
+    func split(tab id: Tab.ID) {
+        changingSelection { _ = $0.splitTab(id: id) }
+    }
+
+    func move(tab id: Tab.ID, toPane pane: Pane.ID, at index: Int? = nil) {
+        changingSelection { $0.moveTab(id: id, toPane: pane, at: index) }
     }
 
     /// Kills the process if there is one and starts again, resuming the
@@ -320,7 +407,7 @@ final class AppModel {
             }
         }
         ensureRunning(id)
-        if selectedSessionID == id { terminals[id]?.setOccluded(false) }
+        if visibleSessionIDs.contains(id) { terminals[id]?.setOccluded(false) }
     }
 
     func activity(for id: Session.ID) -> SessionActivity {
@@ -392,7 +479,7 @@ final class AppModel {
                     waitAfterCommand: true
                 ))
                 terminals[id] = terminal
-                terminal.setOccluded(selectedSessionID != id)
+                terminal.setOccluded(!visibleSessionIDs.contains(id))
                 observe(terminal, for: id)
                 // Only Claude announces itself through a hook. Everything else
                 // would sit on "starting" forever without this.
@@ -508,6 +595,28 @@ final class AppModel {
 
     private func refreshDockBadge() {
         notifier.setDockBadge(attentionSummary(of: workspace, activities: activities).needsAttention)
+    }
+
+    // MARK: Pane focus
+
+    /// Pane frames in window coordinates with a top-left origin, reported by
+    /// the pane views. Not observed: it changes on every layout pass.
+    @ObservationIgnored var paneFrames: [Pane.ID: CGRect] = [:]
+
+    /// A terminal is an AppKit view that swallows its own clicks, so SwiftUI
+    /// gestures on the pane never see them. Watching mouse-downs is the one
+    /// way to learn which pane the user is working in.
+    private func watchPaneClicks() {
+        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            if let self, let window = event.window, window.sheets.isEmpty, let content = window.contentView {
+                let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+                let panes = Set(self.selectedWorktree?.panes.map(\.id) ?? [])
+                if let hit = self.paneFrames.first(where: { panes.contains($0.key) && $0.value.contains(point) }) {
+                    self.focus(pane: hit.key)
+                }
+            }
+            return event
+        }
     }
 
     // MARK: Persistence

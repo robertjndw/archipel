@@ -123,16 +123,16 @@ struct WorkspaceTests {
         #expect(ws.selectedWorktreeID == main.id)
     }
 
-    @Test func removingWorktreeClearsItsSelections() {
+    @Test func removingWorktreeDropsItsSessions() {
         var (ws, _, _, other) = fixture()
         let s = makeSession()
         ws.addSession(s, to: other.id)
         ws.removeWorktree(id: other.id)
-        #expect(ws.selectedSessionIDByWorktree.isEmpty)
         #expect(ws.session(id: s.id) == nil)
+        #expect(ws.tab(showing: s.id) == nil)
     }
 
-    @Test func sessionLookupsAndSelection() {
+    @Test func sessionLookups() {
         var (ws, p, main, _) = fixture()
         let s1 = makeSession("s1"), s2 = makeSession("s2")
         ws.addSession(s1, to: main.id)
@@ -144,71 +144,8 @@ struct WorkspaceTests {
         #expect(ws.island(containing: s2.id)?.id == ws.islands[0].id)
         #expect(ws.session(id: .init()) == nil)
         #expect(ws.allSessions.map(\.id) == [s1.id, s2.id])
-        #expect(ws.selectedSessionID(in: main.id) == s2.id)
         let added = ws.addSession(makeSession(), to: .init())
         #expect(!added)
-    }
-
-    @Test func selectedSessionFallsBackToFirst() {
-        var (ws, _, main, _) = fixture()
-        let s1 = makeSession("s1"), s2 = makeSession("s2")
-        ws.addSession(s1, to: main.id)
-        ws.addSession(s2, to: main.id)
-        ws.selectedSessionIDByWorktree[main.id] = .init()
-        #expect(ws.selectedSessionID(in: main.id) == s1.id)
-        #expect(ws.selectedSessionID(in: .init()) == nil)
-    }
-
-    @Test func removingSelectedTabSelectsNextThenPreviousThenNone() {
-        var (ws, _, main, _) = fixture()
-        let a = makeSession("a"), b = makeSession("b"), c = makeSession("c")
-        for s in [a, b, c] { ws.addSession(s, to: main.id) }
-
-        ws.selectSession(b.id)
-        ws.removeSession(id: b.id)
-        #expect(ws.selectedSessionID(in: main.id) == c.id)
-        ws.removeSession(id: c.id)
-        #expect(ws.selectedSessionIDByWorktree[main.id] == a.id)
-        ws.removeSession(id: a.id)
-        #expect(ws.selectedSessionIDByWorktree[main.id] == nil)
-    }
-
-    @Test func removingUnselectedTabKeepsSelection() {
-        var (ws, _, main, _) = fixture()
-        let a = makeSession("a"), b = makeSession("b")
-        ws.addSession(a, to: main.id)
-        ws.addSession(b, to: main.id)
-        ws.removeSession(id: a.id)
-        #expect(ws.selectedSessionIDByWorktree[main.id] == b.id)
-    }
-
-    @Test func moveSessionReordersAndClamps() {
-        var (ws, _, main, _) = fixture()
-        let a = makeSession("a"), b = makeSession("b"), c = makeSession("c")
-        for s in [a, b, c] { ws.addSession(s, to: main.id) }
-        func titles() -> [String] { ws.worktree(id: main.id)!.sessions.map(\.title) }
-
-        ws.moveSession(id: c.id, toIndex: 0)
-        #expect(titles() == ["c", "a", "b"])
-        ws.moveSession(id: c.id, toIndex: 99)
-        #expect(titles() == ["a", "b", "c"])
-        ws.moveSession(id: b.id, toIndex: -5)
-        #expect(titles() == ["b", "a", "c"])
-    }
-
-    @Test func selectSessionSwitchesWorktreeAndIsland() {
-        var (ws, _, main, other) = fixture()
-        let home = ws.islands[0].id
-        let s = makeSession()
-        ws.addSession(s, to: main.id)
-        ws.selectWorktree(other.id)
-        ws.addIsland(name: "Work")
-        #expect(ws.selectedIslandID != home)
-
-        ws.selectSession(s.id)
-        #expect(ws.selectedIslandID == home)
-        #expect(ws.selectedWorktreeID == main.id)
-        #expect(ws.selectedSessionID(in: main.id) == s.id)
     }
 
     @Test func selectWorktreeSwitchesIsland() {
@@ -224,7 +161,6 @@ struct WorkspaceTests {
         let s = makeSession()
         ws.addSession(s, to: main.id)
         ws.removeProject(id: p.id)
-        #expect(ws.selectedSessionIDByWorktree.isEmpty)
         #expect(ws.selectedWorktreeIDByIsland.isEmpty)
         #expect(ws.session(id: s.id) == nil)
     }
@@ -234,7 +170,6 @@ struct WorkspaceTests {
         ws.addSession(makeSession(), to: main.id)
         ws.addIsland(name: "Other")
         ws.removeIsland(id: ws.islands[0].id)
-        #expect(ws.selectedSessionIDByWorktree.isEmpty)
         #expect(ws.selectedWorktreeIDByIsland.isEmpty)
     }
 
@@ -248,8 +183,7 @@ struct WorkspaceTests {
 
         #expect(ws.island(containingProject: p.id)?.id == work)
         #expect(ws.selectedWorktreeIDByIsland[home] == nil)
-        // The tab memory is keyed by worktree, which still exists.
-        #expect(ws.selectedSessionIDByWorktree[main.id] != nil)
+        #expect(ws.worktree(id: main.id)?.sessions.count == 1)
     }
 
     @Test func missingOptionalKeysDecodeWithDefaults() throws {

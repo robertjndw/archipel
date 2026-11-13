@@ -18,6 +18,11 @@ final class FileTreeModel {
         self.root = root
     }
 
+    /// Whether a listed URL is a folder, from the listings already loaded rather than another stat.
+    func isDirectory(_ url: URL) -> Bool {
+        children[url.deletingLastPathComponent()]?.first { $0.url == url }?.isDirectory ?? false
+    }
+
     func isExpanded(_ directory: URL) -> Bool {
         expanded.contains(directory)
     }
@@ -91,6 +96,7 @@ final class FileTreeModel {
 
 struct FilesTab: View {
     let model: FileTreeModel
+    let actions: InspectorActions
     @State private var selection: Set<URL> = []
 
     var body: some View {
@@ -107,10 +113,16 @@ struct FilesTab: View {
                     FileTreeRows(directory: model.root, model: model)
                 }
                 .listStyle(.sidebar)
+                .compactRows()
                 .contextMenu(forSelectionType: URL.self) { urls in
                     contextMenu(for: urls)
                 } primaryAction: { urls in
-                    FileActions.open(Array(urls))
+                    open(urls)
+                }
+                .onChange(of: selection) { _, selection in
+                    // Clicking or arrowing onto a file previews it; folders only expand and collapse.
+                    guard selection.count == 1, let url = selection.first, !model.isDirectory(url) else { return }
+                    actions.openFile(url, true)
                 }
             }
         }
@@ -118,11 +130,25 @@ struct FilesTab: View {
         .onAppActivation(perform: refresh)
     }
 
+    /// Double click or Return: files open for keeps, folders toggle.
+    private func open(_ urls: Set<URL>) {
+        for url in urls.sorted(by: { $0.path < $1.path }) {
+            if model.isDirectory(url) {
+                model.setExpanded(url, !model.isExpanded(url))
+            } else {
+                actions.openFile(url, false)
+            }
+        }
+    }
+
     @ViewBuilder
     private func contextMenu(for urls: Set<URL>) -> some View {
         if !urls.isEmpty {
             let urls = urls.sorted { $0.path < $1.path }
-            Button("Open") { FileActions.open(urls) }
+            let files = urls.filter { !model.isDirectory($0) }
+            Button("Open in Tab") { files.forEach { actions.openFile($0, false) } }
+                .disabled(files.isEmpty)
+            Button("Open in Default App") { FileActions.open(urls) }
             Button("Reveal in Finder") { FileActions.reveal(urls) }
             Divider()
             Button("Copy Path") { FileActions.copy(urls.map(\.path)) }

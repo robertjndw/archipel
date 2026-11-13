@@ -15,6 +15,7 @@
 		AA0000000000000000000106 /* terminfo in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000304 /* terminfo */; };
 		AA0000000000000000000107 /* GitKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000204 /* GitKit */; };
 		AA0000000000000000000108 /* InspectorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000205 /* InspectorUI */; };
+		AA0000000000000000000109 /* EditorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000206 /* EditorUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +73,7 @@
 				AA0000000000000000000103 /* TerminalKit in Frameworks */,
 				AA0000000000000000000107 /* GitKit in Frameworks */,
 				AA0000000000000000000108 /* InspectorUI in Frameworks */,
+				AA0000000000000000000109 /* EditorUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -140,6 +142,7 @@
 				AA0000000000000000000203 /* TerminalKit */,
 				AA0000000000000000000204 /* GitKit */,
 				AA0000000000000000000205 /* InspectorUI */,
+				AA0000000000000000000206 /* EditorUI */,
 			);
 			productName = Archipel;
 			productReference = AA0000000000000000000301 /* Archipel.app */;
@@ -418,6 +421,10 @@
 		AA0000000000000000000205 /* InspectorUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = InspectorUI;
+		};
+		AA0000000000000000000206 /* EditorUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = EditorUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

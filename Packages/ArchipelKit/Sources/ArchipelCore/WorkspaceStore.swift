@@ -20,7 +20,9 @@ public struct WorkspaceStore: Sendable {
             if try decoder.decode(Header.self, from: data).schemaVersion == 1 {
                 return try decoder.decode(LegacyWorkspaceV1.self, from: data).migrated()
             }
-            return try decoder.decode(Workspace.self, from: data)
+            var workspace = try decoder.decode(Workspace.self, from: data)
+            workspace.schemaVersion = Workspace.currentSchemaVersion
+            return workspace
         } catch is DecodingError {
             try quarantineCorruptFile()
             return Workspace()

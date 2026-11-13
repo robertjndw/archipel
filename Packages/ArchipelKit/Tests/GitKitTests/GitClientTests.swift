@@ -172,6 +172,64 @@ final class GitClientTests {
         #expect(diff.utf8.count > 2_000_000)
     }
 
+    @Test func fileDiffCoversTheWholeFile() async throws {
+        let lines = (1...200).map { "line \($0)" }
+        try write("long.txt", lines.joined(separator: "\n") + "\n")
+        try commitAll()
+        var changed = lines
+        changed[99] = "line 100 changed"
+        try write("long.txt", changed.joined(separator: "\n") + "\n")
+
+        let diff = try #require(try await git.fileDiff(path: "long.txt", staged: false, in: repo))
+        #expect(diff.status == .modified)
+        #expect(diff.hunks.count == 1)
+        let hunk = try #require(diff.hunks.first)
+        #expect(hunk.lines.count == 201)
+        #expect(hunk.lines.filter { $0.kind == .context }.count == 199)
+        #expect(try await git.fileDiff(path: "long.txt", staged: true, in: repo) == nil)
+
+        try await git.stage(["long.txt"], in: repo)
+        #expect(try await git.fileDiff(path: "long.txt", staged: false, in: repo) == nil)
+        #expect(try await git.fileDiff(path: "long.txt", staged: true, in: repo)?.hunks.first?.lines.count == 201)
+    }
+
+    @Test func fileDiffForUntrackedDeletedAndStagedRename() async throws {
+        try write("keep.txt", "a\nb\n")
+        try write("doomed.txt", "bye\n")
+        try commitAll()
+
+        try write("dir/new [1].txt", "fresh\r\nline")
+        let untracked = try #require(try await git.fileDiff(path: "dir/new [1].txt", staged: false, in: repo))
+        #expect(untracked.status == .added)
+        #expect(untracked.newPath == "dir/new [1].txt")
+        #expect(untracked.hunks.first?.lines == [GitDiffLine(.added, "fresh\r"), GitDiffLine(.added, "line", hasNewline: false)])
+
+        try FileManager.default.removeItem(at: repo.appending(path: "doomed.txt"))
+        let deleted = try #require(try await git.fileDiff(path: "doomed.txt", staged: false, in: repo))
+        #expect(deleted.status == .deleted)
+        #expect(deleted.hunks.first?.lines == [GitDiffLine(.removed, "bye")])
+
+        try sh("mv", "keep.txt", "kept.txt")
+        let renamed = try #require(try await git.fileDiff(path: "kept.txt", staged: true, in: repo))
+        #expect(renamed.status == .renamed)
+        #expect(renamed.oldPath == "keep.txt")
+        #expect(renamed.newPath == "kept.txt")
+
+        #expect(try await git.fileDiff(path: "missing.txt", staged: false, in: repo) == nil)
+    }
+
+    @Test func fileDiffReportsBinaryAndWorksWithoutCommits() async throws {
+        try write("first.txt", "1\n")
+        try await git.stageAll(in: repo)
+        let unborn = try #require(try await git.fileDiff(path: "first.txt", staged: true, in: repo))
+        #expect(unborn.status == .added)
+
+        let url = repo.appending(path: "blob.bin")
+        try Data([0, 1, 2, 0, 255]).write(to: url)
+        let binary = try #require(try await git.fileDiff(path: "blob.bin", staged: false, in: repo))
+        #expect(binary.isBinary)
+    }
+
     // MARK: Helpers
 
     private func write(_ path: String, _ contents: String) throws {

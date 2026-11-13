@@ -79,6 +79,9 @@ struct LegacyWorkspaceV1: Decodable {
                 others.append(Worktree(path: oldWorktree.path, branch: oldWorktree.branch, sessions: [session]))
             }
         }
+        // Sessions were appended directly, so the worktrees still need their tabs.
+        main.normalize()
+        for i in others.indices { others[i].normalize() }
         return Project(id: project.id, name: project.name, folderURL: project.folderURL, worktrees: [main] + others)
     }
 }

@@ -1,0 +1,408 @@
+import AppKit
+import CoreText
+
+enum DiffPaneRole {
+    case old, new, unified
+}
+
+/// What the panes and gutters of one diff draw from. Shared by reference so expanding a fold or
+/// receiving highlights updates both sides at once.
+@MainActor
+final class DiffLayout {
+    let document: DiffDocument
+    let rows: [DiffRow]
+    var items: [DiffDisplayItem]
+    var oldRuns: [HighlightRun] = []
+    var newRuns: [HighlightRun] = []
+    let oldOffsets: [Int]
+    let newOffsets: [Int]
+    let oldWidth: CGFloat
+    let newWidth: CGFloat
+
+    init(document: DiffDocument, unified: Bool, showsAllLines: Bool) {
+        self.document = document
+        rows = unified ? document.unified : document.sideBySide
+        items = showsAllLines ? DiffFolding.allRows(rows) : DiffFolding.items(for: rows)
+        oldOffsets = document.old.lineOffsets()
+        newOffsets = document.new.lineOffsets()
+        oldWidth = DiffLineRenderer.width(of: document.old.lines)
+        newWidth = DiffLineRenderer.width(of: document.new.lines)
+    }
+
+    func side(_ isOld: Bool) -> (side: DiffSide, offsets: [Int], runs: [HighlightRun]) {
+        isOld ? (document.old, oldOffsets, oldRuns) : (document.new, newOffsets, newRuns)
+    }
+
+    /// The line a pane shows for a row, and whether it comes from the old side.
+    func line(for row: DiffRow, role: DiffPaneRole) -> (index: Int, isOld: Bool)? {
+        switch role {
+        case .old: row.old.map { ($0, true) }
+        case .new: row.new.map { ($0, false) }
+        case .unified: row.kind == .removed ? row.old.map { ($0, true) } : row.new.map { ($0, false) }
+        }
+    }
+}
+
+@MainActor
+enum DiffLineRenderer {
+    /// Drawing a minified 100k-character line costs more than it is worth; the rest is elided.
+    static let maximumDrawnLength = 2_000
+    static let textInset: CGFloat = 8
+
+    static func ctLine(_ text: String, lineStart: Int, runs: [HighlightRun]) -> CTLine {
+        var display = text
+        var truncated = false
+        if text.utf16.count > maximumDrawnLength {
+            var end = text.utf16.index(text.utf16.startIndex, offsetBy: maximumDrawnLength)
+            end = end.samePosition(in: text.unicodeScalars) ?? text.unicodeScalars.index(before: end)
+            display = String(text[..<end])
+            truncated = true
+        }
+        let length = display.utf16.count
+        let string = NSMutableAttributedString(string: display + (truncated ? "\u{2026}" : ""), attributes: baseAttributes())
+        let colorKey = NSAttributedString.Key(kCTForegroundColorAttributeName as String)
+
+        var index = firstRun(endingAfter: lineStart, in: runs)
+        while index < runs.count {
+            let run = runs[index]
+            let start = max(run.location, lineStart) - lineStart
+            if start >= length { break }
+            let end = min(run.location + run.length - lineStart, length)
+            if end > start {
+                string.addAttribute(colorKey, value: EditorTheme.color(for: run.scope).cgColor, range: NSRange(location: start, length: end - start))
+            }
+            index += 1
+        }
+        return CTLineCreateWithAttributedString(string)
+    }
+
+    static func baseAttributes() -> [NSAttributedString.Key: Any] {
+        [
+            .font: EditorTheme.font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): NSColor.textColor.cgColor,
+            NSAttributedString.Key(kCTParagraphStyleAttributeName as String): paragraphStyle,
+        ]
+    }
+
+    /// CoreText's own paragraph style, since it does not read NSParagraphStyle's tab interval.
+    private static let paragraphStyle: CTParagraphStyle = {
+        var interval = EditorTheme.characterWidth * CGFloat(EditorTheme.tabWidth)
+        let stops = [CTTextTab]() as CFArray
+        return withUnsafeBytes(of: &interval) { intervalBytes in
+            withUnsafeBytes(of: stops) { stopsBytes in
+                let settings = [
+                    CTParagraphStyleSetting(spec: .defaultTabInterval, valueSize: intervalBytes.count, value: intervalBytes.baseAddress!),
+                    CTParagraphStyleSetting(spec: .tabStops, valueSize: stopsBytes.count, value: stopsBytes.baseAddress!),
+                ]
+                return CTParagraphStyleCreate(settings, settings.count)
+            }
+        }
+    }()
+
+    private static func firstRun(endingAfter offset: Int, in runs: [HighlightRun]) -> Int {
+        var low = 0
+        var high = runs.count
+        while low < high {
+            let mid = (low + high) / 2
+            if runs[mid].location + runs[mid].length <= offset { low = mid + 1 } else { high = mid }
+        }
+        return low
+    }
+
+    /// Widest line, estimated from character counts and then measured exactly for the longest few,
+    /// which catches wide characters without laying out every line.
+    static func width(of lines: [String]) -> CGFloat {
+        var estimates: [(width: CGFloat, index: Int)] = []
+        estimates.reserveCapacity(lines.count)
+        for (index, line) in lines.enumerated() {
+            var columns = 0
+            for unit in line.utf16 { columns += unit == 9 ? EditorTheme.tabWidth : 1 }
+            estimates.append((CGFloat(min(columns, maximumDrawnLength + 1)) * EditorTheme.characterWidth, index))
+        }
+        let longest = estimates.sorted { $0.width > $1.width }.prefix(12)
+        var widest = longest.first?.width ?? 0
+        for candidate in longest {
+            let line = ctLine(lines[candidate.index], lineStart: 0, runs: [])
+            widest = max(widest, CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+        }
+        return (widest + textInset * 2 + 40).rounded(.up)
+    }
+}
+
+/// One column of diff text. Virtualized by drawing only the rows inside the dirty rect: every row has
+/// the same height, so finding them is a division rather than a layout pass.
+@MainActor
+final class DiffPaneView: NSView {
+    let role: DiffPaneRole
+    var layoutState: DiffLayout? {
+        didSet { needsDisplay = true }
+    }
+    var onExpandFold: ((Int) -> Void)?
+
+    init(role: DiffPaneRole) {
+        self.role = role
+        super.init(frame: .zero)
+        // AppKit no longer clips views by default, and a ruler's dirty rect can reach into the text beside it.
+        clipsToBounds = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { true }
+
+    var contentWidth: CGFloat {
+        guard let layoutState else { return 0 }
+        switch role {
+        case .old: return layoutState.oldWidth
+        case .new: return layoutState.newWidth
+        case .unified: return max(layoutState.oldWidth, layoutState.newWidth)
+        }
+    }
+
+    func updateSize() {
+        guard let clip = superview as? NSClipView else { return }
+        let rows = CGFloat(layoutState?.items.count ?? 0)
+        let size = NSSize(
+            width: max(contentWidth, clip.bounds.width),
+            height: max(rows * EditorTheme.lineHeight + EditorTheme.lineHeight, clip.bounds.height)
+        )
+        if frame.size != size { setFrameSize(size) }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let index = Int(point.y / EditorTheme.lineHeight)
+        guard let items = layoutState?.items, items.indices.contains(index), case .fold = items[index] else {
+            super.mouseDown(with: event)
+            return
+        }
+        onExpandFold?(index)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.textBackgroundColor.setFill()
+        dirtyRect.fill()
+        guard let layoutState, let context = NSGraphicsContext.current?.cgContext else { return }
+        let height = EditorTheme.lineHeight
+        let first = max(0, Int(dirtyRect.minY / height))
+        let last = min(layoutState.items.count - 1, Int(dirtyRect.maxY / height))
+        guard first <= last else { return }
+
+        for index in first...last {
+            let rect = NSRect(x: 0, y: CGFloat(index) * height, width: bounds.width, height: height)
+            switch layoutState.items[index] {
+            case .fold(let range):
+                drawFold(hiding: range.count, in: rect, context: context)
+            case .row(let rowIndex):
+                drawRow(layoutState.rows[rowIndex], layout: layoutState, in: rect, context: context)
+            }
+        }
+    }
+
+    private func drawRow(_ row: DiffRow, layout: DiffLayout, in rect: NSRect, context: CGContext) {
+        guard let (lineIndex, isOld) = layout.line(for: row, role: role) else {
+            drawFiller(in: rect, context: context)
+            return
+        }
+        // A pane only gets a line for a changed row when that side of the change exists.
+        if row.kind != .context {
+            (isOld ? EditorTheme.removedLine : EditorTheme.addedLine).setFill()
+            rect.fill()
+        }
+
+        let (side, offsets, runs) = layout.side(isOld)
+        let text = side.lines[lineIndex]
+        let line = DiffLineRenderer.ctLine(text, lineStart: offsets[lineIndex], runs: runs)
+        let x = DiffLineRenderer.textInset
+
+        if let emphasis = isOld ? row.oldEmphasis : row.newEmphasis, emphasis.lowerBound < DiffLineRenderer.maximumDrawnLength {
+            let start = CTLineGetOffsetForStringIndex(line, emphasis.lowerBound, nil)
+            let end = CTLineGetOffsetForStringIndex(line, min(emphasis.upperBound, DiffLineRenderer.maximumDrawnLength), nil)
+            (isOld ? EditorTheme.removedEmphasis : EditorTheme.addedEmphasis).setFill()
+            NSBezierPath(roundedRect: NSRect(x: x + start, y: rect.minY + 1, width: max(end - start, 2), height: rect.height - 2), xRadius: 2, yRadius: 2).fill()
+        }
+
+        let width = Self.draw(line, x: x, in: rect, context: context)
+
+        let otherSide = isOld ? layout.document.new : layout.document.old
+        if lineIndex == side.lines.count - 1, side.missingNewlineAtEnd, !otherSide.missingNewlineAtEnd || otherSide.lines.isEmpty {
+            let label = String(localized: "No newline at end of file") as NSString
+            let attributes: [NSAttributedString.Key: Any] = [.font: EditorTheme.gutterFont, .foregroundColor: NSColor.tertiaryLabelColor]
+            let size = label.size(withAttributes: attributes)
+            label.draw(at: NSPoint(x: x + width + 16, y: rect.midY - size.height / 2), withAttributes: attributes)
+        }
+    }
+
+    private func drawFiller(in rect: NSRect, context: CGContext) {
+        context.saveGState()
+        context.clip(to: rect)
+        EditorTheme.filler.setStroke()
+        let path = NSBezierPath()
+        path.lineWidth = 1
+        var x = rect.minX - rect.height
+        while x < rect.maxX {
+            path.move(to: NSPoint(x: x, y: rect.maxY))
+            path.line(to: NSPoint(x: x + rect.height, y: rect.minY))
+            x += 6
+        }
+        path.stroke()
+        context.restoreGState()
+    }
+
+    private func drawFold(hiding count: Int, in rect: NSRect, context: CGContext) {
+        EditorTheme.foldBackground.setFill()
+        rect.fill()
+        var x = DiffLineRenderer.textInset
+        if let symbol = Self.foldSymbol {
+            let size = symbol.size
+            symbol.draw(in: NSRect(x: x, y: (rect.midY - size.height / 2).rounded(), width: size.width, height: size.height),
+                        from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            x += size.width + 5
+        }
+        let format = count == 1 ? String(localized: "%lld unchanged line") : String(localized: "%lld unchanged lines")
+        let label = NSAttributedString(string: String(format: format, count), attributes: [
+            .font: NSFont.systemFont(ofSize: 11),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): NSColor.secondaryLabelColor.cgColor,
+        ])
+        Self.draw(CTLineCreateWithAttributedString(label), x: x, in: rect, context: context)
+    }
+
+    /// Draws a line vertically centred in `rect`. CoreText's text position and matrix live outside
+    /// the graphics state, so both are set every time rather than trusted from a previous draw.
+    @discardableResult
+    static func draw(_ line: CTLine, x: CGFloat, in rect: NSRect, context: CGContext) -> CGFloat {
+        var ascent: CGFloat = 0
+        var descent: CGFloat = 0
+        let width = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, nil))
+        let baseline = rect.minY + ((rect.height - ascent - descent) / 2 + ascent).rounded()
+        context.saveGState()
+        context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+        context.textPosition = CGPoint(x: x, y: baseline)
+        CTLineDraw(line, context)
+        context.restoreGState()
+        context.textMatrix = .identity
+        return width
+    }
+
+    /// Tinted once up front: a symbol image drawn straight into the pane comes out black or not at all.
+    private static let foldSymbol: NSImage? = {
+        guard let symbol = NSImage(systemSymbolName: "arrow.up.and.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .medium)) else { return nil }
+        return NSImage(size: symbol.size, flipped: false) { rect in
+            symbol.draw(in: rect)
+            NSColor.secondaryLabelColor.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+    }()
+
+    // MARK: Accessibility
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .textArea }
+    override func accessibilityLabel() -> String? {
+        switch role {
+        case .old: String(localized: "Original")
+        case .new: String(localized: "Modified")
+        case .unified: String(localized: "Changes")
+        }
+    }
+}
+
+/// Line numbers for a diff pane, laid out beside its scroll view rather than as an NSRulerView: a
+/// floating ruler covers the start of a non-text document view once its width changes.
+@MainActor
+final class DiffGutterView: NSView {
+    private let role: DiffPaneRole
+    private weak var pane: DiffPaneView?
+    private(set) var thickness: CGFloat = 0
+
+    init(pane: DiffPaneView) {
+        role = pane.role
+        self.pane = pane
+        super.init(frame: .zero)
+        clipsToBounds = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    private var columnWidth: CGFloat {
+        guard let document = pane?.layoutState?.document else { return 0 }
+        let largest = max(document.old.numbers.last ?? 0, document.new.numbers.last ?? 0)
+        return CGFloat(max(3, String(largest).count)) * EditorTheme.gutterDigitWidth + 12
+    }
+
+    /// Returns whether the width changed, so the container knows to lay out again.
+    @discardableResult
+    func updateThickness() -> Bool {
+        let width = (columnWidth * (role == .unified ? 2 : 1) + 6).rounded(.up)
+        guard width != thickness else { return false }
+        thickness = width
+        return true
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        pane?.enclosingScrollView?.scrollWheel(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.textBackgroundColor.setFill()
+        dirtyRect.fill()
+        drawNumbers(in: dirtyRect)
+    }
+
+    private func drawNumbers(in rect: NSRect) {
+        guard let pane, let layout = pane.layoutState else { return }
+        let height = EditorTheme.lineHeight
+        let visible = pane.visibleRect
+        let first = max(0, Int(visible.minY / height))
+        let last = min(layout.items.count - 1, Int(visible.maxY / height))
+        guard first <= last else { return }
+        let attributes: [NSAttributedString.Key: Any] = [.font: EditorTheme.gutterFont, .foregroundColor: NSColor.tertiaryLabelColor]
+        let column = columnWidth
+
+        for index in first...last {
+            let y = convert(NSPoint(x: 0, y: CGFloat(index) * height), from: pane).y
+            let rect = NSRect(x: 0, y: y, width: bounds.width, height: height)
+            guard case .row(let rowIndex) = layout.items[index] else {
+                EditorTheme.foldBackground.setFill()
+                rect.fill()
+                continue
+            }
+            let row = layout.rows[rowIndex]
+            switch role {
+            case .old, .new:
+                guard let (lineIndex, isOld) = layout.line(for: row, role: role) else { continue }
+                if row.kind != .context {
+                    (isOld ? EditorTheme.removedGutter : EditorTheme.addedGutter).setFill()
+                    rect.fill()
+                }
+                let number = layout.side(isOld).side.numbers[lineIndex]
+                draw(number, rightEdge: column, in: rect, attributes: attributes)
+            case .unified:
+                if row.kind == .removed || row.kind == .added {
+                    (row.kind == .removed ? EditorTheme.removedGutter : EditorTheme.addedGutter).setFill()
+                    rect.fill()
+                }
+                if let old = row.old { draw(layout.document.old.numbers[old], rightEdge: column, in: rect, attributes: attributes) }
+                if let new = row.new { draw(layout.document.new.numbers[new], rightEdge: column * 2, in: rect, attributes: attributes) }
+            }
+        }
+    }
+
+    private func draw(_ number: Int, rightEdge: CGFloat, in rect: NSRect, attributes: [NSAttributedString.Key: Any]) {
+        let label = String(number) as NSString
+        let size = label.size(withAttributes: attributes)
+        label.draw(at: NSPoint(x: rightEdge - 6 - size.width, y: rect.midY - size.height / 2), withAttributes: attributes)
+    }
+}

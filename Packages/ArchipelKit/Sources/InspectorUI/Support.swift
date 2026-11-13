@@ -1,17 +1,18 @@
 import AppKit
 import SwiftUI
 
-enum FileIcon {
-    static let folder = "folder"
+/// SF Symbol names for files, shared with the app so editor tabs match the sidebar.
+public enum FileIcon {
+    public static let folder = "folder"
 
-    static func symbol(for fileName: String) -> String {
-        switch fileName.lowercased() {
+    public static func symbol(for filename: String) -> String {
+        switch filename.lowercased() {
         case "makefile", "dockerfile", "justfile", "rakefile", "gemfile", "brewfile": return "hammer"
         case ".gitignore", ".gitattributes", ".gitmodules": return "arrow.triangle.branch"
         case "license", "licence", "readme": return "doc.text"
         default: break
         }
-        switch (fileName as NSString).pathExtension.lowercased() {
+        switch (filename as NSString).pathExtension.lowercased() {
         case "swift": return "swift"
         case "md", "markdown", "txt", "rtf", "log", "csv", "tsv": return "doc.text"
         case "png", "jpg", "jpeg", "gif", "heic", "webp", "tif", "tiff", "bmp", "ico", "icns", "svg": return "photo"
@@ -55,5 +56,14 @@ extension View {
         onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             action()
         }
+    }
+}
+
+extension View {
+    /// The sidebar list style sizes its rows from the system "Sidebar icon size"
+    /// setting, whose default is too roomy for a file tree. Pin it to the small
+    /// size, which is what Xcode's navigators use.
+    func compactRows() -> some View {
+        environment(\.sidebarRowSize, .small)
     }
 }

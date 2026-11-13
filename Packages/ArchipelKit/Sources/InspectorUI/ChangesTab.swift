@@ -64,6 +64,10 @@ final class ChangesModel {
         perform { try await $0.unstageAll(in: $1) }
     }
 
+    func change(for id: ChangeID) -> GitFileChange? {
+        (id.staged ? status.staged : status.unstaged).first { $0.path == id.path }
+    }
+
     func url(for change: GitFileChange) -> URL {
         root.appending(path: change.path)
     }
@@ -85,6 +89,7 @@ final class ChangesModel {
 
 struct ChangesTab: View {
     @Bindable var model: ChangesModel
+    let actions: InspectorActions
     @State private var showsStaged = true
     @State private var showsUnstaged = true
 
@@ -142,6 +147,17 @@ struct ChangesTab: View {
                 }
             }
             .listStyle(.sidebar)
+            .compactRows()
+            .contextMenu(forSelectionType: ChangeID.self) { ids in
+                if let id = ids.first, let change = model.change(for: id) {
+                    ChangeContextMenu(change: change, staged: id.staged, model: model, actions: actions)
+                }
+            } primaryAction: { ids in
+                for id in ids { actions.openDiff(id.path, id.staged, false) }
+            }
+            .onChange(of: model.selection) { _, selection in
+                if let selection { actions.openDiff(selection.path, selection.staged, true) }
+            }
         }
     }
 
@@ -179,8 +195,6 @@ private struct ChangeRow: View {
     let model: ChangesModel
     @State private var isHovering = false
 
-    private var id: ChangeID { ChangeID(path: change.path, staged: staged) }
-
     var body: some View {
         let name = (change.path as NSString).lastPathComponent
         let directory = (change.path as NSString).deletingLastPathComponent
@@ -215,30 +229,31 @@ private struct ChangeRow: View {
         .help(change.originalPath.map { "\(change.path), renamed from \($0)" } ?? change.path)
         .accessibilityElement(children: .combine)
         .accessibilityAction(named: staged ? "Unstage" : "Stage", toggleStage)
-        .contextMenu {
-            Button(staged ? "Unstage Changes" : "Stage Changes", action: toggleStage)
-            Divider()
-            Button("Open File") { FileActions.open([model.url(for: change)]) }
-                .disabled(change.kind == .deleted)
-            Button("Reveal in Finder") { FileActions.reveal([model.url(for: change)]) }
-                .disabled(change.kind == .deleted)
-            Button("Copy Relative Path") { FileActions.copy([change.path]) }
-        }
-        .popover(isPresented: isShowingDiff, arrowEdge: .leading) {
-            DiffView(path: change.path, staged: staged, root: model.root)
-        }
-    }
-
-    private var isShowingDiff: Binding<Bool> {
-        Binding {
-            model.selection == id
-        } set: { isPresented in
-            if !isPresented, model.selection == id { model.selection = nil }
-        }
     }
 
     private func toggleStage() {
         staged ? model.unstage(change) : model.stage(change)
+    }
+}
+
+private struct ChangeContextMenu: View {
+    let change: GitFileChange
+    let staged: Bool
+    let model: ChangesModel
+    let actions: InspectorActions
+
+    var body: some View {
+        Button(staged ? "Unstage Changes" : "Stage Changes") {
+            staged ? model.unstage(change) : model.stage(change)
+        }
+        Divider()
+        Button("Open File") { actions.openFile(model.url(for: change), false) }
+            .disabled(change.kind == .deleted)
+        Button("Open in Default App") { FileActions.open([model.url(for: change)]) }
+            .disabled(change.kind == .deleted)
+        Button("Reveal in Finder") { FileActions.reveal([model.url(for: change)]) }
+            .disabled(change.kind == .deleted)
+        Button("Copy Relative Path") { FileActions.copy([change.path]) }
     }
 }
 

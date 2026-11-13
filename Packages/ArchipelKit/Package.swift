@@ -9,17 +9,29 @@ let package = Package(
         .library(name: "AgentKit", targets: ["AgentKit"]),
         .library(name: "GitKit", targets: ["GitKit"]),
         .library(name: "InspectorUI", targets: ["InspectorUI"]),
+        .library(name: "EditorUI", targets: ["EditorUI"]),
         .executable(name: "archipel-hook", targets: ["archipel-hook"]),
+    ],
+    dependencies: [
+        // highlight.js 11 grammars; EditorUI runs its script directly to get token scopes.
+        .package(url: "https://github.com/smittytone/HighlighterSwift.git", exact: "3.1.0"),
     ],
     targets: [
         .target(name: "ArchipelCore"),
         .target(name: "AgentKit", dependencies: ["ArchipelCore"]),
         .target(name: "GitKit"),
         .target(name: "InspectorUI", dependencies: ["GitKit"]),
+        .target(
+            name: "EditorUI",
+            dependencies: ["GitKit", .product(name: "Highlighter", package: "HighlighterSwift")]
+        ),
+        // Manual verification harness; see Sources/editor-demo/main.swift for usage.
+        .executableTarget(name: "editor-demo", dependencies: ["EditorUI"]),
         .executableTarget(name: "archipel-hook"),
         .testTarget(name: "ArchipelCoreTests", dependencies: ["ArchipelCore"]),
         .testTarget(name: "AgentKitTests", dependencies: ["AgentKit"]),
         .testTarget(name: "GitKitTests", dependencies: ["GitKit"]),
+        .testTarget(name: "EditorUITests", dependencies: ["EditorUI"]),
     ],
     swiftLanguageModes: [.v6]
 )

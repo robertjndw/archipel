@@ -1,26 +1,49 @@
 import Foundation
 
 public struct Workspace: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 2
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var islands: [Island]
     public var selectedIslandID: Island.ID?
     public var selectedWorktreeIDByIsland: [Island.ID: Worktree.ID]
-    public var selectedSessionIDByWorktree: [Worktree.ID: Session.ID]
 
     public init(
         schemaVersion: Int = Workspace.currentSchemaVersion,
         islands: [Island],
         selectedIslandID: Island.ID? = nil,
-        selectedWorktreeIDByIsland: [Island.ID: Worktree.ID] = [:],
-        selectedSessionIDByWorktree: [Worktree.ID: Session.ID] = [:]
+        selectedWorktreeIDByIsland: [Island.ID: Worktree.ID] = [:]
     ) {
         self.schemaVersion = schemaVersion
         self.islands = islands
         self.selectedIslandID = selectedIslandID ?? islands.first?.id
         self.selectedWorktreeIDByIsland = selectedWorktreeIDByIsland
-        self.selectedSessionIDByWorktree = selectedSessionIDByWorktree
+    }
+
+    private struct LegacyKeys: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+        static let selectedSessionIDByWorktree = LegacyKeys(stringValue: "selectedSessionIDByWorktree")
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        islands = try c.decode([Island].self, forKey: .islands)
+        selectedIslandID = try c.decodeIfPresent(Island.ID.self, forKey: .selectedIslandID)
+        selectedWorktreeIDByIsland = try c.decode([Island.ID: Worktree.ID].self, forKey: .selectedWorktreeIDByIsland)
+
+        // Version 2 remembered one selected session per worktree; it becomes the synthesized pane's selected tab.
+        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+            .decodeIfPresent([Worktree.ID: Session.ID].self, forKey: .selectedSessionIDByWorktree) ?? [:]
+        for (worktreeID, sessionID) in legacy {
+            updateWorktree(id: worktreeID) { worktree in
+                guard worktree.panes.count == 1, let tab = worktree.tabShowing(sessionID) else { return }
+                worktree.panes[0].selectedTabID = tab.id
+            }
+        }
     }
 
     /// One default island, because the sidebar needs somewhere to put the first project.
@@ -53,6 +76,30 @@ public struct Workspace: Codable, Equatable, Sendable {
     public func session(id: Session.ID) -> Session? {
         guard let loc = locate(sessionID: id) else { return nil }
         return islands[loc.island].projects[loc.project].worktrees[loc.worktree].sessions[loc.session]
+    }
+
+    public func pane(id: Pane.ID) -> Pane? {
+        allWorktrees.lazy.flatMap(\.panes).first { $0.id == id }
+    }
+
+    public func tab(id: Tab.ID) -> Tab? {
+        allWorktrees.lazy.flatMap(\.panes).flatMap(\.tabs).first { $0.id == id }
+    }
+
+    public func tab(showing sessionID: Session.ID) -> Tab? {
+        allWorktrees.lazy.compactMap { $0.tabShowing(sessionID) }.first
+    }
+
+    public func worktree(containingPane paneID: Pane.ID) -> Worktree? {
+        allWorktrees.first { $0.panes.contains { $0.id == paneID } }
+    }
+
+    public func worktree(containingTab tabID: Tab.ID) -> Worktree? {
+        allWorktrees.first { $0.tabLocation(id: tabID) != nil }
+    }
+
+    public func pane(containingTab tabID: Tab.ID) -> Pane? {
+        allWorktrees.lazy.flatMap(\.panes).first { $0.tabs.contains { $0.id == tabID } }
     }
 
     public func island(containing sessionID: Session.ID) -> Island? {
@@ -163,6 +210,8 @@ public struct Workspace: Codable, Equatable, Sendable {
         let path = worktree.path.standardizedFileURL
         guard !islands[loc.island].projects[loc.project].worktrees.contains(where: { $0.path.standardizedFileURL == path })
         else { return false }
+        var worktree = worktree
+        worktree.normalize()
         islands[loc.island].projects[loc.project].worktrees.append(worktree)
         selectWorktree(worktree.id)
         return true
@@ -171,6 +220,7 @@ public struct Workspace: Codable, Equatable, Sendable {
     public mutating func updateWorktree(id: Worktree.ID, _ change: (inout Worktree) -> Void) {
         guard let loc = locate(worktreeID: id) else { return }
         change(&islands[loc.island].projects[loc.project].worktrees[loc.worktree])
+        islands[loc.island].projects[loc.project].worktrees[loc.worktree].normalize()
     }
 
     /// The main worktree is the project folder itself, so it cannot be removed.
@@ -186,15 +236,13 @@ public struct Workspace: Codable, Equatable, Sendable {
         pruneSelections()
     }
 
-    // MARK: Sessions
+    // MARK: Sessions and tabs
 
-    /// Also selects the new session as its worktree's tab, since users add a session to start using it.
+    /// Adds the record and a tab for it, selected and focused, since users add a session to start using it.
+    /// Does not change the selected worktree or island.
     @discardableResult
-    public mutating func addSession(_ session: Session, to worktreeID: Worktree.ID) -> Bool {
-        guard let loc = locate(worktreeID: worktreeID) else { return false }
-        islands[loc.island].projects[loc.project].worktrees[loc.worktree].sessions.append(session)
-        selectedSessionIDByWorktree[worktreeID] = session.id
-        return true
+    public mutating func addSession(_ session: Session, to worktreeID: Worktree.ID, pane: Pane.ID? = nil) -> Bool {
+        edit(worktreeID) { $0.addSession(session, pane: pane) } != nil
     }
 
     public mutating func updateSession(id: Session.ID, _ change: (inout Session) -> Void) {
@@ -204,23 +252,72 @@ public struct Workspace: Codable, Equatable, Sendable {
 
     public mutating func removeSession(id: Session.ID) {
         guard let loc = locate(sessionID: id) else { return }
-        let worktree = islands[loc.island].projects[loc.project].worktrees[loc.worktree]
-        islands[loc.island].projects[loc.project].worktrees[loc.worktree].sessions.remove(at: loc.session)
-        if selectedSessionIDByWorktree[worktree.id] == id {
-            let remaining = worktree.sessions.filter { $0.id != id }
-            // Same index is the next tab; clamping falls back to the previous one at the end.
-            selectedSessionIDByWorktree[worktree.id] = remaining.isEmpty
-                ? nil : remaining[min(loc.session, remaining.count - 1)].id
+        let worktreeID = islands[loc.island].projects[loc.project].worktrees[loc.worktree].id
+        edit(worktreeID) { worktree in
+            if let tab = worktree.tabShowing(id) { worktree.removeTab(id: tab.id) }
+            worktree.sessions.removeAll { $0.id == id }
         }
     }
 
-    /// Reorders tabs within the session's worktree. `index` is the position after the session has
-    /// been taken out, clamped to the valid range.
-    public mutating func moveSession(id: Session.ID, toIndex index: Int) {
-        guard let loc = locate(sessionID: id) else { return }
-        let session = islands[loc.island].projects[loc.project].worktrees[loc.worktree].sessions.remove(at: loc.session)
-        let count = islands[loc.island].projects[loc.project].worktrees[loc.worktree].sessions.count
-        islands[loc.island].projects[loc.project].worktrees[loc.worktree].sessions.insert(session, at: min(max(index, 0), count))
+    /// Previews replace the pane's existing preview tab; an equal tab anywhere in the worktree is reused.
+    /// Returns nil for session content, which only `addSession` creates, or an unknown worktree.
+    @discardableResult
+    public mutating func openTab(_ content: TabContent, in worktreeID: Worktree.ID, pane: Pane.ID? = nil, preview: Bool) -> Tab.ID? {
+        edit(worktreeID) { $0.openTab(content, pane: pane, preview: preview) } ?? nil
+    }
+
+    public mutating func pinTab(id: Tab.ID) {
+        guard let worktreeID = worktree(containingTab: id)?.id else { return }
+        edit(worktreeID) { worktree in
+            if let (p, t) = worktree.tabLocation(id: id) { worktree.panes[p].tabs[t].isPreview = false }
+        }
+    }
+
+    /// Closing a session tab also removes the session record.
+    public mutating func closeTab(id: Tab.ID) {
+        guard let worktreeID = worktree(containingTab: id)?.id else { return }
+        edit(worktreeID) { worktree in
+            guard let tab = worktree.removeTab(id: id), case .session(let sessionID) = tab.content else { return }
+            worktree.sessions.removeAll { $0.id == sessionID }
+        }
+    }
+
+    /// Selects the tab in its pane, focuses that pane, and selects the owning worktree and island.
+    public mutating func selectTab(id: Tab.ID) {
+        guard let worktreeID = worktree(containingTab: id)?.id else { return }
+        edit(worktreeID) { worktree in
+            if let (p, _) = worktree.tabLocation(id: id) { worktree.select(id, inPane: p) }
+        }
+        selectWorktree(worktreeID)
+    }
+
+    public mutating func focusPane(id: Pane.ID) {
+        guard let worktreeID = worktree(containingPane: id)?.id else { return }
+        edit(worktreeID) { $0.focusedPaneID = id }
+    }
+
+    /// Reorders within a pane or moves across panes of one worktree; `index` is the position in the
+    /// destination after the tab has been taken out. Panes of different worktrees are a no-op.
+    public mutating func moveTab(id: Tab.ID, toPane paneID: Pane.ID, at index: Int? = nil) {
+        guard let worktreeID = worktree(containingTab: id)?.id,
+              worktree(containingPane: paneID)?.id == worktreeID else { return }
+        edit(worktreeID) { $0.moveTab(id: id, toPane: paneID, at: index) }
+    }
+
+    /// Moves the tab into a new pane right after its current one. Nil when it is the pane's only tab.
+    @discardableResult
+    public mutating func splitTab(id: Tab.ID) -> Pane.ID? {
+        guard let worktreeID = worktree(containingTab: id)?.id else { return nil }
+        return edit(worktreeID) { $0.splitTab(id: id) } ?? nil
+    }
+
+    /// The sessions shown by each pane's selected tab, in pane order.
+    public func visibleSessionIDs(in worktreeID: Worktree.ID) -> [Session.ID] {
+        worktree(id: worktreeID)?.panes.compactMap { sessionID(of: $0.selectedTab) } ?? []
+    }
+
+    public func focusedSessionID(in worktreeID: Worktree.ID) -> Session.ID? {
+        sessionID(of: worktree(id: worktreeID)?.focusedPane?.selectedTab)
     }
 
     // MARK: Selection
@@ -238,27 +335,31 @@ public struct Workspace: Codable, Equatable, Sendable {
         selectedWorktreeIDByIsland[islandID] = id
     }
 
-    /// Selects the session as its worktree's tab, plus that worktree and island.
+    /// Selects the session's tab (focusing its pane), plus that worktree and island.
     public mutating func selectSession(_ id: Session.ID) {
-        guard let worktree = worktree(containing: id) else { return }
-        selectWorktree(worktree.id)
-        selectedSessionIDByWorktree[worktree.id] = id
+        guard let tab = tab(showing: id) else { return }
+        selectTab(id: tab.id)
     }
 
     public var selectedWorktreeID: Worktree.ID? {
         selectedIslandID.flatMap { selectedWorktreeIDByIsland[$0] }
     }
 
-    /// The remembered tab if it still exists, otherwise the worktree's first session.
-    public func selectedSessionID(in worktreeID: Worktree.ID) -> Session.ID? {
-        guard let worktree = worktree(id: worktreeID) else { return nil }
-        if let stored = selectedSessionIDByWorktree[worktreeID], worktree.sessions.contains(where: { $0.id == stored }) {
-            return stored
-        }
-        return worktree.sessions.first?.id
+    // MARK: Private
+
+    private func sessionID(of tab: Tab?) -> Session.ID? {
+        guard case .session(let id) = tab?.content else { return nil }
+        return id
     }
 
-    // MARK: Private
+    /// Runs `body` on the worktree and restores its invariants afterwards. Nil when the worktree is unknown.
+    @discardableResult
+    private mutating func edit<T>(_ id: Worktree.ID, _ body: (inout Worktree) -> T) -> T? {
+        guard let loc = locate(worktreeID: id) else { return nil }
+        let result = body(&islands[loc.island].projects[loc.project].worktrees[loc.worktree])
+        islands[loc.island].projects[loc.project].worktrees[loc.worktree].normalize()
+        return result
+    }
 
     private struct Location { var island = 0, project = 0, worktree = 0, session = 0 }
 
@@ -299,9 +400,6 @@ public struct Workspace: Codable, Equatable, Sendable {
     private mutating func pruneSelections() {
         selectedWorktreeIDByIsland = selectedWorktreeIDByIsland.filter { islandID, worktreeID in
             island(containingWorktree: worktreeID)?.id == islandID
-        }
-        selectedSessionIDByWorktree = selectedSessionIDByWorktree.filter { worktreeID, sessionID in
-            worktree(containing: sessionID)?.id == worktreeID
         }
     }
 }

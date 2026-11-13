@@ -2,11 +2,18 @@ import SwiftUI
 
 public struct InspectorView: View {
     private let root: URL?
+    private let actions: InspectorActions
     @AppStorage("InspectorUI.selectedTab") private var tab: Tab = .files
 
     /// `root` is the selected worktree's folder; nil shows an empty state. The view fully resets when root changes.
-    public init(root: URL?) {
+    /// A single click or arrow key opens a preview (`preview` true); a double click or Return opens for keeps.
+    public init(
+        root: URL?,
+        onOpenFile: @escaping (_ url: URL, _ preview: Bool) -> Void,
+        onOpenDiff: @escaping (_ path: String, _ staged: Bool, _ preview: Bool) -> Void
+    ) {
         self.root = root
+        actions = InspectorActions(openFile: onOpenFile, openDiff: onOpenDiff)
     }
 
     public var body: some View {
@@ -23,7 +30,7 @@ public struct InspectorView: View {
 
             if let root {
                 // A new identity per root throws away the old models, tasks and expansion state.
-                InspectorContent(root: root, tab: tab)
+                InspectorContent(root: root, tab: tab, actions: actions)
                     .id(root)
             } else {
                 ContentUnavailableView(
@@ -46,21 +53,29 @@ public struct InspectorView: View {
 /// Owns both models so switching tabs keeps the file tree's expansion and the last known status.
 private struct InspectorContent: View {
     let tab: InspectorView.Tab
+    let actions: InspectorActions
     @State private var files: FileTreeModel
     @State private var changes: ChangesModel
 
-    init(root: URL, tab: InspectorView.Tab) {
+    init(root: URL, tab: InspectorView.Tab, actions: InspectorActions) {
         self.tab = tab
+        self.actions = actions
         files = FileTreeModel(root: root)
         changes = ChangesModel(root: root)
     }
 
     var body: some View {
         switch tab {
-        case .files: FilesTab(model: files)
-        case .changes: ChangesTab(model: changes)
+        case .files: FilesTab(model: files, actions: actions)
+        case .changes: ChangesTab(model: changes, actions: actions)
         }
     }
+}
+
+/// Where the sidebar sends the user: files and diffs open in the app's own tabs.
+struct InspectorActions {
+    var openFile: (_ url: URL, _ preview: Bool) -> Void
+    var openDiff: (_ path: String, _ staged: Bool, _ preview: Bool) -> Void
 }
 
 /// The strip under the picker: what is being shown on the left, a refresh control on the right.

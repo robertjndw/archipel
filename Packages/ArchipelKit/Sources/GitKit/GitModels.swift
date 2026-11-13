@@ -144,12 +144,12 @@ enum GitParser {
         return (Array(parts.prefix(fixedFields)), string(parts[fixedFields]))
     }
 
-    private static func string(_ scalars: Scalars) -> String {
+    static func string(_ scalars: Scalars) -> String {
         String(String.UnicodeScalarView(scalars))
     }
 }
 
-private extension Substring.UnicodeScalarView {
+extension Substring.UnicodeScalarView {
     func dropPrefix(_ prefix: String) -> String? {
         guard starts(with: prefix.unicodeScalars) else { return nil }
         return String(String.UnicodeScalarView(dropFirst(prefix.unicodeScalars.count)))
