@@ -21,6 +21,22 @@ final class AppModel {
     let documents = FileDocumentStore()
     /// A file tab with unsaved edits that the user asked to close.
     var tabAwaitingCloseDecision: Tab?
+    /// Diff review comments of every worktree. Kept here for the same reason as `documents`.
+    let reviewComments = ReviewCommentStore()
+    /// The project whose settings sheet is open. Lives here because both the sidebar and Run open it.
+    var projectSettingsID: Project.ID?
+
+    /// The script a session runs instead of its agent. Deliberately not persisted: after a relaunch
+    /// a script tab comes back as a plain shell, so a setup script or dev server never starts by itself.
+    var scriptSessions: [Session.ID: ScriptRun] = [:]
+    /// Review comments waiting for their target session to be ready for input, by session.
+    @ObservationIgnored var pendingReviews: [Session.ID: PendingReview] = [:]
+    @ObservationIgnored var terminalStartTimes: [Session.ID: ContinuousClock.Instant] = [:]
+
+    /// Transient repository state for the sidebar rows of the selected island.
+    var gitSummaries: [Worktree.ID: GitSummary] = [:]
+    var pullRequests: [Worktree.ID: PullRequestLookup] = [:]
+    @ObservationIgnored var gitRefresh = GitRefreshState()
     private let store: WorkspaceStore
     private let terminalApp: TerminalApp?
     private let hookServer: HookServer
@@ -78,7 +94,14 @@ final class AppModel {
         }
         for id in visibleSessionIDs { ensureRunning(id) }
         refreshBranches()
+        refreshGitStatus(lookingUpPullRequests: true)
         watchPaneClicks()
+    }
+
+    /// The login shell's PATH, for finding tools such as `gh` that launchd's
+    /// bare PATH does not reach.
+    func toolSearchPATH() async -> String {
+        await loginPATH.value
     }
 
     // MARK: Selection
@@ -151,18 +174,25 @@ final class AppModel {
         terminalApp?.setAppFocused(true)
         for id in visibleSessionIDs { markViewed(id) }
         refreshBranches()
+        refreshGitStatus(lookingUpPullRequests: true, minimumPullRequestAge: .seconds(30))
+        startGitStatusTimer()
     }
 
     func appDidResignActive() {
         terminalApp?.setAppFocused(false)
+        stopGitStatusTimer()
     }
 
     /// Every mutation that can change which session is on screen goes through
     /// here, so the terminal that left the screen stops rendering and the one
     /// that entered it is started and marked as seen.
-    private func changingSelection(_ change: (inout Workspace) -> Void) {
+    func changingSelection(_ change: (inout Workspace) -> Void) {
         let previous = Set(visibleSessionIDs)
+        let previousPlace = (selectedIsland?.id, selectedWorktree?.id)
         mutate(change)
+        if previousPlace != (selectedIsland?.id, selectedWorktree?.id) {
+            refreshGitStatus(lookingUpPullRequests: true)
+        }
         let current = Set(visibleSessionIDs)
         for id in previous.subtracting(current) { terminals[id]?.setOccluded(true) }
         for id in current {
@@ -265,6 +295,9 @@ final class AppModel {
         try await git.addWorktree(repository: project.folderURL, path: path, branch: branch, createBranch: createBranch)
         let worktree = Worktree(path: path, branch: branch)
         changingSelection { _ = $0.addWorktree(worktree, to: project.id) }
+        if workspace.project(id: project.id)?.scripts.setupCommand != nil {
+            startScript(.setup, in: worktree.id)
+        }
     }
 
     /// Takes the worktree out of the sidebar. With `deleteFromDisk` the folder
@@ -397,7 +430,7 @@ final class AppModel {
     /// Kills the process if there is one and starts again, resuming the
     /// agent's conversation unless `fresh` is set.
     func restartSession(_ id: Session.ID, fresh: Bool = false) {
-        tearDown(id)
+        tearDown(id, restarting: true)
         if fresh {
             mutate {
                 $0.updateSession(id: id) {
@@ -435,6 +468,12 @@ final class AppModel {
               let worktree = workspace.worktree(containing: id), let terminalApp
         else { return }
         let definition = AgentDefinition.builtIn(id: session.agent.rawValue) ?? .shell
+        let script = scriptSessions[id]
+        let location = WorktreeEnvironment(
+            worktreePath: worktree.path,
+            rootPath: workspace.project(containing: id)?.folderURL ?? worktree.path,
+            branch: worktree.branch
+        )
 
         // Claude lets us choose the conversation id up front. It is only
         // persisted once a hook confirms it, so a session that never really
@@ -451,6 +490,8 @@ final class AppModel {
         if session.agentSessionID != nil, let resume = definition.resumeCommand(for: context) {
             command = resume
         }
+        command = command.adding(location)
+        if let script { command = ScriptLaunch.command(script: script.command, context: context, worktree: location) }
 
         launchFailures[id] = nil
         apply(.launched, to: id)
@@ -479,11 +520,17 @@ final class AppModel {
                     waitAfterCommand: true
                 ))
                 terminals[id] = terminal
+                terminalStartTimes[id] = .now
                 terminal.setOccluded(!visibleSessionIDs.contains(id))
                 observe(terminal, for: id)
-                // Only Claude announces itself through a hook. Everything else
-                // would sit on "starting" forever without this.
-                if definition.id != AgentDefinition.claude.id { apply(.sessionStarted, to: id) }
+                if script?.kind == .setup {
+                    // A setup script is a job with an end, so the sidebar shows it as busy until it exits.
+                    apply(.activity, to: id)
+                } else if definition.id != AgentDefinition.claude.id {
+                    // Only Claude announces itself through a hook. Everything else
+                    // would sit on "starting" forever without this.
+                    apply(.sessionStarted, to: id)
+                }
             } catch {
                 launchFailures[id] = error.localizedDescription
                 apply(.processExited(code: 1), to: id)
@@ -535,11 +582,18 @@ final class AppModel {
         mutate { $0.updateSession(id: id) { $0.agentTitle = title } }
     }
 
-    private func tearDown(_ id: Session.ID) {
+    /// A restart keeps what belongs to the session rather than its process: the script it reruns and
+    /// review comments still waiting to be delivered.
+    private func tearDown(_ id: Session.ID, restarting: Bool = false) {
         eventTasks.removeValue(forKey: id)?.cancel()
         terminals.removeValue(forKey: id)?.close()
+        terminalStartTimes[id] = nil
         activities[id] = nil
         launchFailures[id] = nil
+        if !restarting {
+            scriptSessions[id] = nil
+            pendingReviews[id] = nil
+        }
         notifier.clear(sessionID: id)
         refreshDockBadge()
     }
@@ -569,6 +623,9 @@ final class AppModel {
             notify(session: session, activity: activity)
         }
         refreshDockBadge()
+        if activity.status != before.status {
+            sessionStatusChanged(id, from: before.status, to: activity.status)
+        }
     }
 
     private func notify(session: Session, activity: SessionActivity) {
@@ -621,7 +678,7 @@ final class AppModel {
 
     // MARK: Persistence
 
-    private func mutate(_ change: (inout Workspace) -> Void) {
+    func mutate(_ change: (inout Workspace) -> Void) {
         change(&workspace)
         saveTask?.cancel()
         saveTask = Task { [weak self] in

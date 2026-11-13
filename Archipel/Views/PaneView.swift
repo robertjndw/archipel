@@ -71,8 +71,15 @@ private struct PaneView: View {
             FileEditor(url: url, store: model.documents)
                 .id(url)
         case .diff(let path, let staged):
-            DiffViewer(root: worktree.path, path: path, staged: staged)
-                .id("\(path)|\(staged)")
+            DiffViewer(
+                root: worktree.path,
+                path: path,
+                staged: staged,
+                comments: model.reviewComments,
+                targets: model.reviewTargets(in: worktree),
+                onSend: { model.sendReviewComments(in: worktree.id, to: $0) }
+            )
+            .id("\(path)|\(staged)")
         case nil:
             ContentUnavailableView {
                 Label("No Tabs", systemImage: "terminal")

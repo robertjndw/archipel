@@ -1,0 +1,161 @@
+import AppKit
+import ArchipelCore
+import GitKit
+
+/// The last pull request answer for a worktree, with the branch it was asked for: after a branch
+/// switch the old answer must not be shown, even before the next lookup.
+struct PullRequestLookup {
+    var branch: String
+    var pullRequest: GitPullRequest?
+    var checkedAt: ContinuousClock.Instant
+}
+
+/// Bookkeeping that keeps refreshes of one worktree from overlapping. Not observed.
+struct GitRefreshState {
+    struct Request {
+        var lookingUpPullRequests: Bool
+        var minimumPullRequestAge: Duration
+
+        func merged(with other: Request) -> Request {
+            switch (lookingUpPullRequests, other.lookingUpPullRequests) {
+            case (true, true): Request(lookingUpPullRequests: true, minimumPullRequestAge: min(minimumPullRequestAge, other.minimumPullRequestAge))
+            case (true, false): self
+            case (false, _): other
+            }
+        }
+    }
+
+    var summariesInFlight: Set<Worktree.ID> = []
+    /// Asked for while a refresh of the same worktree was running; run once that one is done, since
+    /// its answer may predate whatever prompted the request.
+    var queued: [Worktree.ID: Request] = [:]
+    var pullRequestsInFlight: Set<Worktree.ID> = []
+    var gitHub: Task<GitHubClient?, Never>?
+    var timer: Task<Void, Never>?
+}
+
+extension AppModel {
+    static let gitStatusInterval = Duration.seconds(10)
+    /// `gh` is a network call per worktree, and a pull request rarely appears or changes state without
+    /// the user knowing, so this can be slow.
+    static let pullRequestInterval = Duration.seconds(300)
+
+    /// Refreshes every worktree of the selected island. Pull requests are only looked up when asked
+    /// for, and then only when the last answer for that branch is older than `minimumPullRequestAge`.
+    func refreshGitStatus(lookingUpPullRequests: Bool, minimumPullRequestAge: Duration = pullRequestInterval) {
+        let existing = Set(workspace.allWorktrees.map(\.id))
+        gitSummaries = gitSummaries.filter { existing.contains($0.key) }
+        pullRequests = pullRequests.filter { existing.contains($0.key) }
+        let ids = selectedIsland?.projects.flatMap(\.worktrees).map(\.id) ?? []
+        refreshGitStatus(of: ids, lookingUpPullRequests: lookingUpPullRequests, minimumPullRequestAge: minimumPullRequestAge)
+    }
+
+    func refreshGitStatus(of ids: [Worktree.ID], lookingUpPullRequests: Bool, minimumPullRequestAge: Duration = pullRequestInterval) {
+        let request = GitRefreshState.Request(lookingUpPullRequests: lookingUpPullRequests, minimumPullRequestAge: minimumPullRequestAge)
+        for id in ids { refreshSummary(of: id, request) }
+    }
+
+    func startGitStatusTimer() {
+        guard gitRefresh.timer == nil else { return }
+        gitRefresh.timer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.gitStatusInterval)
+                guard !Task.isCancelled, let self else { return }
+                if NSApp.isActive { self.refreshGitStatus(lookingUpPullRequests: false) }
+            }
+        }
+    }
+
+    func stopGitStatusTimer() {
+        gitRefresh.timer?.cancel()
+        gitRefresh.timer = nil
+    }
+
+    func rowContent(for worktree: Worktree) -> WorktreeRowContent {
+        let summary = gitSummaries[worktree.id]
+        let lookup = pullRequests[worktree.id]
+        let pullRequest = lookup?.branch == summary?.branch ? lookup?.pullRequest : nil
+        let git = summary.map {
+            WorktreeGitState(
+                changedFiles: $0.changedFiles,
+                ahead: $0.ahead,
+                behind: $0.behind,
+                pullRequest: pullRequest.map(Self.badge)
+            )
+        }
+        return WorktreeRowContent(worktree: worktree, activity: activity(for: worktree), git: git)
+    }
+
+    private static func badge(for pullRequest: GitPullRequest) -> PullRequestBadge {
+        let state: PullRequestBadge.State = switch pullRequest.state {
+        case .open: pullRequest.isDraft ? .draft : .open
+        case .merged: .merged
+        case .closed: .closed
+        }
+        return PullRequestBadge(number: pullRequest.number, state: state)
+    }
+
+    private func refreshSummary(of id: Worktree.ID, _ request: GitRefreshState.Request) {
+        guard let worktree = workspace.worktree(id: id) else { return }
+        guard !gitRefresh.summariesInFlight.contains(id) else {
+            gitRefresh.queued[id] = gitRefresh.queued[id].map { $0.merged(with: request) } ?? request
+            return
+        }
+        gitRefresh.summariesInFlight.insert(id)
+        let git = git
+        Task { [weak self] in
+            // A folder that is not a repository (or has vanished) throws; that only means "no summary".
+            let summary = try? await git.summary(in: worktree.path)
+            guard let self else { return }
+            self.gitRefresh.summariesInFlight.remove(id)
+            guard let current = self.workspace.worktree(id: id) else {
+                self.gitRefresh.queued[id] = nil
+                self.gitSummaries[id] = nil
+                self.pullRequests[id] = nil
+                return
+            }
+            if self.gitSummaries[id] != summary { self.gitSummaries[id] = summary }
+            if let summary, current.branch != summary.branch {
+                self.mutate { $0.updateWorktree(id: id) { $0.branch = summary.branch } }
+            }
+            if request.lookingUpPullRequests {
+                self.lookUpPullRequest(of: id, summary: summary, minimumAge: request.minimumPullRequestAge)
+            }
+            if let next = self.gitRefresh.queued.removeValue(forKey: id) {
+                self.refreshSummary(of: id, next)
+            }
+        }
+    }
+
+    /// Every failure, including a missing `gh` or no network, just means no badge.
+    private func lookUpPullRequest(of id: Worktree.ID, summary: GitSummary?, minimumAge: Duration) {
+        guard let worktree = workspace.worktree(id: id), let summary, let branch = summary.branch, summary.upstream != nil else {
+            pullRequests[id] = nil
+            return
+        }
+        if let last = pullRequests[id], last.branch == branch, last.checkedAt.duration(to: .now) < minimumAge { return }
+        guard !gitRefresh.pullRequestsInFlight.contains(id) else { return }
+        gitRefresh.pullRequestsInFlight.insert(id)
+        let gitHub = gitHubClient()
+        Task { [weak self] in
+            let client = await gitHub.value
+            let pullRequest = try? await client?.pullRequest(in: worktree.path)
+            guard let self else { return }
+            self.gitRefresh.pullRequestsInFlight.remove(id)
+            guard self.workspace.worktree(id: id) != nil else { return }
+            self.pullRequests[id] = PullRequestLookup(branch: branch, pullRequest: pullRequest, checkedAt: .now)
+        }
+    }
+
+    /// Resolved once: whether `gh` is installed does not change while the app runs often enough to
+    /// justify searching the PATH for every lookup.
+    private func gitHubClient() -> Task<GitHubClient?, Never> {
+        if let task = gitRefresh.gitHub { return task }
+        let task = Task { [weak self] () -> GitHubClient? in
+            guard let path = await self?.toolSearchPATH() else { return nil }
+            return GitHubClient(searchPATH: path)
+        }
+        gitRefresh.gitHub = task
+        return task
+    }
+}

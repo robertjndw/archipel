@@ -1,0 +1,447 @@
+import AgentKit
+import AppKit
+import ArchipelCore
+import Foundation
+import Observation
+
+/// An action offered next to the destinations in the palette.
+struct PaletteCommand: Identifiable {
+    let id: String
+    let title: String
+    let symbol: String
+    /// Display only. The real shortcut lives on the menu item.
+    let shortcutHint: String?
+    /// Evaluated when the palette opens, so unavailable commands are left out instead of shown disabled.
+    let isAvailable: Bool
+    let perform: @MainActor () -> Void
+
+    init(
+        id: String,
+        title: String,
+        symbol: String,
+        shortcutHint: String? = nil,
+        isAvailable: Bool = true,
+        perform: @escaping @MainActor () -> Void
+    ) {
+        self.id = id
+        self.title = title
+        self.symbol = symbol
+        self.shortcutHint = shortcutHint
+        self.isAvailable = isAvailable
+        self.perform = perform
+    }
+
+    /// The palette shows these in this order when the query is empty.
+    static func standard(
+        model: AppModel,
+        addProject: @escaping @MainActor () -> Void,
+        toggleInspector: @escaping @MainActor () -> Void
+    ) -> [PaletteCommand] {
+        let worktreeID = model.selectedWorktree?.id
+        let hasSelection = worktreeID != nil
+
+        func newSession(_ id: String, _ title: String, _ agent: AgentDefinition, _ hint: String) -> PaletteCommand {
+            PaletteCommand(id: id, title: title, symbol: agent.symbolName, shortcutHint: hint, isAvailable: hasSelection) {
+                if let worktreeID { model.newSession(in: worktreeID, agent: agent) }
+            }
+        }
+
+        return [
+            newSession("new-claude", "New Claude Code Session", .claude, "⌘T"),
+            newSession("new-codex", "New Codex Session", .codex, "⌥⌘T"),
+            newSession("new-shell", "New Shell Session", .shell, "⇧⌘T"),
+            PaletteCommand(id: "add-project", title: "Add Project…", symbol: "folder.badge.plus", shortcutHint: "⇧⌘O", perform: addProject),
+            PaletteCommand(id: "toggle-inspector", title: "Toggle Inspector", symbol: "sidebar.trailing", shortcutHint: "⌥⌘0", perform: toggleInspector),
+            PaletteCommand(
+                id: "split-right",
+                title: "Split Right",
+                symbol: "rectangle.split.2x1",
+                shortcutHint: "⌘\\",
+                isAvailable: (model.selectedWorktree?.focusedPane?.tabs.count ?? 0) >= 2
+            ) {
+                if let tab = model.focusedTab { model.split(tab: tab.id) }
+            },
+            PaletteCommand(id: "close-tab", title: "Close Tab", symbol: "xmark", shortcutHint: "⌘W", isAvailable: model.focusedTab != nil) {
+                if let tab = model.focusedTab { model.close(tab: tab.id) }
+            },
+            PaletteCommand(
+                id: "next-attention",
+                title: "Next Session Needing Attention",
+                symbol: "bell.badge",
+                shortcutHint: "⇧⌘U"
+            ) { model.selectNextNeedingAttention() },
+            PaletteCommand(id: "run", title: "Run", symbol: "play", shortcutHint: "⌘R", isAvailable: hasSelection) {
+                if let worktreeID { model.runProject(in: worktreeID) }
+            },
+            PaletteCommand(
+                id: "run-setup",
+                title: "Run Setup Script",
+                symbol: "wrench.and.screwdriver",
+                isAvailable: model.project(ofWorktree: worktreeID)?.scripts.setupCommand != nil
+            ) {
+                if let worktreeID { model.startScript(.setup, in: worktreeID) }
+            },
+            PaletteCommand(
+                id: "project-settings",
+                title: "Project Settings…",
+                symbol: "gearshape",
+                isAvailable: model.project(ofWorktree: worktreeID) != nil
+            ) {
+                if let project = model.project(ofWorktree: worktreeID) { model.openProjectSettings(project.id) }
+            },
+        ]
+    }
+}
+
+/// One line in the palette, already matched and ready to draw.
+struct PaletteRow: Identifiable {
+    let id: String
+    let symbol: String
+    let title: String
+    let titleMatches: Set<Int>
+    let subtitle: String?
+    let subtitleMatches: Set<Int>
+    let activity: SessionActivity?
+    let shortcutHint: String?
+    let perform: @MainActor () -> Void
+}
+
+@Observable
+final class CommandPaletteModel {
+    enum Mode {
+        case goTo
+        case openFile
+    }
+
+    private(set) var isPresented = false
+    private(set) var mode = Mode.goTo
+    private(set) var query = ""
+    private(set) var rows: [PaletteRow] = []
+    private(set) var isLoadingFiles = false
+    var selection = 0
+
+    @ObservationIgnored private weak var app: AppModel?
+    @ObservationIgnored private var commands: [PaletteCommand] = []
+    @ObservationIgnored private var destinations: [WorkspaceDestinationEntry] = []
+    @ObservationIgnored private var files: [String] = []
+    @ObservationIgnored private var filesRoot: URL?
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var rankTask: Task<Void, Never>?
+    /// Bumped whenever results become stale, so a ranking that finishes late is dropped.
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private weak var previousResponder: NSResponder?
+
+    private static let destinationLimit = 200
+    nonisolated private static let fileLimit = 60
+    nonisolated private static let chunkSize = 5_000
+    nonisolated private static let maxEnumeratedFiles = 20_000
+
+    // MARK: Presenting
+
+    func present(_ mode: Mode, app: AppModel, commands: [PaletteCommand]) {
+        if isPresented {
+            if self.mode == mode {
+                dismiss()
+                return
+            }
+        } else {
+            previousResponder = NSApp.keyWindow?.firstResponder
+        }
+        self.app = app
+        self.commands = commands.filter(\.isAvailable)
+        destinations = app.workspace.destinationEntries()
+        self.mode = mode
+        query = ""
+        selection = 0
+        files = []
+        filesRoot = nil
+        loadTask?.cancel()
+        isLoadingFiles = false
+        isPresented = true
+        if mode == .openFile { loadFiles(for: app) }
+        refresh()
+    }
+
+    func dismiss(restoringFocus: Bool = true) {
+        guard isPresented else { return }
+        isPresented = false
+        loadTask?.cancel()
+        rankTask?.cancel()
+        generation += 1
+        rows = []
+        files = []
+        destinations = []
+        if restoringFocus { restoreFocus() }
+    }
+
+    func activate(_ index: Int) {
+        guard rows.indices.contains(index) else { return }
+        let row = rows[index]
+        // Dismiss first so the action sees a window without the palette's text field in it.
+        dismiss(restoringFocus: false)
+        row.perform()
+        focusFocusedSession()
+    }
+
+    func activateSelection() { activate(selection) }
+
+    func move(_ delta: Int) {
+        guard !rows.isEmpty else { return }
+        selection = (selection + delta + rows.count) % rows.count
+    }
+
+    func setQuery(_ text: String) {
+        guard text != query else { return }
+        query = text
+        refresh()
+    }
+
+    // MARK: Focus
+
+    /// The palette's text field takes first responder, so closing it without navigating has to hand the keyboard
+    /// back, or a terminal that had it would stay deaf until clicked.
+    private func restoreFocus() {
+        let previous = previousResponder
+        Task { @MainActor [weak self] in
+            guard let self, let window = NSApp.keyWindow else { return }
+            if let view = previous as? NSView, view.window === window {
+                window.makeFirstResponder(view)
+            } else {
+                focusFocusedSession()
+            }
+        }
+    }
+
+    /// A short wait lets SwiftUI swap in the terminal of the newly selected session before it is focused.
+    private func focusFocusedSession() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard let app = self?.app, NSApp.keyWindow?.attachedSheet == nil,
+                  let id = app.focusedSessionID else { return }
+            app.terminals[id]?.focus()
+        }
+    }
+
+    // MARK: Ranking
+
+    private func refresh() {
+        rankTask?.cancel()
+        generation += 1
+        let restrictsToCommands = query.hasPrefix(">")
+        let text = restrictsToCommands ? String(query.dropFirst()) : query
+
+        if restrictsToCommands {
+            rows = commandRows(matching: text, limit: 50)
+            selection = 0
+        } else if mode == .goTo {
+            rows = goToRows(matching: text)
+            selection = 0
+        } else {
+            rankFiles(matching: text)
+        }
+    }
+
+    private func commandRows(matching text: String, limit: Int) -> [PaletteRow] {
+        FuzzyMatcher.rank(commands, query: text, limit: limit, key: \.title).map { command, match in
+            row(for: command, matches: match)
+        }
+    }
+
+    private func goToRows(matching text: String) -> [PaletteRow] {
+        guard let app else { return [] }
+        let isEmpty = text.allSatisfy(\.isWhitespace)
+
+        if isEmpty {
+            var attention: [PaletteRow] = []
+            var rest: [PaletteRow] = []
+            for entry in destinations.prefix(Self.destinationLimit) {
+                let row = row(for: entry, matches: nil, app: app)
+                if case .session(let id) = entry.destination, app.activity(for: id).needsUser {
+                    attention.append(row)
+                } else {
+                    rest.append(row)
+                }
+            }
+            return attention + rest + commands.map { row(for: $0, matches: nil) }
+        }
+
+        // The subtitle rides along at the end of the key, so it matches too, but the title's start and boundary
+        // bonuses make a title hit outrank a context-only hit.
+        let ranked = FuzzyMatcher.rank(destinations, query: text, limit: Self.destinationLimit) { $0.title + " " + $0.subtitle }
+        let rankedCommands = FuzzyMatcher.rank(commands, query: text, limit: 20, key: \.title)
+
+        var merged: [(score: Int, row: PaletteRow)] = []
+        for (entry, match) in ranked { merged.append((match.score, row(for: entry, matches: match, app: app))) }
+        for (command, match) in rankedCommands { merged.append((match.score, row(for: command, matches: match))) }
+        // Swift's sort is not guaranteed stable, so equal scores fall back to the order they were appended in.
+        let order = Dictionary(uniqueKeysWithValues: merged.enumerated().map { ($1.row.id, $0) })
+        merged.sort { $0.score != $1.score ? $0.score > $1.score : order[$0.row.id]! < order[$1.row.id]! }
+        return merged.map(\.row)
+    }
+
+    private func row(for command: PaletteCommand, matches match: FuzzyMatch?) -> PaletteRow {
+        PaletteRow(
+            id: "command:\(command.id)",
+            symbol: command.symbol,
+            title: command.title,
+            titleMatches: Set(match?.positions ?? []),
+            subtitle: nil,
+            subtitleMatches: [],
+            activity: nil,
+            shortcutHint: command.shortcutHint,
+            perform: command.perform
+        )
+    }
+
+    private func row(for entry: WorkspaceDestinationEntry, matches match: FuzzyMatch?, app: AppModel) -> PaletteRow {
+        let titleCount = entry.title.count
+        let positions = match?.positions ?? []
+        let titleMatches = Set(positions.filter { $0 < titleCount })
+        // The key was "title subtitle", so subtitle offsets are shifted by the title and the joining space.
+        let subtitleMatches = Set(positions.filter { $0 > titleCount }.map { $0 - titleCount - 1 })
+
+        let id: String
+        let symbol: String
+        var activity: SessionActivity?
+        let perform: @MainActor () -> Void
+        switch entry.destination {
+        case .island(let islandID):
+            id = "island:\(islandID)"
+            symbol = app.workspace.island(id: islandID)?.symbol ?? "square.stack.3d.up"
+            perform = { app.select(island: islandID) }
+        case .worktree(let worktreeID):
+            id = "worktree:\(worktreeID)"
+            symbol = "arrow.triangle.branch"
+            activity = app.workspace.worktree(id: worktreeID).flatMap { app.activity(for: $0) }
+            perform = { app.select(worktree: worktreeID) }
+        case .session(let sessionID):
+            id = "session:\(sessionID)"
+            let agent = app.workspace.session(id: sessionID).flatMap { AgentDefinition.builtIn(id: $0.agent.rawValue) }
+            symbol = agent?.symbolName ?? "terminal"
+            activity = app.activity(for: sessionID)
+            perform = { app.select(session: sessionID) }
+        }
+        return PaletteRow(
+            id: id,
+            symbol: symbol,
+            title: entry.title,
+            titleMatches: titleMatches,
+            subtitle: entry.subtitle,
+            subtitleMatches: subtitleMatches,
+            activity: activity,
+            shortcutHint: nil,
+            perform: perform
+        )
+    }
+
+    // MARK: Files
+
+    private func loadFiles(for app: AppModel) {
+        guard let root = app.selectedWorktree?.path else { return }
+        filesRoot = root
+        isLoadingFiles = true
+        let git = app.git
+        loadTask = Task { [weak self] in
+            let listed: [String]
+            do {
+                listed = try await git.listFiles(in: root)
+            } catch {
+                // Not a repository (or git failed): walk the folder instead.
+                let walk = Task.detached(priority: .userInitiated) { Self.enumerateFiles(in: root, limit: Self.maxEnumeratedFiles) }
+                listed = await withTaskCancellationHandler { await walk.value } onCancel: { walk.cancel() }
+            }
+            guard !Task.isCancelled, let self else { return }
+            files = listed
+            isLoadingFiles = false
+            refresh()
+        }
+    }
+
+    private func rankFiles(matching text: String) {
+        guard let root = filesRoot, !files.isEmpty else {
+            rows = []
+            return
+        }
+        let paths = files
+        let current = generation
+        rankTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let hits = Self.rank(paths, query: text, limit: Self.fileLimit) else { return }
+            await self?.applyFileHits(hits, root: root, generation: current)
+        }
+    }
+
+    private func applyFileHits(_ hits: [FileHit], root: URL, generation hitGeneration: Int) {
+        guard isPresented, hitGeneration == generation, let app else { return }
+        rows = hits.map { hit in
+            let url = root.appending(path: hit.path)
+            let characters = Array(hit.path)
+            let slash = characters.lastIndex(of: "/")
+            let nameStart = slash.map { $0 + 1 } ?? 0
+            let directory = slash.map { String(characters[..<$0]) }
+            return PaletteRow(
+                id: "file:\(hit.path)",
+                symbol: "doc.text",
+                title: String(characters[nameStart...]),
+                titleMatches: Set(hit.positions.filter { $0 >= nameStart }.map { $0 - nameStart }),
+                subtitle: directory,
+                subtitleMatches: Set(hit.positions.filter { $0 < nameStart - 1 }),
+                activity: nil,
+                shortcutHint: nil,
+                perform: { app.openFile(url, preview: false) }
+            )
+        }
+        selection = 0
+    }
+
+    nonisolated struct FileHit: Sendable {
+        let path: String
+        let positions: [Int]
+    }
+
+    /// `FuzzyMatcher.rank` cannot be cancelled, so a long list is ranked in chunks and the top hits of each chunk
+    /// are merged. Returns nil when the surrounding task was cancelled.
+    nonisolated private static func rank(_ paths: [String], query: String, limit: Int) -> [FileHit]? {
+        if query.allSatisfy(\.isWhitespace) {
+            return paths.prefix(limit).map { FileHit(path: $0, positions: []) }
+        }
+        var candidates: [(score: Int, order: Int, hit: FileHit)] = []
+        var start = 0
+        var sequence = 0
+        while start < paths.count {
+            if Task.isCancelled { return nil }
+            let end = min(start + chunkSize, paths.count)
+            let chunk = Array(paths[start..<end])
+            // Each chunk comes back best first and in input order for ties, so `sequence` keeps that order globally.
+            for (path, match) in FuzzyMatcher.rank(chunk, query: query, limit: limit, key: { $0 }) {
+                candidates.append((match.score, sequence, FileHit(path: path, positions: match.positions)))
+                sequence += 1
+            }
+            start = end
+        }
+        if Task.isCancelled { return nil }
+        candidates.sort { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }
+        return candidates.prefix(limit).map(\.hit)
+    }
+
+    nonisolated private static let skippedDirectories: Set<String> = ["node_modules", ".build", "DerivedData"]
+
+    /// Paths relative to `root`, skipping hidden directories and build output, capped so a huge tree stays cheap.
+    nonisolated private static func enumerateFiles(in root: URL, limit: Int) -> [String] {
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys) else { return [] }
+        let prefix = root.standardizedFileURL.path + "/"
+        var result: [String] = []
+        while let url = enumerator.nextObject() as? URL {
+            if Task.isCancelled || result.count >= limit { break }
+            let name = url.lastPathComponent
+            let isDirectory = (try? url.resourceValues(forKeys: Set(keys)).isDirectory) == true
+            if isDirectory {
+                if name.hasPrefix(".") || skippedDirectories.contains(name) { enumerator.skipDescendants() }
+                continue
+            }
+            let path = url.standardizedFileURL.path
+            if path.hasPrefix(prefix) { result.append(String(path.dropFirst(prefix.count))) }
+        }
+        return result.sorted()
+    }
+}

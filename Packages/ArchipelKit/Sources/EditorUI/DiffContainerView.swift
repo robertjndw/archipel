@@ -17,6 +17,7 @@ struct DiffTextView: NSViewRepresentable {
     let presentation: DiffPresentation
     let showsAllLines: Bool
     let highlights: DiffHighlights?
+    var commenting: DiffCommentContext?
 
     func makeNSView(context: Context) -> DiffContainerView {
         DiffContainerView()
@@ -24,7 +25,18 @@ struct DiffTextView: NSViewRepresentable {
 
     func updateNSView(_ view: DiffContainerView, context: Context) {
         view.configure(document: document, version: version, presentation: presentation, showsAllLines: showsAllLines, highlights: highlights)
+        view.configureComments(commenting)
     }
+}
+
+/// Where comments made in a diff go, and the ones already on the file it shows.
+struct DiffCommentContext {
+    let store: ReviewCommentStore
+    let root: URL
+    let path: String
+    let staged: Bool
+    /// Only this file's comments for the same staged state.
+    let comments: [ReviewComment]
 }
 
 /// Hosts one pane (inline) or two panes (side by side) and keeps the two scrolled together.
@@ -43,6 +55,8 @@ final class DiffContainerView: NSView {
     private var showsAllLines = false
     private var highlightVersion: Int?
     private var isSyncing = false
+    private var commenting: DiffCommentContext?
+    private var commentEditor: DiffCommentEditorSession?
 
     override var isFlipped: Bool { true }
 
@@ -71,9 +85,42 @@ final class DiffContainerView: NSView {
             }
             refreshPanes()
         }
+        if rebuildLayout { updateCommentMarkers() }
+    }
+
+    /// Separate from `configure` so adding a comment only touches the gutters, never the layout.
+    func configureComments(_ commenting: DiffCommentContext?) {
+        let wasEnabled = self.commenting != nil
+        let changed = commenting?.comments != self.commenting?.comments
+        self.commenting = commenting
+        if wasEnabled != (commenting != nil) {
+            for pane in panes {
+                pane.gutter.commentsEnabled = commenting != nil
+                if pane.gutter.updateThickness() { needsLayout = true }
+                pane.gutter.needsDisplay = true
+            }
+        }
+        if changed { updateCommentMarkers() }
+    }
+
+    private func updateCommentMarkers() {
+        let anchors = Set(commenting?.comments.map(\.anchor) ?? [])
+        for pane in panes {
+            pane.gutter.hoveredItem = nil
+            pane.gutter.invalidateAccessibility()
+            guard let layoutState else {
+                pane.gutter.markedItems = []
+                continue
+            }
+            pane.gutter.markedItems = DiffCommentAnchoring.markedItems(
+                layoutState.items, rows: layoutState.rows, role: pane.view.role, document: layoutState.document, anchors: anchors
+            )
+        }
     }
 
     private func makePanes(_ presentation: DiffPresentation) {
+        // The popover points into a gutter that is about to go away.
+        commentEditor?.dismiss()
         for pane in panes {
             NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: pane.scrollView.contentView)
             pane.scrollView.removeFromSuperview()
@@ -95,6 +142,19 @@ final class DiffContainerView: NSView {
             scrollView.contentView.postsBoundsChangedNotifications = true
             NotificationCenter.default.addObserver(self, selector: #selector(clipViewScrolled(_:)), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
             view.onExpandFold = { [weak self] index in self?.expandFold(at: index) }
+            view.onHover = { [weak self, weak gutter] item in
+                guard let self, let gutter else { return }
+                hover(item, in: gutter, role: role)
+            }
+            gutter.onHover = view.onHover
+            gutter.onComment = { [weak self, weak gutter] item in
+                guard let self, let gutter else { return }
+                editComment(at: item, in: gutter, role: role)
+            }
+            gutter.commentAccessibilityLabel = { [weak self] item in
+                self?.commentAccessibilityLabel(at: item, role: role)
+            }
+            gutter.commentsEnabled = commenting != nil
             addSubview(scrollView)
             addSubview(gutter)
             return Pane(scrollView: scrollView, view: view, gutter: gutter)
@@ -106,6 +166,7 @@ final class DiffContainerView: NSView {
         guard let layoutState else { return }
         layoutState.items = DiffFolding.expanding(layoutState.items, at: index)
         refreshPanes()
+        updateCommentMarkers()
     }
 
     private func refreshPanes() {
@@ -145,6 +206,11 @@ final class DiffContainerView: NSView {
         guard let source = notification.object as? NSClipView else { return }
         for pane in panes where pane.scrollView.contentView === source {
             pane.gutter.needsDisplay = true
+            // Scrolling under a resting mouse sends no mouseMoved, so the add button would stay on the old row.
+            if pane.gutter.hoveredItem != nil, let window {
+                let point = pane.view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+                pane.view.onHover?(pane.view.visibleRect.contains(point) ? Int(point.y / EditorTheme.lineHeight) : nil)
+            }
         }
         guard !isSyncing else { return }
         isSyncing = true
@@ -160,5 +226,64 @@ final class DiffContainerView: NSView {
             }
             pane.gutter.needsDisplay = true
         }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { commentEditor?.dismiss() }
+    }
+
+    // MARK: Comments
+
+    private func commentAnchor(at item: Int, role: DiffPaneRole) -> (anchor: DiffLineAnchor, text: String)? {
+        guard let layoutState, layoutState.items.indices.contains(item), case .row(let rowIndex) = layoutState.items[item] else { return nil }
+        return DiffCommentAnchoring.anchor(for: layoutState.rows[rowIndex], role: role, in: layoutState.document)
+    }
+
+    private func hover(_ item: Int?, in gutter: DiffGutterView, role: DiffPaneRole) {
+        guard commenting != nil, let item, commentAnchor(at: item, role: role) != nil else {
+            gutter.hoveredItem = nil
+            return
+        }
+        gutter.hoveredItem = item
+    }
+
+    private func commentAccessibilityLabel(at item: Int, role: DiffPaneRole) -> String? {
+        guard let commenting, let (anchor, _) = commentAnchor(at: item, role: role) else { return nil }
+        let line = Self.lineDescription(anchor)
+        if let comment = commenting.comments.first(where: { $0.anchor == anchor }) {
+            return String(localized: "Comment on \(line): \(comment.body)")
+        }
+        return String(localized: "Add Comment to \(line)")
+    }
+
+    private static func lineDescription(_ anchor: DiffLineAnchor) -> String {
+        anchor.side == .old ? String(localized: "removed line \(anchor.line)") : String(localized: "line \(anchor.line)")
+    }
+
+    private func editComment(at item: Int, in gutter: DiffGutterView, role: DiffPaneRole) {
+        guard let commenting, let (anchor, text) = commentAnchor(at: item, role: role) else { return }
+        let existing = commenting.comments.first { $0.anchor == anchor }
+        let store = commenting.store
+        let root = commenting.root
+        commentEditor?.dismiss()
+        let editor = DiffCommentEditorSession(
+            title: String(localized: "Comment on \(Self.lineDescription(anchor))"),
+            code: existing?.lineText ?? text,
+            body: existing?.body
+        ) { outcome in
+            switch (outcome, existing) {
+            case (.save(let body), let existing?):
+                store.update(existing.id, body: body, in: root)
+            case (.save(let body), nil):
+                store.add(ReviewComment(path: commenting.path, staged: commenting.staged, side: anchor.side, line: anchor.line, lineText: text, body: body), in: root)
+            case (.delete, let existing?):
+                store.remove(existing.id, in: root)
+            case (.delete, nil):
+                break
+            }
+        }
+        commentEditor = editor
+        editor.show(relativeTo: gutter.rowRect(for: item), of: gutter)
     }
 }

@@ -24,12 +24,14 @@ struct RootView: View {
         .inspector(isPresented: $showInspector) {
             InspectorView(
                 root: model.selectedWorktree?.path,
+                searchPATH: { await model.toolSearchPATH() },
                 onOpenFile: { url, preview in model.openFile(url, preview: preview) },
                 onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) }
             )
             .inspectorColumnWidth(min: 220, ideal: 280, max: 420)
             .ignoresSafeArea(.container, edges: .top)
         }
+        .overlay { CommandPalette() }
         .toolbar(removing: .title)
         .navigationTitle(windowTitle)
         .tint(model.selectedIsland?.tint.color)
@@ -48,6 +50,9 @@ struct RootView: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("Your changes will be lost if you don't save them.")
+        }
+        .sheet(item: projectInSettings) { project in
+            ProjectSettingsSheet(project: project)
         }
         .alert("Archipel ran into a problem", isPresented: hasProblem) {
             Button("OK") { model.problem = nil }
@@ -81,6 +86,13 @@ struct RootView: View {
 
     private var isDecidingClose: Binding<Bool> {
         Binding(get: { model.tabAwaitingCloseDecision != nil }, set: { if !$0 { model.tabAwaitingCloseDecision = nil } })
+    }
+
+    private var projectInSettings: Binding<Project?> {
+        Binding(
+            get: { model.projectSettingsID.flatMap { model.workspace.project(id: $0) } },
+            set: { model.projectSettingsID = $0?.id }
+        )
     }
 
     private var hasProblem: Binding<Bool> {

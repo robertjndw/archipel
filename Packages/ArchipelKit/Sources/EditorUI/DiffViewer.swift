@@ -8,15 +8,34 @@ public struct DiffViewer: View {
     private let root: URL
     private let path: String
     private let staged: Bool
+    private let review: DiffReview?
 
     public init(root: URL, path: String, staged: Bool) {
         self.root = root
         self.path = path
         self.staged = staged
+        review = nil
+    }
+
+    /// A diff the user can comment on line by line. Comments go to `comments` under `root`, and the
+    /// header lists every comment of the worktree with a control that calls `onSend` with the chosen
+    /// target. Sending is the app's job: format with `ReviewPrompt`, deliver, then clear the store.
+    public init(
+        root: URL,
+        path: String,
+        staged: Bool,
+        comments: ReviewCommentStore,
+        targets: [ReviewTarget],
+        onSend: @escaping (ReviewTarget.ID) -> Void
+    ) {
+        self.root = root
+        self.path = path
+        self.staged = staged
+        review = DiffReview(store: comments, targets: targets, onSend: onSend)
     }
 
     public var body: some View {
-        DiffViewerContent(root: root, path: path, staged: staged)
+        DiffViewerContent(root: root, path: path, staged: staged, review: review)
             .id(DiffKey(root: root, path: path, staged: staged))
     }
 
@@ -31,14 +50,16 @@ private struct DiffViewerContent: View {
     @State private var model: DiffViewerModel
     @AppStorage("EditorUI.diffPresentation") private var presentation: DiffPresentation = .sideBySide
     @State private var showsAllLines = false
+    let review: DiffReview?
 
-    init(root: URL, path: String, staged: Bool) {
+    init(root: URL, path: String, staged: Bool, review: DiffReview?) {
         _model = State(initialValue: DiffViewerModel(root: root, path: path, staged: staged))
+        self.review = review
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            DiffHeader(model: model, presentation: $presentation, showsAllLines: $showsAllLines)
+            DiffHeader(model: model, review: review, presentation: $presentation, showsAllLines: $showsAllLines)
             Divider()
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -68,7 +89,8 @@ private struct DiffViewerContent: View {
                     version: model.documentVersion,
                     presentation: presentation,
                     showsAllLines: showsAllLines,
-                    highlights: model.highlights
+                    highlights: model.highlights,
+                    commenting: commenting
                 )
             }
         case .noDifferences:
@@ -85,10 +107,17 @@ private struct DiffViewerContent: View {
             ContentUnavailableView("Can't Show Changes", systemImage: "exclamationmark.triangle", description: Text(message))
         }
     }
+
+    private var commenting: DiffCommentContext? {
+        guard let review else { return nil }
+        let comments = review.store.comments(in: model.root).filter { $0.path == model.path && $0.staged == model.staged }
+        return DiffCommentContext(store: review.store, root: model.root, path: model.path, staged: model.staged, comments: comments)
+    }
 }
 
 private struct DiffHeader: View {
     let model: DiffViewerModel
+    let review: DiffReview?
     @Binding var presentation: DiffPresentation
     @Binding var showsAllLines: Bool
 
@@ -105,6 +134,9 @@ private struct DiffHeader: View {
                 lineEndings(document)
             }
             Spacer(minLength: 8)
+            if let review {
+                ReviewCommentsButton(root: model.root, review: review)
+            }
             if model.phase == .ready {
                 Toggle(isOn: $showsAllLines) {
                     Label(showsAllLines ? "Collapse Unchanged Lines" : "Show Unchanged Lines",

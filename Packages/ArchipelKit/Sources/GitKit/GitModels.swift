@@ -44,14 +44,46 @@ public struct GitStatus: Equatable, Sendable {
     public var branch: String?
     public var staged: [GitFileChange]
     public var unstaged: [GitFileChange]
+    /// Short name of the upstream, e.g. `origin/main`; nil when the branch tracks nothing.
+    public var upstream: String?
+    public var ahead: Int
+    public var behind: Int
 
-    public init(branch: String?, staged: [GitFileChange], unstaged: [GitFileChange]) {
+    public init(
+        branch: String?,
+        staged: [GitFileChange],
+        unstaged: [GitFileChange],
+        upstream: String? = nil,
+        ahead: Int = 0,
+        behind: Int = 0
+    ) {
         self.branch = branch
         self.staged = staged
         self.unstaged = unstaged
+        self.upstream = upstream
+        self.ahead = ahead
+        self.behind = behind
     }
 
     public static let empty = GitStatus(branch: nil, staged: [], unstaged: [])
+}
+
+/// What a sidebar row needs about a worktree, cheap enough to poll for many of them.
+public struct GitSummary: Equatable, Sendable {
+    public var branch: String?
+    public var upstream: String?
+    public var ahead: Int
+    public var behind: Int
+    /// Distinct paths, so a file that is both staged and modified again counts once.
+    public var changedFiles: Int
+
+    public init(branch: String?, upstream: String?, ahead: Int, behind: Int, changedFiles: Int) {
+        self.branch = branch
+        self.upstream = upstream
+        self.ahead = ahead
+        self.behind = behind
+        self.changedFiles = changedFiles
+    }
 }
 
 // MARK: - Parsers
@@ -72,6 +104,16 @@ enum GitParser {
             case "#":
                 if let head = field.dropPrefix("# branch.head ") {
                     result.branch = head == "(detached)" ? nil : head
+                } else if let upstream = field.dropPrefix("# branch.upstream ") {
+                    result.upstream = upstream
+                } else if let counts = field.dropPrefix("# branch.ab ") {
+                    // Absent entirely when there is no upstream or it is gone, which leaves both at 0.
+                    let parts = counts.split(separator: " ")
+                    if parts.count == 2, parts[0].hasPrefix("+"), parts[1].hasPrefix("-"),
+                       let ahead = Int(parts[0].dropFirst()), let behind = Int(parts[1].dropFirst()) {
+                        result.ahead = ahead
+                        result.behind = behind
+                    }
                 }
             case "1", "2":
                 // The path is everything after the fixed columns, so it may contain spaces.
@@ -95,6 +137,18 @@ enum GitParser {
             }
         }
         return result
+    }
+
+    static func summary(_ output: String) -> GitSummary {
+        let status = status(output)
+        let paths = Set((status.staged + status.unstaged).map(\.path))
+        return GitSummary(branch: status.branch, upstream: status.upstream, ahead: status.ahead,
+                          behind: status.behind, changedFiles: paths.count)
+    }
+
+    /// Parses NUL-separated `ls-files -z` output.
+    static func paths(_ output: String) -> [String] {
+        output.unicodeScalars.split(separator: "\0").map { string($0) }
     }
 
     /// Parses `git worktree list --porcelain -z`: NUL-terminated lines, records separated by an empty line.

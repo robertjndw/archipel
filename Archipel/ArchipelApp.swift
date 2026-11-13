@@ -6,6 +6,7 @@ import SwiftUI
 struct ArchipelApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var model = AppModel()
+    @State private var palette = CommandPaletteModel()
     @State private var isAddingProject = false
     @AppStorage("showInspector") private var showInspector = true
 
@@ -13,6 +14,7 @@ struct ArchipelApp: App {
         Window("Archipel", id: "main") {
             RootView(isAddingProject: $isAddingProject)
                 .environment(model)
+                .environment(palette)
                 .frame(minWidth: 720, minHeight: 420)
                 .onAppear { delegate.model = model }
         }
@@ -64,6 +66,30 @@ struct ArchipelApp: App {
                 Button("Toggle Inspector", systemImage: "sidebar.trailing") { showInspector.toggle() }
                     .keyboardShortcut("0", modifiers: [.command, .option])
             }
+            CommandMenu("Go") {
+                Button("Go to…", systemImage: "arrow.right.circle") { present(.goTo) }
+                    .keyboardShortcut("k")
+                Button("Open Quickly…", systemImage: "doc.text.magnifyingglass") { present(.openFile) }
+                    .keyboardShortcut("p")
+            }
+            CommandMenu("Project") {
+                let worktree = model.selectedWorktree
+                let project = model.project(ofWorktree: worktree?.id)
+                Button("Run", systemImage: "play") {
+                    if let worktree { model.runProject(in: worktree.id) }
+                }
+                .keyboardShortcut("r")
+                .disabled(worktree == nil)
+                Button("Run Setup Script", systemImage: "wrench.and.screwdriver") {
+                    if let worktree { model.startScript(.setup, in: worktree.id) }
+                }
+                .disabled(project?.scripts.setupCommand == nil)
+                Divider()
+                Button("Project Settings…", systemImage: "gearshape") {
+                    if let project { model.openProjectSettings(project.id) }
+                }
+                .disabled(project == nil)
+            }
             CommandMenu("Islands") {
                 ForEach(Array(model.workspace.islands.prefix(9).enumerated()), id: \.element.id) { index, island in
                     Button(island.name, systemImage: island.symbol) { model.selectIsland(at: index) }
@@ -86,6 +112,17 @@ struct ArchipelApp: App {
                     .keyboardShortcut("u", modifiers: [.command, .shift])
             }
         }
+    }
+}
+
+extension ArchipelApp {
+    private func present(_ mode: CommandPaletteModel.Mode) {
+        let commands = PaletteCommand.standard(
+            model: model,
+            addProject: { isAddingProject = true },
+            toggleInspector: { showInspector.toggle() }
+        )
+        palette.present(mode, app: model, commands: commands)
     }
 }
 

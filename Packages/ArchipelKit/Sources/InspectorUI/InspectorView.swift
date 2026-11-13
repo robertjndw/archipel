@@ -3,16 +3,20 @@ import SwiftUI
 public struct InspectorView: View {
     private let root: URL?
     private let actions: InspectorActions
+    private let searchPATH: @MainActor () async -> String
     @AppStorage("InspectorUI.selectedTab") private var tab: Tab = .files
 
     /// `root` is the selected worktree's folder; nil shows an empty state. The view fully resets when root changes.
     /// A single click or arrow key opens a preview (`preview` true); a double click or Return opens for keeps.
+    /// `searchPATH` supplies the user's login-shell PATH, which is where `gh` is found.
     public init(
         root: URL?,
+        searchPATH: @escaping @MainActor () async -> String,
         onOpenFile: @escaping (_ url: URL, _ preview: Bool) -> Void,
         onOpenDiff: @escaping (_ path: String, _ staged: Bool, _ preview: Bool) -> Void
     ) {
         self.root = root
+        self.searchPATH = searchPATH
         actions = InspectorActions(openFile: onOpenFile, openDiff: onOpenDiff)
     }
 
@@ -30,7 +34,7 @@ public struct InspectorView: View {
 
             if let root {
                 // A new identity per root throws away the old models, tasks and expansion state.
-                InspectorContent(root: root, tab: tab, actions: actions)
+                InspectorContent(root: root, tab: tab, actions: actions, searchPATH: searchPATH)
                     .id(root)
             } else {
                 ContentUnavailableView(
@@ -57,11 +61,11 @@ private struct InspectorContent: View {
     @State private var files: FileTreeModel
     @State private var changes: ChangesModel
 
-    init(root: URL, tab: InspectorView.Tab, actions: InspectorActions) {
+    init(root: URL, tab: InspectorView.Tab, actions: InspectorActions, searchPATH: @escaping @MainActor () async -> String) {
         self.tab = tab
         self.actions = actions
         files = FileTreeModel(root: root)
-        changes = ChangesModel(root: root)
+        changes = ChangesModel(root: root, searchPATH: searchPATH)
     }
 
     var body: some View {

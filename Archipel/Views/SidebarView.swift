@@ -16,7 +16,7 @@ struct SidebarView: View {
             ForEach(island?.projects ?? []) { project in
                 Section(isExpanded: expansion(of: project)) {
                     ForEach(project.worktrees) { worktree in
-                        WorktreeRow(worktree: worktree, activity: model.activity(for: worktree))
+                        WorktreeRow(content: model.rowContent(for: worktree), hasBranch: worktree.branch != nil)
                             .tag(worktree.id)
                             .contextMenu { worktreeMenu(worktree) }
                     }
@@ -101,6 +101,12 @@ struct SidebarView: View {
     private func worktreeMenu(_ worktree: Worktree) -> some View {
         NewSessionButtons(worktree: worktree.id)
         Divider()
+        let scripts = model.project(ofWorktree: worktree.id)?.scripts
+        Button("Run", systemImage: "play") { model.runProject(in: worktree.id) }
+        if scripts?.setupCommand != nil {
+            Button("Run Setup Script", systemImage: "wrench.and.screwdriver") { model.startScript(.setup, in: worktree.id) }
+        }
+        Divider()
         Button("Show in Finder", systemImage: "folder") {
             NSWorkspace.shared.activateFileViewerSelecting([worktree.path])
         }
@@ -138,6 +144,7 @@ private struct ProjectHeader: View {
             Button("Show in Finder", systemImage: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([project.folderURL])
             }
+            Button("Project Settings…", systemImage: "gearshape") { model.openProjectSettings(project.id) }
             let others = model.workspace.islands.filter { $0.id != model.selectedIsland?.id }
             if !others.isEmpty {
                 Menu("Move to Island", systemImage: "arrow.right.square") {
@@ -155,46 +162,102 @@ private struct ProjectHeader: View {
 }
 
 private struct WorktreeRow: View {
-    let worktree: Worktree
-    let activity: SessionActivity?
+    let content: WorktreeRowContent
+    let hasBranch: Bool
 
     var body: some View {
         HStack(spacing: 8) {
             Label {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(worktree.displayName)
-                        .fontWeight(activity?.unread == true ? .semibold : .regular)
-                    if let detail {
+                    HStack(spacing: 6) {
+                        Text(content.title)
+                            .fontWeight(content.isUnread ? .semibold : .regular)
+                            .truncationMode(.middle)
+                        if content.hasMetadata {
+                            Spacer(minLength: 0)
+                            WorktreeMetadata(content: content)
+                        }
+                    }
+                    if let detail = content.detail {
                         Text(detail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .help(detail)
                     }
                 }
                 .lineLimit(1)
             } icon: {
-                Image(systemName: worktree.branch == nil ? "folder" : "arrow.triangle.branch")
+                Image(systemName: hasBranch ? "arrow.triangle.branch" : "folder")
             }
             Spacer(minLength: 0)
-            if let activity {
+            switch content.trailing {
+            case .status(let activity):
                 StatusGlyph(activity: activity)
-            } else if !worktree.sessions.isEmpty {
-                Text(worktree.sessions.count, format: .number)
+            case .sessionCount(let count):
+                Text(count, format: .number)
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(.tertiary)
-                    .accessibilityLabel("\(worktree.sessions.count) sessions")
+                    .accessibilityLabel("\(count) sessions")
+            case .none:
+                EmptyView()
             }
         }
     }
+}
 
-    /// What the agent last said while it wants the user; otherwise the folder,
-    /// but only when the first line already shows the branch instead.
-    private var detail: String? {
-        if let activity, activity.needsUser, let message = activity.lastMessage, !message.isEmpty {
-            return message
+/// Changed files, ahead/behind and the pull request, compact enough to share the first line with the
+/// branch at the sidebar's minimum width. The branch name truncates first; these never do.
+private struct WorktreeMetadata: View {
+    let content: WorktreeRowContent
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let changed = content.changedFiles {
+                item("pencil", changed)
+            }
+            if let ahead = content.ahead {
+                item("arrow.up", ahead)
+            }
+            if let behind = content.behind {
+                item("arrow.down", behind)
+            }
+            if let pullRequest = content.pullRequest {
+                Text(pullRequest.title)
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(pullRequest.state.color)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(pullRequest.state.color.opacity(0.15), in: .capsule)
+            }
         }
-        if worktree.isMain { return nil }
-        return worktree.branch == nil ? nil : worktree.path.lastPathComponent
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(content.metadataAccessibilityLabel)
+    }
+
+    private func item(_ symbol: String, _ value: Int) -> some View {
+        HStack(spacing: 1) {
+            Image(systemName: symbol)
+                .imageScale(.small)
+                .foregroundStyle(.tertiary)
+            Text(value, format: .number)
+                .monospacedDigit()
+        }
+    }
+}
+
+private extension PullRequestBadge.State {
+    var color: Color {
+        switch self {
+        case .open: .green
+        case .draft: .gray
+        case .merged: .purple
+        case .closed: .red
+        }
     }
 }
 

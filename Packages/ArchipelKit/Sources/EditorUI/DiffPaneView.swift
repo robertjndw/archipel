@@ -138,12 +138,15 @@ final class DiffPaneView: NSView {
         didSet { needsDisplay = true }
     }
     var onExpandFold: ((Int) -> Void)?
+    /// The display item under the mouse, or nil when it leaves; drives the gutter's add button.
+    var onHover: ((Int?) -> Void)?
 
     init(role: DiffPaneRole) {
         self.role = role
         super.init(frame: .zero)
         // AppKit no longer clips views by default, and a ruler's dirty rect can reach into the text beside it.
         clipsToBounds = true
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
 
     @available(*, unavailable)
@@ -184,6 +187,16 @@ final class DiffPaneView: NSView {
             return
         }
         onExpandFold?(index)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard let onHover else { return }
+        let y = convert(event.locationInWindow, from: nil).y
+        onHover(y >= 0 ? Int(y / EditorTheme.lineHeight) : nil)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHover?(nil)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -318,17 +331,41 @@ final class DiffPaneView: NSView {
 
 /// Line numbers for a diff pane, laid out beside its scroll view rather than as an NSRulerView: a
 /// floating ruler covers the start of a non-text document view once its width changes.
+///
+/// With commenting on, a lane left of the numbers shows an add button on the hovered row and a
+/// marker on commented rows; clicking anywhere in the gutter row opens the comment.
 @MainActor
 final class DiffGutterView: NSView {
+    static let commentLaneWidth: CGFloat = 16
+
     private let role: DiffPaneRole
     private weak var pane: DiffPaneView?
     private(set) var thickness: CGFloat = 0
+
+    var commentsEnabled = false
+    var markedItems: Set<Int> = [] {
+        didSet { if markedItems != oldValue { needsDisplay = true } }
+    }
+    /// The container only sets rows that can take a comment.
+    var hoveredItem: Int? {
+        didSet {
+            guard hoveredItem != oldValue else { return }
+            if let oldValue { setNeedsDisplay(rowRect(for: oldValue)) }
+            if let hoveredItem { setNeedsDisplay(rowRect(for: hoveredItem)) }
+        }
+    }
+    var onHover: ((Int?) -> Void)?
+    var onComment: ((Int) -> Void)?
+    /// What VoiceOver calls the comment button of a display item; nil when the item takes no comment.
+    var commentAccessibilityLabel: ((Int) -> String?)?
+    private var accessibilityButtons: [Int: DiffCommentAccessibilityButton] = [:]
 
     init(pane: DiffPaneView) {
         role = pane.role
         self.pane = pane
         super.init(frame: .zero)
         clipsToBounds = true
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
 
     @available(*, unavailable)
@@ -342,33 +379,77 @@ final class DiffGutterView: NSView {
         return CGFloat(max(3, String(largest).count)) * EditorTheme.gutterDigitWidth + 12
     }
 
+    private var laneWidth: CGFloat {
+        commentsEnabled ? Self.commentLaneWidth : 0
+    }
+
     /// Returns whether the width changed, so the container knows to lay out again.
     @discardableResult
     func updateThickness() -> Bool {
-        let width = (columnWidth * (role == .unified ? 2 : 1) + 6).rounded(.up)
+        let width = (laneWidth + columnWidth * (role == .unified ? 2 : 1) + 6).rounded(.up)
         guard width != thickness else { return false }
         thickness = width
         return true
+    }
+
+    /// A display item's row in this view's coordinates, which scroll with the pane.
+    func rowRect(for item: Int) -> NSRect {
+        guard let pane else { return .zero }
+        let y = convert(NSPoint(x: 0, y: CGFloat(item) * EditorTheme.lineHeight), from: pane).y
+        return NSRect(x: 0, y: y, width: bounds.width, height: EditorTheme.lineHeight)
+    }
+
+    private func item(at point: NSPoint) -> Int? {
+        guard let pane, let count = pane.layoutState?.items.count else { return nil }
+        let y = pane.convert(point, from: self).y
+        guard y >= 0 else { return nil }
+        let item = Int(y / EditorTheme.lineHeight)
+        return item < count ? item : nil
+    }
+
+    /// The buttons are cached by display item, which names a different row once the layout or its
+    /// folds change.
+    func invalidateAccessibility() {
+        accessibilityButtons.removeAll()
     }
 
     override func scrollWheel(with event: NSEvent) {
         pane?.enclosingScrollView?.scrollWheel(with: event)
     }
 
+    override func mouseMoved(with event: NSEvent) {
+        onHover?(item(at: convert(event.locationInWindow, from: nil)))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHover?(nil)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard commentsEnabled, let item = item(at: convert(event.locationInWindow, from: nil)) else {
+            super.mouseDown(with: event)
+            return
+        }
+        onComment?(item)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         NSColor.textBackgroundColor.setFill()
         dirtyRect.fill()
-        drawNumbers(in: dirtyRect)
+        drawRows(in: dirtyRect)
     }
 
-    private func drawNumbers(in rect: NSRect) {
+    private func drawRows(in dirtyRect: NSRect) {
         guard let pane, let layout = pane.layoutState else { return }
         let height = EditorTheme.lineHeight
         let visible = pane.visibleRect
-        let first = max(0, Int(visible.minY / height))
-        let last = min(layout.items.count - 1, Int(visible.maxY / height))
+        // Hovering redraws a single row; only the rows it touches are drawn again.
+        let dirty = pane.convert(dirtyRect, from: self)
+        let first = max(0, Int(max(visible.minY, dirty.minY) / height))
+        let last = min(layout.items.count - 1, Int(min(visible.maxY, dirty.maxY) / height))
         guard first <= last else { return }
         let attributes: [NSAttributedString.Key: Any] = [.font: EditorTheme.gutterFont, .foregroundColor: NSColor.tertiaryLabelColor]
+        let lane = laneWidth
         let column = columnWidth
 
         for index in first...last {
@@ -388,14 +469,22 @@ final class DiffGutterView: NSView {
                     rect.fill()
                 }
                 let number = layout.side(isOld).side.numbers[lineIndex]
-                draw(number, rightEdge: column, in: rect, attributes: attributes)
+                draw(number, rightEdge: lane + column, in: rect, attributes: attributes)
             case .unified:
                 if row.kind == .removed || row.kind == .added {
                     (row.kind == .removed ? EditorTheme.removedGutter : EditorTheme.addedGutter).setFill()
                     rect.fill()
                 }
-                if let old = row.old { draw(layout.document.old.numbers[old], rightEdge: column, in: rect, attributes: attributes) }
-                if let new = row.new { draw(layout.document.new.numbers[new], rightEdge: column * 2, in: rect, attributes: attributes) }
+                if let old = row.old { draw(layout.document.old.numbers[old], rightEdge: lane + column, in: rect, attributes: attributes) }
+                if let new = row.new { draw(layout.document.new.numbers[new], rightEdge: lane + column * 2, in: rect, attributes: attributes) }
+            }
+            if commentsEnabled {
+                let laneRect = NSRect(x: 0, y: rect.minY, width: lane, height: height)
+                if markedItems.contains(index) {
+                    drawCommentMarker(in: laneRect)
+                } else if hoveredItem == index {
+                    drawAddButton(in: laneRect)
+                }
             }
         }
     }
@@ -404,5 +493,86 @@ final class DiffGutterView: NSView {
         let label = String(number) as NSString
         let size = label.size(withAttributes: attributes)
         label.draw(at: NSPoint(x: rightEdge - 6 - size.width, y: rect.midY - size.height / 2), withAttributes: attributes)
+    }
+
+    /// Drawn as shapes in the accent colour rather than from a symbol image, so it follows the
+    /// appearance and accent colour at draw time instead of whatever an image cached.
+    private func drawCommentMarker(in lane: NSRect) {
+        let body = NSRect(x: (lane.midX - 5.5).rounded(), y: (lane.midY - 5).rounded(), width: 11, height: 8)
+        let bubble = NSBezierPath(roundedRect: body, xRadius: 2.5, yRadius: 2.5)
+        bubble.move(to: NSPoint(x: body.minX + 2.5, y: body.maxY - 1))
+        bubble.line(to: NSPoint(x: body.minX + 2.5, y: body.maxY + 3))
+        bubble.line(to: NSPoint(x: body.minX + 6.5, y: body.maxY - 1))
+        bubble.close()
+        NSColor.controlAccentColor.setFill()
+        bubble.fill()
+    }
+
+    private func drawAddButton(in lane: NSRect) {
+        let box = NSRect(x: (lane.midX - 6.5).rounded(), y: (lane.midY - 6.5).rounded(), width: 13, height: 13)
+        NSColor.controlAccentColor.setFill()
+        NSBezierPath(roundedRect: box, xRadius: 3, yRadius: 3).fill()
+        let plus = NSBezierPath()
+        plus.lineWidth = 1.5
+        plus.move(to: NSPoint(x: box.minX + 3.5, y: box.midY))
+        plus.line(to: NSPoint(x: box.maxX - 3.5, y: box.midY))
+        plus.move(to: NSPoint(x: box.midX, y: box.minY + 3.5))
+        plus.line(to: NSPoint(x: box.midX, y: box.maxY - 3.5))
+        NSColor.white.setStroke()
+        plus.stroke()
+    }
+
+    // MARK: Accessibility
+
+    // The rows are drawn, not views, so each visible commentable row is offered as a button of its
+    // own; that is the only way VoiceOver can reach a single line's comment.
+
+    override func isAccessibilityElement() -> Bool { commentsEnabled }
+    override func accessibilityRole() -> NSAccessibility.Role? { commentsEnabled ? .group : super.accessibilityRole() }
+    override func accessibilityLabel() -> String? {
+        guard commentsEnabled else { return super.accessibilityLabel() }
+        switch role {
+        case .old: return String(localized: "Original Line Comments")
+        case .new: return String(localized: "Modified Line Comments")
+        case .unified: return String(localized: "Line Comments")
+        }
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        guard commentsEnabled, let pane, let layout = pane.layoutState, let commentAccessibilityLabel else {
+            return super.accessibilityChildren()
+        }
+        let height = EditorTheme.lineHeight
+        let visible = pane.visibleRect
+        let first = max(0, Int(visible.minY / height))
+        let last = min(layout.items.count - 1, Int(visible.maxY / height))
+        guard first <= last else { return [] }
+        var children: [Any] = []
+        for index in first...last {
+            guard let label = commentAccessibilityLabel(index) else { continue }
+            // Reused per item so VoiceOver keeps its place while the view scrolls.
+            let button = accessibilityButtons[index] ?? {
+                let button = DiffCommentAccessibilityButton()
+                button.setAccessibilityRole(.button)
+                button.setAccessibilityParent(self)
+                button.press = { [weak self] in self?.onComment?(index) }
+                accessibilityButtons[index] = button
+                return button
+            }()
+            button.setAccessibilityLabel(label)
+            button.setAccessibilityFrameInParentSpace(rowRect(for: index))
+            children.append(button)
+        }
+        return children
+    }
+}
+
+private final class DiffCommentAccessibilityButton: NSAccessibilityElement {
+    var press: (() -> Void)?
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let press else { return false }
+        press()
+        return true
     }
 }

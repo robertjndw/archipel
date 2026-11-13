@@ -72,6 +72,12 @@ struct PaneTabBar: View {
             .accessibilityLabel("New session")
 
             if pane.id == worktree.panes.last?.id {
+                let hasRunScript = model.project(ofWorktree: worktree.id)?.scripts.runCommand != nil
+                Button("Run", systemImage: "play") { model.runProject(in: worktree.id) }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .padding(.trailing, 10)
+                    .help(hasRunScript ? "Run this project's run script (⌘R)" : "Set up a run script for this project")
                 Button("Toggle Inspector", systemImage: "sidebar.trailing") { showInspector.toggle() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)

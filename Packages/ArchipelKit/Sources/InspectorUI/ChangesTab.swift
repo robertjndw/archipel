@@ -19,8 +19,47 @@ final class ChangesModel {
     private let git = GitClient()
     private var generation = 0
 
-    init(root: URL) {
+    /// Kept here rather than in the view so switching inspector tabs does not lose a half-written message.
+    var message = ""
+    private(set) var activity: Activity?
+    private(set) var hasRemote = false
+    private(set) var hasGitHub = false
+    private(set) var pullRequestLookup: PullRequestLookup?
+    private let searchPATH: @MainActor () async -> String
+    private var gitHubTask: Task<GitHubClient?, Never>?
+    private var lookupGeneration = 0
+    private var lookupBranch: String?
+
+    enum Activity: Equatable {
+        case commit, push, pullRequest
+
+        var progressTitle: LocalizedStringKey {
+            switch self {
+            case .commit: "Committing…"
+            case .push: "Pushing…"
+            case .pullRequest: "Opening…"
+            }
+        }
+    }
+
+    init(root: URL, searchPATH: @escaping @MainActor () async -> String) {
         self.root = root
+        self.searchPATH = searchPATH
+    }
+
+    var commitControl: CommitControl {
+        CommitControl(status: status, message: message, isBusy: activity != nil)
+    }
+
+    var syncState: SyncState {
+        SyncState(status: status, hasRemote: hasRemote, isBusy: activity != nil)
+    }
+
+    var pullRequestControl: PullRequestControl {
+        PullRequestControl(
+            status: status, hasRemote: hasRemote, hasGitHub: hasGitHub,
+            lookup: pullRequestLookup, isBusy: activity != nil
+        )
     }
 
     func refresh() async {
@@ -62,6 +101,104 @@ final class ChangesModel {
 
     func unstageAll() {
         perform { try await $0.unstageAll(in: $1) }
+    }
+
+    func commit() {
+        let control = commitControl
+        guard control.isEnabled else { return }
+        let text = message
+        let stagesFirst = control.mode == .commitAll
+        run(.commit) { [git, root] in
+            if stagesFirst { try await git.stageAll(in: root) }
+            do {
+                try await git.commit(message: text, in: root)
+            } catch where stagesFirst {
+                // Without this the user would see only the hook output and not know the files moved to staged.
+                throw GitError(message: "All changes were staged, but the commit failed. They remain staged.\n\(error.localizedDescription)")
+            }
+        } onSuccess: { [self] in
+            // The user may have kept typing while git ran.
+            if message == text { message = "" }
+        }
+    }
+
+    func push() {
+        guard syncState.canPush else { return }
+        run(.push) { [git, root] in try await git.push(in: root) } onSuccess: { [self] in
+            await refreshRemoteInfo()
+        }
+    }
+
+    func createPullRequest() {
+        guard case .create(true, _) = pullRequestControl else { return }
+        // Decided before the work starts: after the push the status still shows the old counts.
+        let needsPush = status.upstream == nil || status.ahead > 0
+        run(.pullRequest) { [git, root, weak self] in
+            guard let client = await self?.resolveGitHub() else { throw GitError(message: "The GitHub CLI (gh) was not found.") }
+            if needsPush { try await git.push(in: root) }
+            try await client.createPullRequestInBrowser(in: root)
+        } onSuccess: { [self] in
+            await refreshRemoteInfo()
+        }
+    }
+
+    /// Network and process work that changes slowly: the remote list and the branch's pull request.
+    /// Driven by tab appearance, app activation and branch or upstream changes, never the status poll.
+    func refreshRemoteInfo() async {
+        hasRemote = await git.hasRemote(in: root)
+        await lookUpPullRequest()
+    }
+
+    private func resolveGitHub() async -> GitHubClient? {
+        if gitHubTask == nil {
+            let searchPATH = searchPATH
+            gitHubTask = Task { GitHubClient(searchPATH: await searchPATH()) }
+        }
+        let client = await gitHubTask?.value
+        // A missing gh is retried next time, since the user may install it while the app runs.
+        if client == nil { gitHubTask = nil }
+        hasGitHub = client != nil
+        return client
+    }
+
+    private func lookUpPullRequest() async {
+        guard let client = await resolveGitHub(), let branch = status.branch else { return }
+        // One lookup per branch at a time; a switch to another branch supersedes the old one.
+        guard lookupBranch != branch else { return }
+        lookupGeneration += 1
+        let current = lookupGeneration
+        lookupBranch = branch
+        defer { if current == lookupGeneration { lookupBranch = nil } }
+        let outcome: PullRequestLookup.Outcome
+        do {
+            outcome = try await client.pullRequest(in: root).map { .found($0) } ?? .none
+        } catch {
+            // Not signed in or not a GitHub remote: the control just stays away instead of nagging.
+            outcome = .unavailable
+        }
+        guard current == lookupGeneration, status.branch == branch else { return }
+        pullRequestLookup = PullRequestLookup(branch: branch, outcome: outcome)
+    }
+
+    /// One action at a time; the checks and the work share a single task so nothing can interleave.
+    private func run(
+        _ activity: Activity,
+        work: @escaping @Sendable () async throws -> Void,
+        onSuccess: @escaping () async -> Void
+    ) {
+        guard self.activity == nil else { return }
+        self.activity = activity
+        actionError = nil
+        Task {
+            do {
+                try await work()
+                await onSuccess()
+            } catch {
+                actionError = error.localizedDescription
+            }
+            self.activity = nil
+            await refresh()
+        }
     }
 
     func change(for id: ChangeID) -> GitFileChange? {
@@ -109,6 +246,10 @@ struct ChangesTab: View {
 
             content
                 .frame(maxHeight: .infinity)
+
+            if model.phase == .ready {
+                CommitArea(model: model)
+            }
         }
         .task {
             // Lives only while this tab is on screen, so the polling stops when the user switches away.
@@ -117,7 +258,13 @@ struct ChangesTab: View {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
-        .onAppActivation(perform: refresh)
+        .task { await model.refreshRemoteInfo() }
+        .onChange(of: model.status.branch) { refreshRemoteInfo() }
+        .onChange(of: model.status.upstream) { refreshRemoteInfo() }
+        .onAppActivation {
+            refresh()
+            refreshRemoteInfo()
+        }
     }
 
     @ViewBuilder
@@ -186,6 +333,10 @@ struct ChangesTab: View {
 
     private func refresh() {
         Task { await model.refresh() }
+    }
+
+    private func refreshRemoteInfo() {
+        Task { await model.refreshRemoteInfo() }
     }
 }
 

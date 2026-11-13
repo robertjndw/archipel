@@ -40,6 +40,54 @@ public struct GitClient: Sendable {
         GitParser.status(try await run(["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"], in: folder))
     }
 
+    /// Skips `--untracked-files=all` so a huge untracked directory counts once and the call stays fast
+    /// enough to poll for every worktree.
+    public func summary(in folder: URL) async throws -> GitSummary {
+        GitParser.summary(try await run(["status", "--porcelain=v2", "-z", "--branch"], in: folder))
+    }
+
+    /// Commits what is staged. The message travels as its own argv element, so newlines and a leading
+    /// dash are safe. stderr is surfaced on failure because a hook may reject the commit.
+    public func commit(message: String, in folder: URL) async throws {
+        try await run(["commit", "-m", message], in: folder, readOnly: false)
+    }
+
+    /// True when any remote is configured.
+    public func hasRemote(in folder: URL) async -> Bool {
+        let output = try? await run(["remote"], in: folder)
+        return output?.contains(where: { !$0.isWhitespace }) == true
+    }
+
+    /// Plain `git push` when the branch tracks something, otherwise publishes it to `origin` and sets the
+    /// upstream. Nothing here can prompt: stdin is /dev/null, `GIT_TERMINAL_PROMPT=0` is set, and the
+    /// app has no controlling terminal for ssh or credential helpers to open.
+    public func push(in folder: URL) async throws {
+        let summary = try await summary(in: folder)
+        guard summary.branch != nil else {
+            throw GitError(message: "HEAD is detached. Check out a branch before pushing.")
+        }
+        if summary.upstream != nil {
+            try await run(["push"], in: folder, readOnly: false)
+            return
+        }
+        let remotes = try await run(["remote"], in: folder).split(whereSeparator: \.isNewline)
+        guard remotes.contains("origin") else {
+            throw GitError(message: "This branch has no upstream and the repository has no remote named origin.")
+        }
+        try await run(["push", "-u", "origin", "HEAD"], in: folder, readOnly: false)
+    }
+
+    /// Paths are relative to `folder`, not the repository root, and limited to it. Callers pass the
+    /// worktree root, where the two coincide. Tracked files plus untracked ones that are not ignored,
+    /// minus tracked files already deleted from the working tree.
+    public func listFiles(in folder: URL) async throws -> [String] {
+        let all = GitParser.paths(try await run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], in: folder))
+        let deleted = Set(GitParser.paths(try await run(["ls-files", "-z", "--deleted"], in: folder)))
+        // A path can appear twice, e.g. while merge conflicts leave several index stages.
+        var seen = Set<String>()
+        return all.filter { !deleted.contains($0) && seen.insert($0).inserted }
+    }
+
     public func stage(_ paths: [String], in folder: URL) async throws {
         guard !paths.isEmpty else { return }
         try await run(["add", "-A", "--"] + pathspecs(paths), in: folder, readOnly: false)
@@ -128,28 +176,34 @@ enum GitProcess {
         var stderr: String
     }
 
-    /// Runs on a GCD thread so the blocking reads never tie up the caller or the cooperative pool.
-    static func run(_ arguments: [String], in folder: URL, readOnly: Bool) async throws -> Output {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(with: Result { try runBlocking(arguments, in: folder, readOnly: readOnly) })
-            }
-        }
-    }
+    static let gitExecutable = URL(filePath: "/usr/bin/git")
 
-    private static func runBlocking(_ arguments: [String], in folder: URL, readOnly: Bool) throws -> Output {
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/git")
-        // Without this, diff headers escape non-ASCII file names as octal.
-        process.arguments = ["-c", "core.quotepath=false"] + arguments
-        process.currentDirectoryURL = folder
-        var environment = ProcessInfo.processInfo.environment
-        environment["GIT_TERMINAL_PROMPT"] = "0"
+    static func run(_ arguments: [String], in folder: URL, readOnly: Bool) async throws -> Output {
+        var environment = ["GIT_TERMINAL_PROMPT": "0"]
         if readOnly {
             // Keeps status from taking index.lock to refresh the index, which would race an agent's own git commands.
             environment["GIT_OPTIONAL_LOCKS"] = "0"
         }
-        process.environment = environment
+        // Without core.quotepath=false, diff headers escape non-ASCII file names as octal.
+        return try await run(gitExecutable, ["-c", "core.quotepath=false"] + arguments, in: folder, environment: environment)
+    }
+
+    /// Runs on a GCD thread so the blocking reads never tie up the caller or the cooperative pool.
+    /// `environment` is layered over the app's own environment.
+    static func run(_ executable: URL, _ arguments: [String], in folder: URL, environment: [String: String]) async throws -> Output {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result { try runBlocking(executable, arguments, in: folder, environment: environment) })
+            }
+        }
+    }
+
+    private static func runBlocking(_ executable: URL, _ arguments: [String], in folder: URL, environment overrides: [String: String]) throws -> Output {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.currentDirectoryURL = folder
+        process.environment = ProcessInfo.processInfo.environment.merging(overrides) { _, new in new }
 
         let stdout = Pipe()
         let stderr = Pipe()
@@ -163,7 +217,7 @@ enum GitProcess {
             throw GitError(message: error.localizedDescription)
         }
 
-        // Drain stderr concurrently: if git fills one pipe while we block reading the other, both sides hang.
+        // Drain stderr concurrently: if the child fills one pipe while we block reading the other, both sides hang.
         let errorData = DataBox()
         let group = DispatchGroup()
         DispatchQueue.global(qos: .userInitiated).async(group: group) {
