@@ -1,0 +1,77 @@
+import ArchipelCore
+import Foundation
+
+public enum HookSource: String, Sendable {
+    case claude
+    case codex
+}
+
+/// Maps raw hook payloads to `AgentEvent`s. Field names follow the Claude Code hooks reference
+/// and the Codex `notify` documentation; anything unrecognised maps to nil rather than failing.
+public enum HookDecoder {
+    public static func decode(
+        source: HookSource,
+        payload: [String: Any]
+    ) -> (event: AgentEvent?, agentSessionID: String?) {
+        switch source {
+        case .claude:
+            return (claudeEvent(payload), nonEmptyString(payload["session_id"]))
+        case .codex:
+            return (codexEvent(payload), nonEmptyString(payload["thread-id"]))
+        }
+    }
+
+    public static func decode(
+        source: HookSource,
+        payload: Data
+    ) -> (event: AgentEvent?, agentSessionID: String?) {
+        guard let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+            return (nil, nil)
+        }
+        return decode(source: source, payload: object)
+    }
+
+    private static func claudeEvent(_ payload: [String: Any]) -> AgentEvent? {
+        switch payload["hook_event_name"] as? String {
+        case "SessionStart":
+            return .sessionStarted
+        case "UserPromptSubmit":
+            return .promptSubmitted
+        case "PreToolUse", "PostToolUse":
+            return .activity
+        case "PermissionRequest":
+            return .attentionRequested(.permission, message: nonEmptyString(payload["tool_name"]))
+        case "Notification":
+            let message = nonEmptyString(payload["message"])
+            switch payload["notification_type"] as? String {
+            case "permission_prompt":
+                return .attentionRequested(.permission, message: message)
+            case "idle_prompt":
+                return .attentionRequested(.idle, message: message)
+            case "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input":
+                return .attentionRequested(.question, message: message)
+            default:
+                return nil
+            }
+        case "Stop", "StopFailure":
+            return .turnFinished(message: nonEmptyString(payload["last_assistant_message"]))
+        default:
+            // SessionEnd included: the terminal reports the process exit with its real code.
+            return nil
+        }
+    }
+
+    private static func codexEvent(_ payload: [String: Any]) -> AgentEvent? {
+        switch payload["type"] as? String {
+        case "agent-turn-complete":
+            return .turnFinished(message: nonEmptyString(payload["last-assistant-message"]))
+        default:
+            return nil
+        }
+    }
+
+    private static func nonEmptyString(_ value: Any?) -> String? {
+        guard let string = value as? String, !string.isEmpty else { return nil }
+        return string
+    }
+}

@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Ghostty is fetched and built by scripts/build-ghostty.sh
+Vendor/ghostty/
+Vendor/ghostty-resources/
+Packages/TerminalKit/Frameworks/
