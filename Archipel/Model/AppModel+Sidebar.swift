@@ -1,6 +1,7 @@
 import AgentKit
 import AppKit
 import ArchipelCore
+import EditorUI
 
 /// Small conveniences for the sidebar and the island switcher.
 extension AppModel {
@@ -49,5 +50,21 @@ extension AppModel {
     func openInTerminal(_ folder: URL) {
         guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else { return }
         NSWorkspace.shared.open([folder], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
+    }
+}
+
+extension AppModel {
+    /// Focuses whatever the focused tab shows, its terminal or a file's editor, so the user can type
+    /// without clicking first. The short wait lets SwiftUI swap in the new tab's view.
+    func focusFocusedTabSoon() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard let self, NSApp.keyWindow?.attachedSheet == nil else { return }
+            if let id = focusedSessionID {
+                terminals[id]?.focus()
+            } else if case .file(let url)? = focusedTab?.content {
+                EditorFocus.request(url)
+            }
+        }
     }
 }

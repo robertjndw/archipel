@@ -234,18 +234,8 @@ final class CommandPaletteModel {
         }
     }
 
-    /// Focuses whatever the focused tab shows, its terminal or a file's editor, so the user can type
-    /// without clicking first. The short wait lets SwiftUI swap in the new tab's view.
     private func focusFocusedSession() {
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(80))
-            guard let app = self?.app, NSApp.keyWindow?.attachedSheet == nil else { return }
-            if let id = app.focusedSessionID {
-                app.terminals[id]?.focus()
-            } else if case .file(let url)? = app.focusedTab?.content {
-                EditorFocus.request(url)
-            }
-        }
+        app?.focusFocusedTabSoon()
     }
 
     // MARK: Ranking

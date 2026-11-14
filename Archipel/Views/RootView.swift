@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(CommandPaletteModel.self) private var palette
+    @Environment(TabSwitcherModel.self) private var switcher
     @Binding var isAddingProject: Bool
     @AppStorage("showInspector") private var showInspector = true
     @State private var columns = NavigationSplitViewVisibility.all
@@ -36,6 +38,8 @@ struct RootView: View {
             .ignoresSafeArea(.container, edges: .top)
         }
         .overlay { CommandPalette() }
+        .overlay { TabSwitcher() }
+        .background(TabSwitcherKeyMonitor(switcher: switcher, model: model, isBlocked: { palette.isPresented }))
         .toolbar(removing: .title)
         .navigationTitle(windowTitle)
         .tint(model.selectedIsland?.tint.color)

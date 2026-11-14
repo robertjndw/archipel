@@ -39,46 +39,61 @@ struct PaneTabBar: View {
                 .padding(.leading, 78)
             }
 
-            ScrollView(.horizontal) {
-                // One container for the row, so the selection's glass morphs
-                // from the old tab to the new one instead of fading.
-                GlassEffectContainer {
-                    HStack(spacing: 2) {
-                        ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
-                            TabButton(
-                                tab: tab,
-                                label: label(for: tab),
-                                isSelected: tab.id == pane.selectedTab?.id,
-                                isActive: isActive,
-                                glass: glass,
-                                select: { model.select(tab: tab.id) },
-                                pin: { model.pin(tab: tab.id) },
-                                close: { model.close(tab: tab.id) }
-                            )
-                            .contextMenu { tabMenu(tab) }
-                            .draggable(tab.id.uuidString)
-                            .modifier(TabDropTarget(tab: tab) { targeted in
-                                // One tick per slot the drag moves into, not one per drag event.
-                                if targeted, dropSlot != index {
-                                    dropSlot = index
-                                    Haptics.levelChange()
-                                } else if !targeted, dropSlot == index {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    // One container for the row, so the selection's glass morphs
+                    // from the old tab to the new one instead of fading.
+                    GlassEffectContainer {
+                        HStack(spacing: 2) {
+                            ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
+                                TabButton(
+                                    tab: tab,
+                                    label: label(for: tab),
+                                    isSelected: tab.id == pane.selectedTab?.id,
+                                    isActive: isActive,
+                                    glass: glass,
+                                    select: { model.select(tab: tab.id) },
+                                    pin: { model.pin(tab: tab.id) },
+                                    close: { model.close(tab: tab.id) }
+                                )
+                                .contextMenu { tabMenu(tab) }
+                                .draggable(tab.id.uuidString)
+                                .modifier(TabDropTarget(tab: tab) { targeted in
+                                    // One tick per slot the drag moves into, not one per drag event.
+                                    if targeted, dropSlot != index {
+                                        dropSlot = index
+                                        Haptics.levelChange()
+                                    } else if !targeted, dropSlot == index {
+                                        dropSlot = nil
+                                    }
+                                } moveTab: {
                                     dropSlot = nil
-                                }
-                            } moveTab: {
-                                dropSlot = nil
-                                _ = drop([$0.uuidString], at: index)
-                            })
+                                    _ = drop([$0.uuidString], at: index)
+                                })
+                            }
                         }
+                        // The scroll view clips, so the glass shadow needs room inside it.
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 6)
                     }
-                    // The scroll view clips, so the glass shadow needs room inside it.
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 6)
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: pane.selectedTab?.id)
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isActive)
                 }
-                .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: pane.selectedTab?.id)
-                .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isActive)
+                // .hidden still shows a scroller when the system is set to always show them.
+                .scrollIndicators(.never)
+                // Selecting a tab from elsewhere (Ctrl-Tab, the palette, a notification) can pick one
+                // scrolled out of view; without this the bar shows no selection at all.
+                .onChange(of: pane.selectedTab?.id) { _, id in
+                    guard let id else { return }
+                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) { proxy.scrollTo(id) }
+                }
+                .onAppear {
+                    // On appear the row has not been laid out yet and scrolling does nothing.
+                    Task { @MainActor in
+                        if let id = pane.selectedTab?.id { proxy.scrollTo(id) }
+                    }
+                }
             }
-            .scrollIndicators(.hidden)
             // Dropping on the empty part of the bar appends.
             .dropDestination(for: String.self) { items, _ in
                 return drop(items, at: nil)

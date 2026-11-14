@@ -68,6 +68,12 @@ final class AppModel {
     private let terminalApp: TerminalApp?
     private let hookServer: HookServer
     let notifier = AttentionNotifier()
+    /// Most recently focused tabs first, for Ctrl-Tab. Not observed: nothing on screen draws from it
+    /// until the switcher opens, and it changes on every focus move.
+    @ObservationIgnored private(set) var recentTabs = RecentTabs(
+        ids: (UserDefaults.standard.stringArray(forKey: AppModel.recentTabsKey) ?? []).compactMap(UUID.init(uuidString:))
+    )
+    private static let recentTabsKey = "recentTabIDs"
     private let hookExecutableURL: URL
     private var loginPATH: Task<String, Never>
     private var eventTasks: [Session.ID: Task<Void, Never>] = [:]
@@ -121,6 +127,7 @@ final class AppModel {
             }
         }
         for id in visibleSessionIDs { ensureRunning(id) }
+        if let id = focusedTab?.id { recentTabs.visit(id) }
         refreshBranches()
         refreshWorktreeDiscovery()
         refreshGitStatus(lookingUpPullRequests: true)
@@ -876,6 +883,8 @@ final class AppModel {
 
     func mutate(_ change: (inout Workspace) -> Void) {
         change(&workspace)
+        // Here rather than in changingSelection so clicking into another pane counts too.
+        if let id = focusedTab?.id { recentTabs.visit(id) }
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
@@ -887,6 +896,7 @@ final class AppModel {
     func saveNow() {
         saveTask?.cancel()
         guard canSave else { return }
+        UserDefaults.standard.set(recentTabs.ids.map(\.uuidString), forKey: Self.recentTabsKey)
         do {
             try store.save(workspace)
         } catch {

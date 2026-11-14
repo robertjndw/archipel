@@ -8,6 +8,7 @@ struct ArchipelApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var model = AppModel()
     @State private var palette = CommandPaletteModel()
+    @State private var switcher = TabSwitcherModel()
     @State private var isAddingProject = false
     @AppStorage("showInspector") private var showInspector = true
 
@@ -16,6 +17,7 @@ struct ArchipelApp: App {
             RootView(isAddingProject: $isAddingProject)
                 .environment(model)
                 .environment(palette)
+                .environment(switcher)
                 .frame(minWidth: 720, minHeight: 420)
                 .onAppear {
                     delegate.model = model
@@ -73,6 +75,14 @@ struct ArchipelApp: App {
                     .keyboardShortcut("k")
                 Button("Open Quickly…", systemImage: "doc.text.magnifyingglass") { present(.openFile) }
                     .keyboardShortcut("p")
+                Divider()
+                // The shortcut is shown for discoverability only; the key monitor takes Ctrl-Tab
+                // first so it can keep the panel up while Control is held.
+                Button("Switch to Recent Tab", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90") {
+                    switcher.press(offset: 1, app: model)
+                    switcher.commit()
+                }
+                .keyboardShortcut(.tab, modifiers: .control)
             }
             CommandMenu("Project") {
                 let worktree = model.selectedWorktree
