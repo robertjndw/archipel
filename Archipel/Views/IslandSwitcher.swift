@@ -15,6 +15,8 @@ struct IslandSwitcher: View {
     /// capsule stays centered in the sidebar.
     private static let gutter: CGFloat = 34
 
+    static let selectionAnimation = Animation.spring(duration: 0.38, bounce: 0.12)
+
     var body: some View {
         let islands = model.workspace.islands
         let selectedID = model.selectedIsland?.id
@@ -47,7 +49,7 @@ struct IslandSwitcher: View {
                 .frame(width: Self.gutter)
         }
         .padding(.vertical, 8)
-        .animation(.spring(duration: 0.38, bounce: 0.12), value: selectedID)
+        .animation(Self.selectionAnimation, value: selectedID)
         .onChange(of: selectedID) { Haptics.levelChange() }
         .sheet(item: $editor) { mode in
             IslandEditor(mode: mode)
@@ -118,18 +120,35 @@ private struct IslandButton: View {
     let summary: AttentionSummary
     let shortcutIndex: Int?
     let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Only bumped on selection. Keying the bounce on isSelected would also bounce the island you leave.
+    @State private var arrivals = 0
 
     var body: some View {
         let tint = island.tint.color
         Button(action: action) {
             HStack(spacing: 0) {
-                Image(systemName: island.symbol)
-                    .symbolVariant(isSelected ? .fill : .none)
-                    .contentTransition(.symbolEffect(.replace))
-                    // A slow pulse on an island you are not looking at says agents are busy there.
-                    .symbolEffect(.pulse, options: .repeating, isActive: summary.working > 0 && !isSelected)
-                    .symbolEffect(.bounce, options: .nonRepeating, value: summary.needsAttention)
-                    .frame(width: 16)
+                // Two images faded against each other instead of switching symbolVariant. Swapping
+                // the variant leaves the old glyph drawn at its old position while the row reflows.
+                ZStack {
+                    Image(systemName: island.symbol)
+                        .opacity(isSelected ? 0 : 1)
+                    Image(systemName: island.symbol)
+                        .symbolVariant(.fill)
+                        .opacity(isSelected ? 1 : 0)
+                }
+                // A slow pulse on an island you are not looking at says agents are busy there.
+                .symbolEffect(.pulse, options: .repeating, isActive: summary.working > 0 && !isSelected)
+                .symbolEffect(.bounce, options: .nonRepeating, value: summary.needsAttention)
+                // Small bounce on the island you switch to. Plain scale keyframes rather than
+                // .symbolEffect(.bounce) to stay clear of symbol effect rendering mid-reflow.
+                .keyframeAnimator(initialValue: 1.0, trigger: arrivals) { content, scale in
+                    content.scaleEffect(scale)
+                } keyframes: { _ in
+                    SpringKeyframe(0.78, duration: 0.12, spring: .snappy)
+                    SpringKeyframe(1.0, duration: 0.4, spring: .bouncy(extraBounce: 0.15))
+                }
+                .frame(width: 16)
                 // Always in the tree and unrolled by width instead of inserted with a transition: a
                 // removed view keeps drawing at its old spot while the stack closes up, so the
                 // outgoing name used to slide over its neighbours' icons.
@@ -148,6 +167,9 @@ private struct IslandButton: View {
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(isSelected ? AnyShapeStyle(tint) : AnyShapeStyle(.secondary))
             .padding(.horizontal, isSelected ? 8 : 5)
+            // Needed on top of the switcher's animation. On a mouse click the clicked button
+            // otherwise skips it, so its name pops open at once and the next island slides over it.
+            .animation(IslandSwitcher.selectionAnimation, value: isSelected)
             .frame(height: 22)
             .anchorPreference(key: SelectedIslandBounds.self, value: .bounds) { isSelected ? $0 : nil }
             .overlay(alignment: .topTrailing) {
@@ -157,6 +179,9 @@ private struct IslandButton: View {
         }
         .buttonStyle(.plain)
         .animation(.smooth, value: summary)
+        .onChange(of: isSelected) {
+            if isSelected && !reduceMotion { arrivals += 1 }
+        }
         .help(help)
         .accessibilityLabel(island.name)
         .accessibilityValue(summary.accessibilityDescription)
