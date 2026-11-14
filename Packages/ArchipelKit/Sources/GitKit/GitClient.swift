@@ -30,7 +30,16 @@ public struct GitClient: Sendable {
         let args = createBranch
             ? ["worktree", "add", "-b", branch, "--", path.path] + (base.map { [$0] } ?? [])
             : ["worktree", "add", "--", path.path, branch]
-        try await run(args, in: repository, readOnly: false)
+        let result = try await GitProcess.run(args, in: repository, readOnly: false)
+        guard result.status != 0 else { return }
+        throw GitError(worktreeAddFailure: result)
+    }
+
+    /// Asks git rather than reimplementing check-ref-format's rules. Uses `--branch`, so it also
+    /// rejects names git would refuse for a branch specifically, such as `-x` or `HEAD`.
+    public func isValidBranchName(_ name: String, in repository: URL) async -> Bool {
+        let result = try? await GitProcess.run(["check-ref-format", "--branch", name], in: repository, readOnly: true)
+        return result?.status == 0
     }
 
     /// Without `force` git refuses a worktree with uncommitted or untracked changes. Locked worktrees
@@ -97,6 +106,37 @@ public struct GitClient: Sendable {
             throw GitError(message: "This branch has no upstream and the repository has no remote named origin.")
         }
         try await run(["push", "-u", "origin", "HEAD"], in: folder, readOnly: false)
+    }
+
+    /// Updates the remote-tracking refs so ahead/behind counts are current. Meant to run unattended:
+    /// ssh gets BatchMode so an unknown host key or a locked key fails at once instead of waiting
+    /// for a prompt nobody can answer. A GIT_SSH_COMMAND the user set is left alone.
+    public func fetch(in folder: URL) async throws {
+        var environment: [String: String] = [:]
+        if ProcessInfo.processInfo.environment["GIT_SSH_COMMAND"] == nil {
+            environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+        }
+        let result = try await GitProcess.run(["fetch", "--quiet", "--prune"], in: folder, readOnly: false, environment: environment)
+        guard result.status == 0 else { throw GitError(command: "git fetch", output: result) }
+    }
+
+    /// Fetches, then fast-forwards the branch to its upstream. Never merges or rebases. A diverged
+    /// branch is refused with an explanation, since sorting that out needs someone in a terminal.
+    public func pull(in folder: URL) async throws {
+        let before = try await summary(in: folder)
+        guard before.branch != nil else {
+            throw GitError(message: "HEAD is detached. Check out a branch before pulling.")
+        }
+        guard let upstream = before.upstream else {
+            throw GitError(message: "This branch has no upstream to pull from.")
+        }
+        try await fetch(in: folder)
+        let after = try await summary(in: folder)
+        guard after.behind > 0 else { return }
+        guard after.ahead == 0 else {
+            throw GitError(message: "This branch and \(upstream) have diverged (\(after.ahead) ahead, \(after.behind) behind), so it cannot be fast-forwarded. Rebase or merge in a terminal.")
+        }
+        try await run(["merge", "--ff-only", "@{upstream}"], in: folder, readOnly: false)
     }
 
     /// Paths are relative to `folder`, not the repository root, and limited to it. Callers pass the
@@ -197,6 +237,24 @@ extension GitError {
     init(command: String, output: GitProcess.Output) {
         let stderr = output.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         self.init(message: stderr.isEmpty ? "\(command) failed with exit code \(output.status)" : stderr)
+    }
+
+    /// `git worktree add` wraps its one useful line in progress output ("Preparing worktree…")
+    /// and advice ("hint: …"), which is a lot of noise in a sheet. Keeps only the fatal/error lines,
+    /// without their prefix.
+    init(worktreeAddFailure output: GitProcess.Output) {
+        let reasons = output.stderr.split(whereSeparator: \.isNewline).compactMap { line -> String? in
+            for prefix in ["fatal: ", "error: "] where line.hasPrefix(prefix) {
+                let reason = line.dropFirst(prefix.count)
+                return reason.prefix(1).uppercased() + reason.dropFirst()
+            }
+            return nil
+        }
+        if reasons.isEmpty {
+            self.init(command: "git worktree", output: output)
+        } else {
+            self.init(message: reasons.joined(separator: "\n"))
+        }
     }
 }
 

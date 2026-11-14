@@ -478,11 +478,15 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
         if isBinding {
             // Ghostty's defaults bind Cmd-T, Cmd-W, Cmd-N and friends to tab and
             // window actions we do not implement. Let the host's menu claim a
-            // shortcut first so those keep working; `all`/`performable`
-            // bindings are Ghostty's to decide, as upstream does.
+            // shortcut first so those keep working. `performable` bindings get
+            // the same treatment: Ghostty's macOS default Cmd-K=clear_screen is
+            // performable and would otherwise shadow the app's Go to… palette.
+            // Copy, paste and select all still end up in Ghostty because the
+            // Edit menu routes them back to this view. `all` bindings stay
+            // Ghostty's to decide, as upstream does.
             let raw = flags.rawValue
             if raw & GHOSTTY_BINDING_FLAGS_CONSUMED.rawValue != 0,
-               raw & (GHOSTTY_BINDING_FLAGS_ALL.rawValue | GHOSTTY_BINDING_FLAGS_PERFORMABLE.rawValue) == 0,
+               raw & GHOSTTY_BINDING_FLAGS_ALL.rawValue == 0,
                NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
                 return true
             }

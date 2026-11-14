@@ -126,6 +126,29 @@ final class GitClientTests {
         }
     }
 
+    @Test func worktreeAddFailureKeepsOnlyTheReason() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        try sh("branch", "taken")
+
+        do {
+            try await git.addWorktree(repository: repo, path: base.appending(path: "wt"), branch: "taken", createBranch: true)
+            Issue.record("expected an existing branch name to be refused")
+        } catch let error as GitError {
+            #expect(!error.message.contains("hint:"))
+            #expect(!error.message.contains("Preparing worktree"))
+            #expect(!error.message.hasPrefix("fatal:"))
+            #expect(error.message.contains("taken"))
+        }
+    }
+
+    @Test func branchNameValidation() async throws {
+        #expect(await git.isValidBranchName("feature/dark-mode", in: repo))
+        #expect(await !git.isValidBranchName("bad name~", in: repo))
+        #expect(await !git.isValidBranchName("-leading-dash", in: repo))
+        #expect(await !git.isValidBranchName("ends.lock", in: repo))
+    }
+
     @Test func forceRemovesDirtyWorktree() async throws {
         try write("a.txt", "a\n")
         try commitAll()

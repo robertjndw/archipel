@@ -7,6 +7,12 @@ struct ChangeID: Hashable {
     var staged: Bool
 }
 
+private struct ListedChange: Identifiable {
+    var change: GitFileChange
+    var staged: Bool
+    var id: ChangeID { ChangeID(path: change.path, staged: staged) }
+}
+
 @MainActor @Observable
 final class ChangesModel {
     enum Phase { case loading, notRepository, ready }
@@ -32,12 +38,13 @@ final class ChangesModel {
     private var lookupBranch: String?
 
     enum Activity: Equatable {
-        case commit, push, pullRequest
+        case commit, push, pull, pullRequest
 
         var progressTitle: LocalizedStringKey {
             switch self {
             case .commit: "Committing…"
             case .push: "Pushing…"
+            case .pull: "Pulling…"
             case .pullRequest: "Opening…"
             }
         }
@@ -128,6 +135,11 @@ final class ChangesModel {
         run(.push) { [git, root] in try await git.push(in: root) } onSuccess: { [self] in
             await refreshRemoteInfo()
         }
+    }
+
+    func pull() {
+        guard syncState.canPull else { return }
+        run(.pull) { [git, root] in try await git.pull(in: root) } onSuccess: {}
     }
 
     func createPullRequest() {
@@ -229,6 +241,7 @@ final class ChangesModel {
 struct ChangesTab: View {
     @Bindable var model: ChangesModel
     let actions: InspectorActions
+    @Binding var focusCommitMessage: Bool
     @State private var showsStaged = true
     @State private var showsUnstaged = true
 
@@ -251,7 +264,7 @@ struct ChangesTab: View {
             }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 if model.phase == .ready {
-                    CommitArea(model: model)
+                    CommitArea(model: model, focusRequest: $focusCommitMessage)
                 }
             }
         .refreshing(every: .seconds(3)) { await model.refresh() }
@@ -306,9 +319,11 @@ struct ChangesTab: View {
 
     private func section(_ title: LocalizedStringKey, changes: [GitFileChange], staged: Bool, isExpanded: Binding<Bool>) -> some View {
         Section(isExpanded: isExpanded) {
-            ForEach(changes) { change in
-                ChangeRow(change: change, staged: staged, model: model)
-                    .tag(ChangeID(path: change.path, staged: staged))
+            // Identified by path and side: a partially staged file is listed in both
+            // sections of the same List, and identical ids would make SwiftUI drop a row.
+            ForEach(changes.map { ListedChange(change: $0, staged: staged) }) { row in
+                ChangeRow(change: row.change, staged: staged, model: model)
+                    .tag(row.id)
             }
         } header: {
             HStack {

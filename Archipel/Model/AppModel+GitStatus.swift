@@ -31,6 +31,9 @@ struct GitRefreshState {
     var queued: [Worktree.ID: Request] = [:]
     var pullRequestsInFlight: Set<Worktree.ID> = []
     var diffStatCheckedAt: [Worktree.ID: ContinuousClock.Instant] = [:]
+    /// Keyed by project: worktrees share one repository, so one fetch serves them all.
+    var fetchedAt: [Project.ID: ContinuousClock.Instant] = [:]
+    var fetchesInFlight: Set<Project.ID> = []
     var gitHub: Task<GitHubClient?, Never>?
     var timer: Task<Void, Never>?
 }
@@ -41,6 +44,9 @@ extension AppModel {
     /// `gh` is a network call per worktree, and a pull request rarely appears or changes state without
     /// the user knowing, so this can be slow.
     static let pullRequestInterval = Duration.seconds(300)
+    /// One network call per repository. Five minutes keeps the behind counts reasonably fresh without
+    /// fetching all the time.
+    static let fetchInterval = Duration.seconds(300)
 
     /// Refreshes every worktree of the selected island. Pull requests are only looked up when asked
     /// for, and then only when the last answer for that branch is older than `minimumPullRequestAge`.
@@ -63,7 +69,10 @@ extension AppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.gitStatusInterval)
                 guard !Task.isCancelled, let self else { return }
-                if NSApp.isActive { self.refreshGitStatus(lookingUpPullRequests: false) }
+                if NSApp.isActive {
+                    self.refreshGitStatus(lookingUpPullRequests: false)
+                    self.fetchRemotesIfDue()
+                }
             }
         }
     }
@@ -71,6 +80,30 @@ extension AppModel {
     func stopGitStatusTimer() {
         gitRefresh.timer?.cancel()
         gitRefresh.timer = nil
+    }
+
+    /// Fetches each project of the selected island whose last fetch is older than `fetchInterval`, then
+    /// refreshes its worktrees so the behind counts move. Failures are silent: no network, a remote
+    /// that needs a password or a folder without a remote all just mean the counts stay as they were.
+    func fetchRemotesIfDue() {
+        guard settings.fetchesAutomatically else { return }
+        for project in selectedIsland?.projects ?? [] {
+            if let last = gitRefresh.fetchedAt[project.id], last.duration(to: .now) < Self.fetchInterval { continue }
+            guard !gitRefresh.fetchesInFlight.contains(project.id) else { continue }
+            // Without an upstream anywhere there is nothing a fetch could make "behind".
+            let ids = project.worktrees.map(\.id)
+            guard ids.contains(where: { gitSummaries[$0]?.upstream != nil }) else { continue }
+            gitRefresh.fetchesInFlight.insert(project.id)
+            gitRefresh.fetchedAt[project.id] = .now
+            let git = git
+            let folder = project.folderURL
+            Task { [weak self] in
+                let fetched = (try? await git.fetch(in: folder)) != nil
+                guard let self else { return }
+                self.gitRefresh.fetchesInFlight.remove(project.id)
+                if fetched { self.refreshGitStatus(of: ids, lookingUpPullRequests: false) }
+            }
+        }
     }
 
     func rowContent(for worktree: Worktree) -> WorktreeRowContent {

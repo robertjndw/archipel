@@ -58,6 +58,7 @@ final class CodeScrollView: NSScrollView, NSTextViewDelegate {
         contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(boundsChanged), name: NSView.boundsDidChangeNotification, object: contentView)
         NotificationCenter.default.addObserver(self, selector: #selector(storageChanged), name: NSTextStorage.didProcessEditingNotification, object: buffer.textStorage)
+        NotificationCenter.default.addObserver(self, selector: #selector(focusRequested), name: EditorFocus.requested, object: nil)
 
         ruler.lineIndex = LineIndex(buffer.text)
         restoreViewState()
@@ -126,6 +127,22 @@ final class CodeScrollView: NSScrollView, NSTextViewDelegate {
                 textView.scroll(origin)
             }
         }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Deferred a turn: SwiftUI may still be swapping out the view that had the keyboard.
+        DispatchQueue.main.async { [weak self] in self?.takeFocusIfRequested() }
+    }
+
+    @objc private func focusRequested() {
+        takeFocusIfRequested()
+    }
+
+    private func takeFocusIfRequested() {
+        guard let window, window.isKeyWindow, window.attachedSheet == nil,
+              EditorFocus.claim(buffer.url) else { return }
+        window.makeFirstResponder(textView)
     }
 
     /// A horizontally resizable text view only grows when it lays out text, so pin its minimum to the

@@ -157,6 +157,78 @@ final class GitClientRemoteTests {
 
     // MARK: Helpers
 
+    /// A second clone of the remote, standing in for a teammate who pushes.
+    private func makeOtherClone(of remote: URL) throws -> URL {
+        let other = base.appending(path: "other")
+        try run(["clone", "-q", remote.path, other.path])
+        try run(["-C", other.path, "config", "user.name", "Other"])
+        try run(["-C", other.path, "config", "user.email", "other@example.invalid"])
+        try run(["-C", other.path, "config", "commit.gpgsign", "false"])
+        return other
+    }
+
+    private func commitInOther(_ other: URL, _ file: String) throws {
+        try "x\n".write(to: other.appending(path: file), atomically: true, encoding: .utf8)
+        try run(["-C", other.path, "add", "-A"])
+        try run(["-C", other.path, "commit", "-q", "-m", file])
+        try run(["-C", other.path, "push", "-q"])
+    }
+
+    @Test func fetchThenPullFastForwards() async throws {
+        let remote = try makeBareRemote()
+        try sh("remote", "add", "origin", remote.path)
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+        try await git.push(in: repo)
+
+        let other = try makeOtherClone(of: remote)
+        try commitInOther(other, "b.txt")
+
+        #expect(try await git.summary(in: repo).behind == 0)
+        try await git.fetch(in: repo)
+        #expect(try await git.summary(in: repo).behind == 1)
+
+        try await git.pull(in: repo)
+        let after = try await git.summary(in: repo)
+        #expect(after.behind == 0 && after.ahead == 0)
+        #expect(FileManager.default.fileExists(atPath: repo.appending(path: "b.txt").path))
+    }
+
+    @Test func pullRefusesDivergedBranch() async throws {
+        let remote = try makeBareRemote()
+        try sh("remote", "add", "origin", remote.path)
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+        try await git.push(in: repo)
+
+        try commitInOther(try makeOtherClone(of: remote), "theirs.txt")
+        try write("mine.txt", "m\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "mine", in: repo)
+
+        do {
+            try await git.pull(in: repo)
+            Issue.record("expected a diverged branch to be refused")
+        } catch let error as GitError {
+            #expect(error.message.contains("diverged"))
+        }
+        #expect(try shOutput("log", "-1", "--format=%s") == "mine")
+    }
+
+    @Test func pullWithoutUpstreamExplains() async throws {
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+        do {
+            try await git.pull(in: repo)
+            Issue.record("expected a branch without upstream to be refused")
+        } catch let error as GitError {
+            #expect(error.message.contains("no upstream"))
+        }
+    }
+
     private func makeBareRemote() throws -> URL {
         let remote = base.appending(path: "remote.git")
         try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)

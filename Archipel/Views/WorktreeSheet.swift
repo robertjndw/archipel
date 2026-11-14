@@ -20,6 +20,8 @@ struct WorktreeSheet: View {
     @State private var mode = Mode.newBranch
     @State private var newBranch = ""
     @State private var branches: [String] = []
+    @State private var allBranches: Set<String> = []
+    @State private var nameProblem: NameProblem?
     @State private var existingBranch = ""
     @State private var worktrees: [GitWorktreeEntry] = []
     @State private var existingWorktree: URL?
@@ -28,21 +30,52 @@ struct WorktreeSheet: View {
     @State private var failure: String?
 
     var body: some View {
-        Form {
+        VStack(spacing: 0) {
+            // Above the form rather than in it, as in Project Settings. Inside a grouped form the
+            // picker gets a row background around it.
             if isRepository {
                 Picker("Add", selection: $mode) {
                     ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                // Large draws as a capsule on macOS 26+, matching the app's other pill-shaped switchers.
+                .controlSize(.large)
                 .labelsHidden()
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+            }
+            form
+        }
+        .frame(width: 460)
+        .navigationTitle("Add Worktree")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Add") { Task { await add() } }
+                    .disabled(!canAdd || isWorking)
+            }
+        }
+        .task { await load() }
+    }
 
+    private var form: some View {
+        Form {
+            if isRepository {
                 switch mode {
                 case .newBranch:
                     Section {
                         TextField("Branch", text: $newBranch, prompt: Text("feature/my-change"))
+                        if let nameProblem {
+                            nameProblemRow(nameProblem)
+                        }
                     } footer: {
                         Text(newBranchFooter)
                     }
+                    .task(id: trimmedBranch) { await checkNewBranch() }
+                    // A git error from the last attempt is about the old name.
+                    .onChange(of: trimmedBranch) { failure = nil }
                 case .existingBranch:
                     if branches.isEmpty {
                         Text("Every local branch is already checked out in a worktree.")
@@ -83,18 +116,6 @@ struct WorktreeSheet: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460)
-        .navigationTitle("Add Worktree")
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Add") { Task { await add() } }
-                    .disabled(!canAdd || isWorking)
-            }
-        }
-        .task { await load() }
     }
 
     private var trimmedBranch: String {
@@ -115,7 +136,7 @@ struct WorktreeSheet: View {
         guard isRepository else { return false }
         return switch mode {
         // The prefilled prefix alone is not a branch name yet.
-        case .newBranch: !trimmedBranch.isEmpty && trimmedBranch != model.settings.branchPrefix
+        case .newBranch: !trimmedBranch.isEmpty && trimmedBranch != model.settings.branchPrefix && nameProblem == nil
         case .existingBranch: !existingBranch.isEmpty
         case .existingWorktree: existingWorktree != nil
         }
@@ -126,15 +147,74 @@ struct WorktreeSheet: View {
         isRepository = await model.git.isRepository(project.folderURL)
         guard isRepository else { return }
         do {
-            let all = try await model.git.worktrees(of: project.folderURL)
-            let checkedOut = Set(all.compactMap(\.branch))
-            branches = try await model.git.localBranches(in: project.folderURL).filter { !checkedOut.contains($0) }
+            try await loadBranches()
             existingBranch = branches.first ?? ""
             worktrees = try await model.availableWorktrees(for: project)
             existingWorktree = worktrees.first?.path
         } catch {
             failure = error.localizedDescription
         }
+    }
+
+    enum NameProblem: Equatable {
+        case invalid
+        /// The branch exists; `available` is false when it is already checked out in a worktree.
+        case exists(available: Bool)
+    }
+
+    @ViewBuilder
+    private func nameProblemRow(_ problem: NameProblem) -> some View {
+        switch problem {
+        case .invalid:
+            Label("Not a valid branch name. Branch names cannot contain spaces or ~ ^ : ? * [ \\ and cannot start with a dash.", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.red)
+        case .exists(available: true):
+            HStack {
+                Label("A branch with this name already exists.", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red)
+                Spacer()
+                Button("Use Existing Branch") {
+                    existingBranch = trimmedBranch
+                    mode = .existingBranch
+                }
+            }
+        case .exists(available: false):
+            Label("A branch with this name already exists and is checked out in another worktree.", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.red)
+        }
+    }
+
+    /// Checked while typing, so a bad name shows up before Add is pressed instead of as a git error.
+    private func checkNewBranch() async {
+        let name = trimmedBranch
+        guard !name.isEmpty, name != model.settings.branchPrefix else {
+            nameProblem = nil
+            return
+        }
+        if allBranches.contains(name) {
+            nameProblem = .exists(available: branches.contains(name))
+            return
+        }
+        // Debounced: one round of git calls per pause in typing, not per keystroke.
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !Task.isCancelled else { return }
+        // Reloaded because branches made in a terminal while the sheet is open count too.
+        try? await loadBranches()
+        let isValid = await model.git.isValidBranchName(name, in: project.folderURL)
+        guard !Task.isCancelled else { return }
+        if allBranches.contains(name) {
+            nameProblem = .exists(available: branches.contains(name))
+        } else {
+            nameProblem = isValid ? nil : .invalid
+        }
+    }
+
+    private func loadBranches() async throws {
+        let all = try await model.git.worktrees(of: project.folderURL)
+        let checkedOut = Set(all.compactMap(\.branch))
+        let local = try await model.git.localBranches(in: project.folderURL)
+        allBranches = Set(local)
+        branches = local.filter { !checkedOut.contains($0) }
     }
 
     private func add() async {

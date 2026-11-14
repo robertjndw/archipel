@@ -173,6 +173,9 @@ struct PaneTabBar: View {
             Button("Show in Finder", systemImage: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             }
+            if let editor = model.preferredEditor {
+                Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(url) }
+            }
             Button("Open in Default App", systemImage: "arrow.up.forward.app") { NSWorkspace.shared.open(url) }
         }
         Divider()

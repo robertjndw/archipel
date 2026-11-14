@@ -19,6 +19,10 @@ final class AppSettings {
     /// Prepended to the name typed for a new branch, e.g. `robert/`.
     var branchPrefix: String { didSet { defaults.set(branchPrefix, forKey: Key.branchPrefix) } }
     var confirmsQuitWhileWorking: Bool { didSet { defaults.set(confirmsQuitWhileWorking, forKey: Key.confirmsQuitWhileWorking) } }
+    /// Background `git fetch` per project, so behind counts and Pull reflect the remote.
+    var fetchesAutomatically: Bool { didSet { defaults.set(fetchesAutomatically, forKey: Key.fetchesAutomatically) } }
+    /// Bundle identifier of the editor "Open in Editor" uses. nil picks the first installed one of `ExternalEditor.known`.
+    var externalEditorBundleID: String? { didSet { defaults.set(externalEditorBundleID, forKey: Key.externalEditorBundleID) } }
 
     // MARK: Appearance
 
@@ -69,6 +73,8 @@ final class AppSettings {
             .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? Self.standardWorktreesRoot
         branchPrefix = defaults.string(forKey: Key.branchPrefix) ?? ""
         confirmsQuitWhileWorking = bool(Key.confirmsQuitWhileWorking, true)
+        fetchesAutomatically = bool(Key.fetchesAutomatically, true)
+        externalEditorBundleID = defaults.string(forKey: Key.externalEditorBundleID)
         appearance = defaults.string(forKey: Key.appearance).flatMap(Appearance.init) ?? .system
         showsGitStatusInSidebar = bool(Key.showsGitStatusInSidebar, true)
         showsPullRequests = bool(Key.showsPullRequests, true)
@@ -89,6 +95,8 @@ final class AppSettings {
         static let worktreesRoot = "settings.worktreesRoot"
         static let branchPrefix = "settings.branchPrefix"
         static let confirmsQuitWhileWorking = "settings.confirmsQuitWhileWorking"
+        static let fetchesAutomatically = "settings.fetchesAutomatically"
+        static let externalEditorBundleID = "settings.externalEditorBundleID"
         static let appearance = "settings.appearance"
         static let showsGitStatusInSidebar = "settings.showsGitStatusInSidebar"
         static let showsPullRequests = "settings.showsPullRequests"

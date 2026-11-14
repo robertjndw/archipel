@@ -44,6 +44,8 @@ struct ProjectSettingsSheet: View {
                 ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
+            // Large draws as a capsule on macOS 26+, matching the app's other pill-shaped switchers.
+            .controlSize(.large)
             .labelsHidden()
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -254,7 +256,12 @@ struct ProjectSettingsSheet: View {
         } header: {
             Text("Run script")
         } footer: {
-            Text("Started with Run (⌘R), for example a dev server. Running again restarts it.")
+            // Run (⌘R) opens this page when there is nothing to run, so the empty state says why.
+            if run.allSatisfy(\.isWhitespace) {
+                Text("There's no run script yet, which is why Run (⌘R) opened this page. Add a command like npm run dev.")
+            } else {
+                Text("Started with Run (⌘R), for example a dev server. Running again restarts it.")
+            }
         }
         Section {
             Text("""

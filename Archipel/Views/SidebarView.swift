@@ -7,7 +7,6 @@ struct SidebarView: View {
     @Binding var isAddingProject: Bool
     let toggleSidebar: () -> Void
     @State private var renaming: RenameTarget?
-    @State private var addingWorktreeTo: Project?
     @State private var removing: Worktree?
     @State private var islandEditor: IslandEditor.Mode?
     @State private var swipe = IslandSwipeState()
@@ -38,7 +37,7 @@ struct SidebarView: View {
                         DetectedWorktreesRow(project: project, entries: suggested)
                     }
                 } header: {
-                    SidebarProjectHeader(project: project, renaming: $renaming, addingWorktreeTo: $addingWorktreeTo)
+                    SidebarProjectHeader(project: project, renaming: $renaming)
                 }
             }
         }
@@ -76,9 +75,6 @@ struct SidebarView: View {
         .islandSwipe(swipe)
         .folderDropsAddProjects(to: model)
         .renameAlert($renaming)
-        .sheet(item: $addingWorktreeTo) { project in
-            WorktreeSheet(project: project)
-        }
         .sheet(item: $islandEditor) { mode in
             IslandEditor(mode: mode)
         }

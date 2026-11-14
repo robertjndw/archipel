@@ -48,13 +48,18 @@ struct SyncState: Equatable {
 
     var canPush: Bool { canPublishOrPush && !isBusy }
 
+    /// Shown only when there is something to pull. A diverged branch still gets the button: pulling
+    /// then explains why it will not fast-forward, which is more useful than a missing button.
+    var showsPull: Bool { isPublished && !isDetached && behind > 0 }
+    var canPull: Bool { showsPull && !isBusy }
+
     var pushTitle: LocalizedStringKey { isPublished ? "Push" : "Publish Branch" }
 
     var help: LocalizedStringKey {
         if isDetached { return "HEAD is detached. Check out a branch to push." }
         if !isPublished { return hasRemote ? "Publish this branch to origin." : "This repository has no remote." }
         if behind > 0 {
-            return "The branch is \(behind) behind \(upstream ?? "its upstream"). Pull or rebase first, otherwise git rejects the push."
+            return "The branch is \(behind) behind \(upstream ?? "its upstream"). Pull first, otherwise git rejects the push."
         }
         return ahead > 0 ? "Push \(ahead) commits to \(upstream ?? "the upstream")." : "Nothing to push."
     }
@@ -119,6 +124,8 @@ extension GitPullRequest {
 /// Pinned under the file list: message, commit button, sync state and pull request control.
 struct CommitArea: View {
     @Bindable var model: ChangesModel
+    /// Set by the host (the Commit… command) to put the cursor in the message field.
+    @Binding var focusRequest: Bool
     @FocusState private var messageFocused: Bool
 
     var body: some View {
@@ -134,6 +141,12 @@ struct CommitArea: View {
                 .padding(.vertical, 7)
                 .glassEffect(.regular, in: .rect(cornerRadius: 12))
                 .disabled(model.activity == .commit)
+                // `initial` too: the request usually arrives while the Changes tab is still being built.
+                .onChange(of: focusRequest, initial: true) {
+                    guard focusRequest else { return }
+                    messageFocused = true
+                    focusRequest = false
+                }
 
             Button(action: model.commit) {
                 HStack(spacing: 6) {
@@ -152,6 +165,12 @@ struct CommitArea: View {
             HStack(spacing: 6) {
                 SyncSummary(sync: sync, activity: model.activity)
                 Spacer(minLength: 0)
+                if sync.showsPull {
+                    Button("Pull", action: model.pull)
+                        .buttonStyle(.glass)
+                        .disabled(!sync.canPull)
+                        .help("Fast-forwards to \(sync.upstream ?? "the upstream"). Never merges or rebases.")
+                }
                 Button(sync.pushTitle, action: model.push)
                     .buttonStyle(.glass)
                     .disabled(!sync.canPush)

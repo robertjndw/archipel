@@ -7,6 +7,7 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         @Bindable var settings = model.settings
+        let installed = ExternalEditor.installed()
         Form {
             Section {
                 Picker("Default agent", selection: $settings.defaultAgentID) {
@@ -43,6 +44,28 @@ struct GeneralSettingsView: View {
                     .autocorrectionDisabled()
             } footer: {
                 Text("Filled in when you create a new branch, for example robert/ gives robert/fix-login. You can still edit it per branch.")
+            }
+
+            Section {
+                Picker("Open in", selection: $settings.externalEditorBundleID) {
+                    Text(installed.first.map { "Automatic (\($0.name))" } ?? "Automatic").tag(String?.none)
+                    if !installed.isEmpty { Divider() }
+                    ForEach(installed) { editor in
+                        Text(editor.name).tag(Optional(editor.bundleID))
+                    }
+                }
+            } header: {
+                Text("Editor")
+            } footer: {
+                Text(installed.isEmpty
+                    ? "No supported editor was found. Install one such as Visual Studio Code, Cursor or Zed to open worktrees from Archipel."
+                    : "Used by Open in Editor (⇧⌘E) and the context menus of worktrees, projects and files.")
+            }
+
+            Section {
+                Toggle("Fetch from remotes automatically", isOn: $settings.fetchesAutomatically)
+            } footer: {
+                Text("Runs git fetch every few minutes while Archipel is in front, so the behind counts stay current. It only updates remote branches, never your own branches or files.")
             }
 
             Section {

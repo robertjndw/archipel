@@ -1,6 +1,7 @@
 import AgentKit
 import AppKit
 import ArchipelCore
+import EditorUI
 import Foundation
 import Observation
 
@@ -13,13 +14,17 @@ struct PaletteCommand: Identifiable {
     var shortcutHint: String? = nil
     /// Evaluated when the palette opens, so unavailable commands are left out instead of shown disabled.
     var isAvailable = true
+    /// False for a command that puts the keyboard somewhere itself (Commit… focuses the message field),
+    /// which the palette's usual hand-back to the focused tab would undo.
+    var refocusesTab = true
     let perform: @MainActor () -> Void
 
     /// The palette shows these in this order when the query is empty.
     static func standard(
         model: AppModel,
         addProject: @escaping @MainActor () -> Void,
-        toggleInspector: @escaping @MainActor () -> Void
+        toggleInspector: @escaping @MainActor () -> Void,
+        startCommit: @escaping @MainActor () -> Void
     ) -> [PaletteCommand] {
         let worktreeID = model.selectedWorktree?.id
         let hasSelection = worktreeID != nil
@@ -69,6 +74,33 @@ struct PaletteCommand: Identifiable {
                 if let worktreeID { model.startScript(.setup, in: worktreeID) }
             },
             PaletteCommand(
+                id: "commit",
+                title: "Commit…",
+                symbol: "checkmark.circle",
+                shortcutHint: "⌥⌘C",
+                isAvailable: hasSelection,
+                refocusesTab: false,
+                perform: startCommit
+            ),
+            PaletteCommand(
+                id: "open-in-editor",
+                title: model.preferredEditor.map { "Open in \($0.name)" } ?? "Open in Editor",
+                symbol: "chevron.left.forwardslash.chevron.right",
+                shortcutHint: "⇧⌘E",
+                isAvailable: hasSelection && model.preferredEditor != nil
+            ) {
+                if let worktree = model.selectedWorktree { model.openInEditor(worktree.path) }
+            },
+            PaletteCommand(
+                id: "add-worktree",
+                title: "Add Worktree…",
+                symbol: "plus",
+                shortcutHint: "⇧⌘N",
+                isAvailable: model.project(ofWorktree: worktreeID) != nil
+            ) {
+                if let project = model.project(ofWorktree: worktreeID) { model.addWorktreeProjectID = project.id }
+            },
+            PaletteCommand(
                 id: "project-settings",
                 title: "Project Settings…",
                 symbol: "gearshape",
@@ -90,6 +122,7 @@ struct PaletteRow: Identifiable {
     let subtitleMatches: Set<Int>
     let activity: SessionActivity?
     let shortcutHint: String?
+    var refocusesTab = true
     let perform: @MainActor () -> Void
 }
 
@@ -167,7 +200,7 @@ final class CommandPaletteModel {
         // Dismiss first so the action sees a window without the palette's text field in it.
         dismiss(restoringFocus: false)
         row.perform()
-        focusFocusedSession()
+        if row.refocusesTab { focusFocusedSession() }
     }
 
     func activateSelection() { activate(selection) }
@@ -199,13 +232,17 @@ final class CommandPaletteModel {
         }
     }
 
-    /// A short wait lets SwiftUI swap in the terminal of the newly selected session before it is focused.
+    /// Focuses whatever the focused tab shows, its terminal or a file's editor, so the user can type
+    /// without clicking first. The short wait lets SwiftUI swap in the new tab's view.
     private func focusFocusedSession() {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(80))
-            guard let app = self?.app, NSApp.keyWindow?.attachedSheet == nil,
-                  let id = app.focusedSessionID else { return }
-            app.terminals[id]?.focus()
+            guard let app = self?.app, NSApp.keyWindow?.attachedSheet == nil else { return }
+            if let id = app.focusedSessionID {
+                app.terminals[id]?.focus()
+            } else if case .file(let url)? = app.focusedTab?.content {
+                EditorFocus.request(url)
+            }
         }
     }
 
@@ -276,6 +313,7 @@ final class CommandPaletteModel {
             subtitleMatches: [],
             activity: nil,
             shortcutHint: command.shortcutHint,
+            refocusesTab: command.refocusesTab,
             perform: command.perform
         )
     }

@@ -30,6 +30,11 @@ final class AppModel {
     var projectSettingsID: Project.ID?
     /// Set when the sheet is opened to configure a script, so it starts on that page.
     var projectSettingsShowsScripts = false
+    /// The project the Add Worktree sheet is open for. Here for the same reason as `projectSettingsID`:
+    /// the sidebar, the Project menu and the palette all open it.
+    var addWorktreeProjectID: Project.ID?
+    /// Set by Commit… to put the cursor in the inspector's commit message field; the inspector clears it.
+    var focusCommitMessageRequest = false
     let settings = AppSettings()
     let devServers = DevServerMonitor()
     /// Images for projects whose icon is a file or was found in the repository. See `loadIcon(of:)`.
@@ -196,6 +201,7 @@ final class AppModel {
         refreshBranches()
         refreshWorktreeDiscovery()
         refreshGitStatus(lookingUpPullRequests: true, minimumPullRequestAge: .seconds(30))
+        fetchRemotesIfDue()
         startGitStatusTimer()
     }
 
@@ -379,6 +385,11 @@ final class AppModel {
         // The sheet may have been open while the settings changed.
         let project = workspace.project(id: project.id) ?? project
         let path = worktreePath(for: project, branch: branch)
+        // git creates the new branch before it notices the folder is taken, leaving the branch behind
+        // after a failed add, so the folder is checked first.
+        if FileManager.default.fileExists(atPath: path.path) {
+            throw GitError(message: "The folder \(path.abbreviatedPath) already exists. Pick another branch name, or move or delete that folder.")
+        }
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
         try await git.addWorktree(
             repository: project.folderURL,

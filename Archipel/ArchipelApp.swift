@@ -1,5 +1,6 @@
 import AgentKit
 import ArchipelCore
+import InspectorUI
 import SwiftUI
 
 @main
@@ -58,6 +59,13 @@ struct ArchipelApp: App {
             CommandGroup(after: .sidebar) {
                 Button("Toggle Inspector", systemImage: "sidebar.trailing") { showInspector.toggle() }
                     .keyboardShortcut("0", modifiers: [.command, .option])
+                Button("Show Files", systemImage: "folder") { revealInspector(.files) }
+                    .keyboardShortcut("1", modifiers: [.command, .option])
+                Button("Show Changes", systemImage: "plus.forwardslash.minus") { revealInspector(.changes) }
+                    .keyboardShortcut("2", modifiers: [.command, .option])
+                Button("Commit…", systemImage: "checkmark.circle") { startCommit() }
+                    .keyboardShortcut("c", modifiers: [.command, .option])
+                    .disabled(model.selectedWorktree == nil)
             }
             CommandMenu("Go") {
                 Button("Go to…", systemImage: "arrow.right.circle") { present(.goTo) }
@@ -78,6 +86,16 @@ struct ArchipelApp: App {
                 }
                 .disabled(project?.scripts.setupCommand == nil)
                 Divider()
+                Button(model.preferredEditor.map { "Open in \($0.name)" } ?? "Open in Editor", systemImage: "chevron.left.forwardslash.chevron.right") {
+                    if let worktree { model.openInEditor(worktree.path) }
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(worktree == nil || model.preferredEditor == nil)
+                Button("Add Worktree…", systemImage: "plus") {
+                    if let project { model.addWorktreeProjectID = project.id }
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(project == nil)
                 Button("Project Settings…", systemImage: "gearshape") {
                     if let project { model.openProjectSettings(project.id) }
                 }
@@ -150,11 +168,33 @@ extension ArchipelApp {
         }
     }
 
+    private func revealInspector(_ tab: InspectorView.Tab) {
+        showInspector = true
+        // Written straight to the defaults the inspector's AppStorage reads. An @AppStorage for this key on
+        // the App itself made the App body depend on it, and the window locked up re-rendering on launch.
+        UserDefaults.standard.set(tab.rawValue, forKey: InspectorView.selectedTabKey)
+    }
+
+    /// Commit… from the keyboard: the Changes tab with the cursor in the message field, so the rest
+    /// (type, ⌘↩) needs no mouse either.
+    private func startCommit() {
+        guard model.selectedWorktree != nil else { return }
+        revealInspector(.changes)
+        model.focusCommitMessageRequest = true
+        // A folder that is not a repository has no commit field to take the request, and a request
+        // left standing would grab the cursor later, in some other worktree.
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            model.focusCommitMessageRequest = false
+        }
+    }
+
     private func present(_ mode: CommandPaletteModel.Mode) {
         let commands = PaletteCommand.standard(
             model: model,
             addProject: { isAddingProject = true },
-            toggleInspector: { showInspector.toggle() }
+            toggleInspector: { showInspector.toggle() },
+            startCommit: startCommit
         )
         palette.present(mode, app: model, commands: commands)
     }

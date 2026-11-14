@@ -27,6 +27,7 @@ struct RootView: View {
             InspectorView(
                 root: model.selectedWorktree?.path,
                 searchPATH: { await model.toolSearchPATH() },
+                focusCommitMessage: $model.focusCommitMessageRequest,
                 onOpenFile: { url, preview in model.openFile(url, preview: preview) },
                 onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) }
             )
@@ -54,6 +55,9 @@ struct RootView: View {
         }
         .sheet(item: projectInSettings) { project in
             ProjectSettingsSheet(project: project)
+        }
+        .sheet(item: projectAddingWorktree) { project in
+            WorktreeSheet(project: project)
         }
         .alert("Archipel ran into a problem", item: $model.problem) { _ in
             Button("OK") {}
@@ -83,6 +87,13 @@ struct RootView: View {
     private var closingFileName: String {
         if case .file(let url)? = model.tabAwaitingCloseDecision?.content { return url.lastPathComponent }
         return "this file"
+    }
+
+    private var projectAddingWorktree: Binding<Project?> {
+        Binding(
+            get: { model.addWorktreeProjectID.flatMap { model.workspace.project(id: $0) } },
+            set: { model.addWorktreeProjectID = $0?.id }
+        )
     }
 
     private var projectInSettings: Binding<Project?> {

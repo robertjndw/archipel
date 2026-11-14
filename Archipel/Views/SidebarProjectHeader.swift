@@ -7,7 +7,6 @@ struct SidebarProjectHeader: View {
     @Environment(AppModel.self) private var model
     let project: Project
     @Binding var renaming: RenameTarget?
-    @Binding var addingWorktreeTo: Project?
     @State private var isHovered = false
 
     var body: some View {
@@ -40,7 +39,7 @@ struct SidebarProjectHeader: View {
     @ViewBuilder
     private func trailing(summary: AttentionSummary, tint: Color) -> some View {
         if isHovered {
-            Button("Add Worktree", systemImage: "plus") { addingWorktreeTo = project }
+            Button("Add Worktree", systemImage: "plus") { model.addWorktreeProjectID = project.id }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
                 .help("Add a worktree to \(project.name)")
@@ -60,7 +59,7 @@ struct SidebarProjectHeader: View {
 
     @ViewBuilder
     private var menu: some View {
-        Button("Add Worktree…", systemImage: "plus") { addingWorktreeTo = project }
+        Button("Add Worktree…", systemImage: "plus") { model.addWorktreeProjectID = project.id }
         if !project.dismissedWorktreePaths.isEmpty {
             Button("Show Dismissed Worktrees", systemImage: "eye") { model.restoreDismissedWorktrees(in: project.id) }
         }
@@ -72,6 +71,9 @@ struct SidebarProjectHeader: View {
         Divider()
         Button("Show in Finder", systemImage: "folder") {
             NSWorkspace.shared.activateFileViewerSelecting([project.folderURL])
+        }
+        if let editor = model.preferredEditor {
+            Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(project.folderURL) }
         }
         Button("Open in Terminal", systemImage: "apple.terminal") { model.openInTerminal(project.folderURL) }
         Button("Copy Path", systemImage: "document.on.document") { model.copyToPasteboard(project.folderURL.path) }

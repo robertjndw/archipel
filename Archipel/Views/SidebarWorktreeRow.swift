@@ -128,6 +128,7 @@ struct SidebarMetadataLine: View {
         HStack(spacing: 7) {
             ForEach(items) { item in
                 view(for: item)
+                    .help(help(for: item))
             }
         }
         .font(.subheadline)
@@ -188,6 +189,27 @@ struct SidebarMetadataLine: View {
                 Text(name)
                     .truncationMode(.middle)
             }
+        }
+    }
+
+    /// The numbers alone are cryptic, so each item explains itself on hover.
+    private func help(for item: WorktreeRowContent.MetadataItem) -> String {
+        switch item {
+        case .pullRequest(let badge):
+            badge.title
+        case .diff(let insertions, let deletions):
+            "\(insertions) \(insertions == 1 ? "line" : "lines") added, \(deletions) removed, not committed yet"
+        case .changedFiles(let count):
+            count == 1 ? "1 file with uncommitted changes" : "\(count) files with uncommitted changes"
+        case .aheadBehind(let ahead, let behind):
+            [
+                ahead > 0 ? "\(ahead) \(ahead == 1 ? "commit" : "commits") to push" : nil,
+                behind > 0 ? "\(behind) \(behind == 1 ? "commit" : "commits") to pull" : nil,
+            ].compactMap { $0 }.joined(separator: ", ")
+        case .agents:
+            "Agents running in this worktree"
+        case .folder(let name):
+            "Folder \(name)"
         }
     }
 
@@ -271,6 +293,9 @@ struct SidebarWorktreeMenu: View {
         Divider()
         Button("Show in Finder", systemImage: "folder") {
             NSWorkspace.shared.activateFileViewerSelecting([worktree.path])
+        }
+        if let editor = model.preferredEditor {
+            Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(worktree.path) }
         }
         Button("Open in Terminal", systemImage: "apple.terminal") { model.openInTerminal(worktree.path) }
         Button("Copy Path", systemImage: "document.on.document") { model.copyToPasteboard(worktree.path.path) }
