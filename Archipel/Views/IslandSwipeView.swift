@@ -11,6 +11,12 @@ final class IslandSwipeState {
     /// does not switch islands under the fingers.
     fileprivate var generation = 0
     fileprivate var ownsGesture = false
+    /// How far the list has come in after a switch made without a swipe, from 0 to 1.
+    fileprivate var entrance = 1.0
+    /// Which side that list comes in from: 1 from the right, -1 from the left, 0 straight in place.
+    fileprivate var entranceSide = 0.0
+    /// The swipe settle animates its own way in, so the switch it makes must not add an entrance.
+    fileprivate var selectingBySwipe = false
 }
 
 extension View {
@@ -32,9 +38,10 @@ private struct IslandSwipeContent: ViewModifier {
 
     func body(content: Content) -> some View {
         let offset = reduceMotion ? 0 : state.offset
+        let entranceOffset = reduceMotion ? 0 : (1 - state.entrance) * state.entranceSide * 14
         content
-            .offset(x: offset)
-            .opacity(1 - 0.5 * min(abs(offset) / state.width, 1))
+            .offset(x: offset + entranceOffset)
+            .opacity((1 - 0.5 * min(abs(offset) / state.width, 1)) * (0.25 + 0.75 * state.entrance))
             // The offset moves what is drawn, not the layout, so this keeps it inside the sidebar.
             .clipped()
     }
@@ -63,6 +70,30 @@ private struct IslandSwipeDriver: ViewModifier {
                 ended: { settle($0) }
             )
         }
+        .onChange(of: model.selectedIsland?.id) { old, new in
+            enter(from: old, to: new)
+        }
+    }
+
+    /// Clicks, shortcuts and jumps to a session elsewhere switch islands without a swipe. Without
+    /// this the list would swap in a single frame while the switcher below it animates.
+    private func enter(from old: Island.ID?, to new: Island.ID?) {
+        if state.selectingBySwipe {
+            state.selectingBySwipe = false
+            return
+        }
+        let islands = model.workspace.islands
+        var side = 0.0
+        if let from = islands.firstIndex(where: { $0.id == old }), let to = islands.firstIndex(where: { $0.id == new }) {
+            side = to > from ? 1 : -1
+        }
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) {
+            state.entrance = 0
+            state.entranceSide = side
+        }
+        withAnimation(.smooth(duration: reduceMotion ? 0.2 : 0.32)) { state.entrance = 1 }
     }
 
     private func settle(_ gesture: IslandSwipe) {
@@ -95,6 +126,8 @@ private struct IslandSwipeDriver: ViewModifier {
             var instant = Transaction()
             instant.disablesAnimations = true
             withTransaction(instant) { state.offset = -side * state.width * 0.35 }
+            // Only flagged when the selection really changes, or no onChange would clear it.
+            if model.selectedIsland?.id != id { state.selectingBySwipe = true }
             model.select(island: id)
             withAnimation(spring) { state.offset = 0 }
         }

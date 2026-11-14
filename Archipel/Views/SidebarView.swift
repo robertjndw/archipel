@@ -44,15 +44,7 @@ struct SidebarView: View {
         .background(SidebarPeekKeyMonitor(peek: peek, model: model))
         .environment(peek)
         .onChange(of: model.selectedIsland?.id) { peek.close() }
-        .islandSwipeContent(swipe)
-        // For the empty part of the list. Rows and project headers bring their own menus, which a
-        // list-wide selection menu would replace on the headers.
-        .contextMenu {
-            Button("Add Project…", systemImage: "folder.badge.plus") { isAddingProject = true }
-            Button("New Island…", systemImage: "plus.square.on.square") { islandEditor = .create }
-            Divider()
-            ProjectsDisclosureButton()
-        }
+        // Before the swipe content, so an empty island's placeholder moves with the list.
         .overlay {
             if let island, island.projects.isEmpty {
                 ContentUnavailableView {
@@ -63,6 +55,15 @@ struct SidebarView: View {
                     Button("Add Project…") { isAddingProject = true }
                 }
             }
+        }
+        .islandSwipeContent(swipe)
+        // For the empty part of the list. Rows and project headers bring their own menus, which a
+        // list-wide selection menu would replace on the headers.
+        .contextMenu {
+            Button("Add Project…", systemImage: "folder.badge.plus") { isAddingProject = true }
+            Button("New Island…", systemImage: "plus.square.on.square") { islandEditor = .create }
+            Divider()
+            ProjectsDisclosureButton()
         }
         // Insets, not bars: as a bar the system draws a hairline across the sidebar next to the
         // header or the switcher whenever the pointer is over it.

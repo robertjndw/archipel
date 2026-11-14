@@ -10,7 +10,6 @@ struct IslandSwitcher: View {
     @Environment(AppModel.self) private var model
     @State private var editor: IslandEditor.Mode?
     @State private var deleting: Island?
-    @Namespace private var selection
 
     /// Room for the new island button on the trailing side, mirrored on the leading side so the
     /// capsule stays centered in the sidebar.
@@ -48,7 +47,7 @@ struct IslandSwitcher: View {
                 .frame(width: Self.gutter)
         }
         .padding(.vertical, 8)
-        .animation(.snappy(duration: 0.3), value: selectedID)
+        .animation(.spring(duration: 0.38, bounce: 0.12), value: selectedID)
         .onChange(of: selectedID) { Haptics.levelChange() }
         .sheet(item: $editor) { mode in
             IslandEditor(mode: mode)
@@ -67,19 +66,34 @@ struct IslandSwitcher: View {
     }
 
     private func row(_ islands: [Island], selectedID: Island.ID?, summaries: [Island.ID: AttentionSummary]) -> some View {
-        HStack(spacing: 2) {
+        let selectedTint = islands.first { $0.id == selectedID }?.tint.color
+        return HStack(spacing: 2) {
             ForEach(Array(islands.enumerated()), id: \.element.id) { index, island in
                 IslandButton(
                     island: island,
                     isSelected: island.id == selectedID,
                     summary: summaries[island.id] ?? .zero,
-                    shortcutIndex: index < 9 ? index + 1 : nil,
-                    selection: selection
+                    shortcutIndex: index < 9 ? index + 1 : nil
                 ) {
                     model.select(island: island.id)
                 }
                 .id(island.id)
                 .contextMenu { menu(for: island) }
+            }
+        }
+        // One highlight drawn behind the whole row, placed on the selected button's frame. A
+        // matchedGeometryEffect would be declared twice here, once in each ViewThatFits variant,
+        // and the two sources fight over the frame mid-animation.
+        .backgroundPreferenceValue(SelectedIslandBounds.self) { anchor in
+            GeometryReader { proxy in
+                if let anchor, let selectedTint {
+                    let rect = proxy[anchor]
+                    Capsule()
+                        .fill(selectedTint.opacity(0.18))
+                        .strokeBorder(selectedTint.opacity(0.22), lineWidth: 0.5)
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
+                }
             }
         }
         .padding(3)
@@ -103,13 +117,12 @@ private struct IslandButton: View {
     let isSelected: Bool
     let summary: AttentionSummary
     let shortcutIndex: Int?
-    let selection: Namespace.ID
     let action: () -> Void
 
     var body: some View {
         let tint = island.tint.color
         Button(action: action) {
-            HStack(spacing: 4) {
+            HStack(spacing: 0) {
                 Image(systemName: island.symbol)
                     .symbolVariant(isSelected ? .fill : .none)
                     .contentTransition(.symbolEffect(.replace))
@@ -117,27 +130,26 @@ private struct IslandButton: View {
                     .symbolEffect(.pulse, options: .repeating, isActive: summary.working > 0 && !isSelected)
                     .symbolEffect(.bounce, options: .nonRepeating, value: summary.needsAttention)
                     .frame(width: 16)
-                if isSelected {
-                    Text(island.name)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        // Capped, but never wider than the name: a bare maxWidth would take all 96pt.
-                        .frame(maxWidth: 96)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .leading)))
-                }
+                // Always in the tree and unrolled by width instead of inserted with a transition: a
+                // removed view keeps drawing at its old spot while the stack closes up, so the
+                // outgoing name used to slide over its neighbours' icons.
+                Text(island.name)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    // Capped, but never wider than the name: a bare maxWidth would take all 96pt.
+                    .frame(maxWidth: 96)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.leading, 4)
+                    .opacity(isSelected ? 1 : 0)
+                    .blur(radius: isSelected ? 0 : 3)
+                    .modifier(HorizontalReveal(progress: isSelected ? 1 : 0))
+                    .accessibilityHidden(true)
             }
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(isSelected ? AnyShapeStyle(tint) : AnyShapeStyle(.secondary))
             .padding(.horizontal, isSelected ? 8 : 5)
             .frame(height: 22)
-            .background {
-                if isSelected {
-                    Capsule()
-                        .fill(tint.opacity(0.18))
-                        .matchedGeometryEffect(id: "selection", in: selection)
-                }
-            }
+            .anchorPreference(key: SelectedIslandBounds.self, value: .bounds) { isSelected ? $0 : nil }
             .overlay(alignment: .topTrailing) {
                 badge(tint: tint)
             }
@@ -169,6 +181,45 @@ private struct IslandButton: View {
         let shortcut = shortcutIndex.map { " (⌃\($0))" } ?? ""
         let state = summary.accessibilityDescription
         return state.isEmpty ? island.name + shortcut : "\(island.name)\(shortcut): \(state)"
+    }
+}
+
+private struct SelectedIslandBounds: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
+/// Lays its content out at full width but only claims, and shows, a share of it. Animating the share
+/// grows a label out from under the icon and collapses it again without anything overlapping.
+private struct HorizontalReveal: ViewModifier, Animatable {
+    var progress: Double
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        RevealLayout(progress: progress) { content }
+            .clipped()
+    }
+}
+
+private struct RevealLayout: Layout {
+    var progress: Double
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let size = subviews.first?.sizeThatFits(.unspecified) else { return .zero }
+        return CGSize(width: size.width * min(max(progress, 0), 1), height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let subview = subviews.first else { return }
+        let size = subview.sizeThatFits(.unspecified)
+        subview.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(size))
     }
 }
 
