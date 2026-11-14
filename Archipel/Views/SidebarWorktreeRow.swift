@@ -51,7 +51,7 @@ struct SidebarWorktreeRow: View {
         .opacity(isMissing ? 0.6 : 1)
         .onHover { isHovered = $0 }
         .animation(.snappy(duration: 0.2), value: content.trailing)
-        .finishGlow(pulse: model.finishPulse(for: worktree), tint: tint)
+        .statusGlow(model.statusPulses[worktree.id])
     }
 
     private var isMissing: Bool { model.missingWorktrees.contains(worktree.id) }

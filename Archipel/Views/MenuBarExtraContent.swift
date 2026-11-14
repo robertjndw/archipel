@@ -1,4 +1,5 @@
 import AgentKit
+import AppKit
 import ArchipelCore
 import SwiftUI
 
@@ -54,31 +55,55 @@ extension AppModel {
         switch activity.status {
         case .needsAttention(.permission): "Needs your approval"
         case .needsAttention(.question): "Asked you a question"
-        case .needsAttention(.idle): "Waiting for you"
         case .working, .starting: "Working"
         default: "Finished"
         }
     }
 }
 
-/// The menu bar glyph. Colour is not guaranteed in the menu bar, so the attention state also
-/// changes the symbol.
+/// The menu bar glyph: the app icon's islands, colored by the most pressing state across all
+/// islands. With nothing going on it is a plain template image that the menu bar tints like every
+/// other icon; a status bar item only keeps its colors when its image is not a template.
 struct MenuBarExtraLabel: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let summary = attentionSummary(of: model.workspace, activities: model.activities)
         let description = summary.accessibilityDescription
-        if summary.needsAttention > 0 {
-            Image(systemName: "mountain.2.fill")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.orange, .orange)
-                .accessibilityLabel("Archipel, \(description)")
+        Image(nsImage: Self.image(for: Self.color(for: summary)))
+            .accessibilityLabel(description.isEmpty ? "Archipel" : "Archipel, \(description)")
+    }
+
+    /// Same colors as the sidebar's status glow.
+    private static func color(for summary: AttentionSummary) -> NSColor? {
+        if summary.needsAttention > 0 { return .systemOrange }
+        if summary.working > 0 { return .systemBlue }
+        if summary.unread > 0 { return .systemGreen }
+        return nil
+    }
+
+    private static var images: [NSColor?: NSImage] = [:]
+
+    /// Tinted once per color and kept: the label re-renders with every status change.
+    private static func image(for color: NSColor?) -> NSImage {
+        if let cached = images[color] { return cached }
+        let base = NSImage(resource: .menuBarIslands)
+        let image: NSImage
+        if let color {
+            image = NSImage(size: base.size, flipped: false) { rect in
+                base.draw(in: rect)
+                color.set()
+                rect.fill(using: .sourceAtop)
+                return true
+            }
+            image.isTemplate = false
         } else {
-            Image(systemName: "mountain.2")
-                .symbolEffect(.pulse, isActive: summary.working > 0)
-                .accessibilityLabel(description.isEmpty ? "Archipel" : "Archipel, \(description)")
+            image = base
+            image.isTemplate = true
         }
+        image.accessibilityDescription = "Archipel"
+        images[color] = image
+        return image
     }
 }
 

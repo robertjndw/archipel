@@ -39,7 +39,7 @@ extension AppModel {
         case .needsAttention(.permission):
             // Claude asks its multiple choice questions through the permission hook; they have no Yes and No.
             return activity.lastMessage == "AskUserQuestion" ? nil : .permission
-        case .needsAttention(.question), .needsAttention(.idle), .finished:
+        case .needsAttention(.question), .finished:
             return .reply
         default:
             return nil

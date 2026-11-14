@@ -9,12 +9,16 @@ import TerminalKit
 @Observable
 final class AppModel {
     private(set) var workspace: Workspace
-    private(set) var activities: [Session.ID: SessionActivity] = [:]
+    private(set) var activities: [Session.ID: SessionActivity] = [:] {
+        didSet { stayAwake.agentsWorking = hasWorkingSessions }
+    }
     private(set) var terminals: [Session.ID: TerminalSession] = [:]
     private(set) var launchFailures: [Session.ID: String] = [:]
-    /// Counts the turns a session finished while nobody was looking. Not persisted, so nothing
-    /// glows after a launch.
-    private(set) var finishPulses: [Session.ID: Int] = [:]
+    /// The glow each worktree row last played. Not persisted, so nothing glows after a launch.
+    private(set) var statusPulses: [Worktree.ID: StatusPulseCount] = [:]
+    /// Glows of changes that happened while Archipel was in the background. They would play behind
+    /// another app where nobody sees them, so they wait for the app to come back.
+    @ObservationIgnored private var pulsesAwaitingActivation: [Worktree.ID: StatusPulse] = [:]
     /// Shown as an alert.
     var problem: String?
 
@@ -37,6 +41,9 @@ final class AppModel {
     var focusCommitMessageRequest = false
     let settings = AppSettings()
     let devServers = DevServerMonitor()
+    let stayAwake = StayAwake()
+    /// The latest subscription limits per provider, for the status bar. See AppModel+Usage.
+    var usage: [UsageProvider: ProviderUsage] = UsageArchive.load()
     /// Images for projects whose icon is a file or was found in the repository. See `loadIcon(of:)`.
     var projectIcons: [Project.ID: NSImage] = [:]
 
@@ -118,7 +125,8 @@ final class AppModel {
         refreshWorktreeDiscovery()
         refreshGitStatus(lookingUpPullRequests: true)
         loadProjectIcons()
-        watchPaneClicks()
+        refreshCodexUsage()
+        watchSessionInteraction()
         devServers.start { [weak self] in self?.terminals ?? [:] }
         terminalApp?.acceptsDroppedText = { [weak self] in !(self?.isInternalDragPayload($0) ?? false) }
     }
@@ -197,7 +205,13 @@ final class AppModel {
 
     func appDidBecomeActive() {
         terminalApp?.setAppFocused(true)
-        for id in visibleSessionIDs { markViewed(id) }
+        for (id, kind) in pulsesAwaitingActivation where workspace.worktree(id: id) != nil {
+            statusPulses[id, default: StatusPulseCount()].play(kind)
+        }
+        pulsesAwaitingActivation.removeAll()
+        // Coming back to the app does not mark anything as seen: the window may have been in front
+        // all along with nobody at the desk. Clicking or typing into a session does; see
+        // watchSessionInteraction().
         refreshBranches()
         refreshWorktreeDiscovery()
         refreshGitStatus(lookingUpPullRequests: true, minimumPullRequestAge: .seconds(30))
@@ -727,6 +741,8 @@ final class AppModel {
     }
 
     private func receive(_ message: HookMessage) {
+        // Limits belong to the account, so a reading counts even if its session was closed meanwhile.
+        if let reading = message.usage { recordUsage(reading) }
         guard let session = workspace.session(id: message.sessionID) else { return }
         // An agent that has only started has no conversation on disk yet, and
         // resuming that id would fail. Wait for proof of a first turn.
@@ -738,6 +754,8 @@ final class AppModel {
             mutate { $0.updateSession(id: session.id) { $0.agentSessionID = agentSessionID } }
         }
         if let event = message.event { apply(event, to: session.id) }
+        // Codex has just written the turn's token counts, and its limits with them, to its log.
+        if session.agent == .codex, case .turnFinished? = message.event { refreshCodexUsage() }
     }
 
     private func apply(_ event: AgentEvent, to id: Session.ID) {
@@ -747,13 +765,20 @@ final class AppModel {
         let viewed = isBeingViewed(id)
         activity.apply(event, isBeingViewed: viewed)
         activities[id] = activity
-        if FinishPulse.shouldPlay(from: before.status, to: activity.status, isBeingViewed: viewed) {
-            finishPulses[id, default: 0] += 1
+        if let kind = StatusPulse.kind(from: before.status, to: activity.status),
+           let worktreeID = workspace.worktree(containing: id)?.id {
+            if NSApp.isActive {
+                statusPulses[worktreeID, default: StatusPulseCount()].play(kind)
+            } else {
+                pulsesAwaitingActivation[worktreeID] = max(pulsesAwaitingActivation[worktreeID] ?? kind, kind)
+            }
         }
         // Before posting: buttons on an older notification of this session must not answer whatever comes next.
         if activity.status != before.status { notifier.invalidate(sessionID: id) }
 
-        if activity.unread, activity.status != before.status {
+        // The session stays unread while on screen, but a banner about the thing you are looking at
+        // is noise.
+        if activity.unread, !viewed, activity.status != before.status {
             notify(session: session, activity: activity)
         }
         refreshDockBadge()
@@ -814,20 +839,37 @@ final class AppModel {
     /// the pane views. Not observed: it changes on every layout pass.
     @ObservationIgnored var paneFrames: [Pane.ID: CGRect] = [:]
 
-    /// A terminal is an AppKit view that swallows its own clicks, so SwiftUI
-    /// gestures on the pane never see them. Watching mouse-downs is the one
-    /// way to learn which pane the user is working in.
-    private func watchPaneClicks() {
+    /// A terminal is an AppKit view that swallows its own clicks, so SwiftUI gestures on the pane
+    /// never see them. Watching mouse-downs is the only way to know which pane the user is in.
+    /// Clicking into a pane focuses it and, like typing into a session, counts as having seen what
+    /// it finished or asked. Apart from selecting the session, nothing else clears its unread state.
+    private func watchSessionInteraction() {
         NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             if let self, let window = event.window, window.sheets.isEmpty, let content = window.contentView {
                 let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
-                let panes = Set(self.selectedWorktree?.panes.map(\.id) ?? [])
-                if let hit = self.paneFrames.first(where: { panes.contains($0.key) && $0.value.contains(point) }) {
-                    self.focus(pane: hit.key)
+                let panes = self.selectedWorktree?.panes ?? []
+                if let pane = panes.first(where: { self.paneFrames[$0.id]?.contains(point) == true }) {
+                    self.focus(pane: pane.id)
+                    if case .session(let id)? = pane.selectedTab?.content { self.acknowledge(id) }
                 }
             }
             return event
         }
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // Runs on every key press. Skip the view walk when nothing is unread.
+            if let self, self.activities.values.contains(where: \.unread),
+               let responder = event.window?.firstResponder as? NSView,
+               let id = self.terminals.first(where: { responder.isDescendant(of: $0.value.view) })?.key {
+                self.acknowledge(id)
+            }
+            return event
+        }
+    }
+
+    /// Cheap enough for every key press: only an unread session does any work.
+    private func acknowledge(_ id: Session.ID) {
+        guard activities[id]?.unread == true else { return }
+        markViewed(id)
     }
 
     // MARK: Persistence

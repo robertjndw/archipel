@@ -50,6 +50,13 @@ struct AgentDefinitionTests {
         }
     }
 
+    @Test func claudeStatusLineGoesThroughTheHook() throws {
+        let command = AgentDefinition.claude.launchCommand(for: context(agentSessionID: nil))
+        let statusLine = try #require(try settings(after: "--settings", in: command.arguments)["statusLine"] as? [String: Any])
+        #expect(statusLine["type"] as? String == "command")
+        #expect(statusLine["command"] as? String == ShellQuoting.quote(hook.path) + " statusline")
+    }
+
     @Test func claudeResume() throws {
         let agentID = "0F8E3C2A-5B6D-4E7F-8091-A2B3C4D5E6F7"
         let command = try #require(AgentDefinition.claude.resumeCommand(for: context(agentSessionID: agentID)))

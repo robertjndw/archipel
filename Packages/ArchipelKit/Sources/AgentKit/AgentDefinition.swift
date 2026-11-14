@@ -188,8 +188,14 @@ func claudeHookSettings(hook: URL) -> String {
     for event in claudeHookEvents {
         hooks[event] = [["hooks": [handler]]]
     }
+    // Claude hands the status line its rate limits, which nothing else exposes. archipel-hook passes
+    // them on and then runs the user's own status line, so the terminal looks the same as before.
+    let statusLine: [String: Any] = [
+        "type": "command",
+        "command": ShellQuoting.quote(hook.path) + " statusline",
+    ]
     let data = try! JSONSerialization.data(
-        withJSONObject: ["hooks": hooks],
+        withJSONObject: ["hooks": hooks, "statusLine": statusLine],
         options: [.sortedKeys, .withoutEscapingSlashes]
     )
     return String(decoding: data, as: UTF8.self)

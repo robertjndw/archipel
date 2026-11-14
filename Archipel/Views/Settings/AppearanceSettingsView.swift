@@ -26,6 +26,24 @@ struct AppearanceSettingsView: View {
             } footer: {
                 Text("Git status shows changed files and ahead or behind counts next to each worktree. Pull requests are looked up with the gh command line tool, which must be installed and signed in. Agent messages show the latest thing each session said.")
             }
+
+            Section {
+                Picker("Show usage as", selection: $settings.usageDisplay) {
+                    ForEach(AppSettings.UsageDisplay.allCases) { display in
+                        Text(display.title).tag(display)
+                    }
+                }
+                Picker("Bars show", selection: $settings.usageBarFill) {
+                    ForEach(AppSettings.UsageBarFill.allCases) { fill in
+                        Text(fill.title).tag(fill)
+                    }
+                }
+                .disabled(settings.usageDisplay != .bars)
+            } header: {
+                Text("Status Bar")
+            } footer: {
+                Text("How the Claude and Codex subscription limits appear at the bottom of the window. Used bars fill up as you work; remaining bars empty like a battery. Click the usage for details.")
+            }
         }
         .formStyle(.grouped)
     }

@@ -18,12 +18,20 @@ struct StatusGlyph: View {
             case .needsAttention:
                 attention("questionmark.bubble.fill", label: "Waiting for you")
             case .finished:
+                // The dot is for a result you have not seen yet. Once seen, a quiet check stays until
+                // the next prompt, so a done session does not look like one that never ran.
                 if activity.unread {
                     Circle()
-                        .fill(.tint)
+                        .fill(StatusPulse.finished.color)
                         .frame(width: 8, height: 8)
                         .accessibilityLabel("Finished, unread")
                         .help("Finished, unread")
+                } else if activity.completedTurn {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityLabel("Finished")
+                        .help("Finished")
                 }
             case .exited(let code):
                 Image(systemName: code == 0 ? "stop.circle" : "exclamationmark.triangle.fill")

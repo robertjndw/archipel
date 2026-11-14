@@ -36,7 +36,6 @@ struct HookDecoderTests {
         (Fixtures.postToolUse, .activity),
         (Fixtures.permissionRequest, .attentionRequested(.permission, message: "Bash")),
         (Fixtures.notification("permission_prompt"), .attentionRequested(.permission, message: "Claude needs your permission")),
-        (Fixtures.notification("idle_prompt"), .attentionRequested(.idle, message: "Claude needs your permission")),
         (Fixtures.notification("elicitation_dialog"), .attentionRequested(.question, message: "Claude needs your permission")),
         (Fixtures.notification("elicitation_url_dialog"), .attentionRequested(.question, message: "Claude needs your permission")),
         (Fixtures.notification("agent_needs_input"), .attentionRequested(.question, message: "Claude needs your permission")),
@@ -51,6 +50,7 @@ struct HookDecoderTests {
 
     @Test(arguments: [
         Fixtures.sessionEnd,
+        Fixtures.notification("idle_prompt"),
         Fixtures.notification("auth_success"),
         Fixtures.notification("elicitation_complete"),
         #"{"session_id": "abc", "hook_event_name": "SomethingNew"}"#,

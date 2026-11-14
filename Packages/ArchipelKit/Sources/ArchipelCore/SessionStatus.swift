@@ -6,8 +6,6 @@ public enum AttentionReason: String, Codable, Sendable {
     case permission
     /// The agent asked something and is waiting for an answer.
     case question
-    /// The agent has been sitting at its prompt and nudged the user.
-    case idle
 }
 
 public enum SessionStatus: Equatable, Sendable {

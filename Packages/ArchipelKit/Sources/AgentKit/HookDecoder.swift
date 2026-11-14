@@ -47,7 +47,11 @@ public enum HookDecoder {
             case "permission_prompt":
                 return .attentionRequested(.permission, message: message)
             case "idle_prompt":
-                return .attentionRequested(.idle, message: message)
+                // Claude sends this about a minute after any turn ends, when nobody has typed. It
+                // carries nothing new: the turn is already finished, and real questions arrive as a
+                // permission request or an elicitation. Treating it as attention turned every
+                // finished turn into "waiting for you".
+                return nil
             case "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input":
                 return .attentionRequested(.question, message: message)
             default:

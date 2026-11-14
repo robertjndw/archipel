@@ -43,7 +43,8 @@ struct ArchipelApp: App {
             CommandGroup(replacing: .saveItem) {
                 // Sent up the responder chain so it reaches whichever editor has the keyboard focus.
                 Button("Save", systemImage: "square.and.arrow.down") {
-                    NSApp.sendAction(Selector(("saveDocument:")), to: nil, from: nil)
+                    // NSDocument.save(_:) is the standard saveDocument: selector, which the editor's text view answers.
+                    NSApp.sendAction(#selector(NSDocument.save(_:)), to: nil, from: nil)
                 }
                 .keyboardShortcut("s")
                 Button("Save All") {

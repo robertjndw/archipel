@@ -151,7 +151,7 @@ private struct IslandButton: View {
             .frame(height: 22)
             .anchorPreference(key: SelectedIslandBounds.self, value: .bounds) { isSelected ? $0 : nil }
             .overlay(alignment: .topTrailing) {
-                badge(tint: tint)
+                badge()
             }
             .contentShape(.capsule)
         }
@@ -164,13 +164,13 @@ private struct IslandButton: View {
     }
 
     @ViewBuilder
-    private func badge(tint: Color) -> some View {
+    private func badge() -> some View {
         switch summary.dominant {
         case .needsAttention(let count):
             SidebarAttentionBadge(signal: .needsAttention(count))
                 .offset(x: 3, y: -3)
         case .unread:
-            SidebarAttentionBadge(signal: .unread, tint: tint)
+            SidebarAttentionBadge(signal: .unread)
                 .offset(x: -2, y: 2)
         case .working, nil:
             EmptyView()

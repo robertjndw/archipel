@@ -10,6 +10,32 @@ final class AppSettings {
         var id: Self { self }
     }
 
+    /// How the status bar draws subscription usage.
+    enum UsageDisplay: String, CaseIterable, Identifiable {
+        case numbers, bars
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .numbers: "Percentages"
+            case .bars: "Bars"
+            }
+        }
+    }
+
+    /// Whether a usage bar fills up as the limit is used, or empties as it is, like a battery.
+    enum UsageBarFill: String, CaseIterable, Identifiable {
+        case used, remaining
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .used: "Used"
+            case .remaining: "Remaining"
+            }
+        }
+    }
+
     // MARK: General
 
     /// What ⌘T and the plain "new session" buttons start.
@@ -31,6 +57,8 @@ final class AppSettings {
     /// Also decides whether `gh` is asked at all.
     var showsPullRequests: Bool { didSet { defaults.set(showsPullRequests, forKey: Key.showsPullRequests) } }
     var showsAgentMessagesInSidebar: Bool { didSet { defaults.set(showsAgentMessagesInSidebar, forKey: Key.showsAgentMessagesInSidebar) } }
+    var usageDisplay: UsageDisplay { didSet { defaults.set(usageDisplay.rawValue, forKey: Key.usageDisplay) } }
+    var usageBarFill: UsageBarFill { didSet { defaults.set(usageBarFill.rawValue, forKey: Key.usageBarFill) } }
 
     // MARK: Notifications
 
@@ -79,6 +107,8 @@ final class AppSettings {
         showsGitStatusInSidebar = bool(Key.showsGitStatusInSidebar, true)
         showsPullRequests = bool(Key.showsPullRequests, true)
         showsAgentMessagesInSidebar = bool(Key.showsAgentMessagesInSidebar, true)
+        usageDisplay = defaults.string(forKey: Key.usageDisplay).flatMap(UsageDisplay.init) ?? .numbers
+        usageBarFill = defaults.string(forKey: Key.usageBarFill).flatMap(UsageBarFill.init) ?? .used
         notifiesWhenAttentionNeeded = bool(Key.notifiesWhenAttentionNeeded, true)
         notifiesWhenFinished = bool(Key.notifiesWhenFinished, true)
         notifiesWhenExited = bool(Key.notifiesWhenExited, true)
@@ -101,6 +131,8 @@ final class AppSettings {
         static let showsGitStatusInSidebar = "settings.showsGitStatusInSidebar"
         static let showsPullRequests = "settings.showsPullRequests"
         static let showsAgentMessagesInSidebar = "settings.showsAgentMessagesInSidebar"
+        static let usageDisplay = "settings.usageDisplay"
+        static let usageBarFill = "settings.usageBarFill"
         static let notifiesWhenAttentionNeeded = "settings.notifiesWhenAttentionNeeded"
         static let notifiesWhenFinished = "settings.notifiesWhenFinished"
         static let notifiesWhenExited = "settings.notifiesWhenExited"

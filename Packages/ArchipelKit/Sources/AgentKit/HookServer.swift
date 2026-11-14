@@ -7,11 +7,14 @@ public struct HookMessage: Equatable, Sendable {
     public var sessionID: UUID
     public var event: AgentEvent?
     public var agentSessionID: String?
+    /// Subscription limits, from Claude's status line. Never set together with an event.
+    public var usage: ProviderUsage?
 
-    public init(sessionID: UUID, event: AgentEvent?, agentSessionID: String?) {
+    public init(sessionID: UUID, event: AgentEvent?, agentSessionID: String?, usage: ProviderUsage? = nil) {
         self.sessionID = sessionID
         self.event = event
         self.agentSessionID = agentSessionID
+        self.usage = usage
     }
 }
 
@@ -148,13 +151,18 @@ public final class HookServer: Sendable {
         }
     }
 
-    static func decodeEnvelope(_ line: Data) -> HookMessage? {
+    static func decodeEnvelope(_ line: Data, receivedAt date: Date = .now) -> HookMessage? {
         guard
             let envelope = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
             let session = (envelope["session"] as? String).flatMap(UUID.init(uuidString:)),
-            let source = (envelope["source"] as? String).flatMap(HookSource.init(rawValue:)),
             let payload = envelope["payload"] as? [String: Any]
         else { return nil }
+        // Not a hook: the status line runs on every redraw and carries no event, only the limits.
+        if envelope["source"] as? String == "claude-statusline" {
+            guard let usage = UsageDecoder.claudeStatusLine(payload, at: date) else { return nil }
+            return HookMessage(sessionID: session, event: nil, agentSessionID: nil, usage: usage)
+        }
+        guard let source = (envelope["source"] as? String).flatMap(HookSource.init(rawValue:)) else { return nil }
         let decoded = HookDecoder.decode(source: source, payload: payload)
         return HookMessage(sessionID: session, event: decoded.event, agentSessionID: decoded.agentSessionID)
     }

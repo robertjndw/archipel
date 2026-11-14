@@ -22,7 +22,7 @@ struct AttentionTests {
             a.id: SessionActivity(status: .needsAttention(.permission), unread: true),
             b.id: SessionActivity(status: .finished, unread: true),
             c.id: SessionActivity(status: .working),
-            d.id: SessionActivity(status: .needsAttention(.idle)),
+            d.id: SessionActivity(status: .needsAttention(.question)),
         ]
     }
 

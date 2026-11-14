@@ -22,6 +22,7 @@ struct RootView: View {
                 // The tab row replaces the title bar, so the content has to
                 // reach the top edge of the window.
                 .ignoresSafeArea(edges: .top)
+                .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
         }
         .inspector(isPresented: $showInspector) {
             InspectorView(

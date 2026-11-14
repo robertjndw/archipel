@@ -11,7 +11,6 @@ struct SidebarProjectHeader: View {
 
     var body: some View {
         let summary = attentionSummary(of: project, activities: model.activities)
-        let tint = model.tint(of: project).color
         HStack(spacing: 8) {
             ProjectIconView(project: project, size: 20)
             // Primary, unlike a plain section title: the project is an item with an icon of its
@@ -22,7 +21,7 @@ struct SidebarProjectHeader: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 4)
-            trailing(summary: summary, tint: tint)
+            trailing(summary: summary)
         }
         // Room above, so each project reads as a group of its own.
         .padding(.top, 8)
@@ -37,7 +36,7 @@ struct SidebarProjectHeader: View {
     }
 
     @ViewBuilder
-    private func trailing(summary: AttentionSummary, tint: Color) -> some View {
+    private func trailing(summary: AttentionSummary) -> some View {
         if isHovered {
             Button("Add Worktree", systemImage: "plus") { model.addWorktreeProjectID = project.id }
                 .labelStyle(.iconOnly)
@@ -46,7 +45,7 @@ struct SidebarProjectHeader: View {
         } else if !project.isExpanded {
             // Expanded, the rows say all of this themselves.
             if let signal = summary.dominant {
-                SidebarAttentionBadge(signal: signal, tint: tint)
+                SidebarAttentionBadge(signal: signal)
             } else if project.worktrees.count > 1 {
                 Text(project.worktrees.count, format: .number)
                     .font(.caption)

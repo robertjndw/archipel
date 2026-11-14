@@ -50,21 +50,29 @@ struct SessionActivityTests {
         #expect(activity.status == .finished)
     }
 
-    @Test func unreadWhenNotViewed() {
+    @Test func unreadEvenWhenOnScreen() {
+        // The window can be open with nobody in front of it.
         for event in [
             AgentEvent.attentionRequested(.question, message: nil),
             .turnFinished(message: nil),
             .processExited(code: 0),
             .processExited(code: 1),
         ] {
-            var hidden = SessionActivity(status: .working)
-            hidden.apply(event, isBeingViewed: false)
-            #expect(hidden.unread, "\(event)")
-
-            var viewed = SessionActivity(status: .working)
-            viewed.apply(event, isBeingViewed: true)
-            #expect(!viewed.unread, "\(event)")
+            for onScreen in [false, true] {
+                var activity = SessionActivity(status: .working)
+                activity.apply(event, isBeingViewed: onScreen)
+                #expect(activity.unread, "\(event), on screen: \(onScreen)")
+            }
         }
+    }
+
+    @Test func aNewPromptClearsUnread() {
+        var activity = SessionActivity(status: .working)
+        activity.apply(.turnFinished(message: nil), isBeingViewed: false)
+        #expect(activity.unread)
+        activity.apply(.promptSubmitted, isBeingViewed: false)
+        #expect(!activity.unread)
+        #expect(activity.status == .working)
     }
 
     @Test func workingAndStartingNeverMarkUnread() {
@@ -95,7 +103,7 @@ struct SessionActivityTests {
     }
 
     @Test func needsUser() {
-        #expect(SessionActivity(status: .needsAttention(.idle)).needsUser)
+        #expect(SessionActivity(status: .needsAttention(.question)).needsUser)
         #expect(!SessionActivity(status: .finished).needsUser)
     }
 
@@ -103,5 +111,23 @@ struct SessionActivityTests {
         var activity = SessionActivity(status: .exited(code: 1), unread: true, lastMessage: "old")
         activity.apply(.launched, isBeingViewed: false)
         #expect(activity == SessionActivity(status: .starting))
+    }
+
+    @Test func onlyAFinishedTurnCountsAsDone() {
+        var activity = SessionActivity()
+        activity.apply(.launched, isBeingViewed: true)
+        activity.apply(.sessionStarted, isBeingViewed: true)
+        #expect(activity.status == .finished)
+        #expect(!activity.completedTurn)
+
+        activity.apply(.promptSubmitted, isBeingViewed: true)
+        activity.apply(.turnFinished(message: nil), isBeingViewed: true)
+        #expect(activity.completedTurn)
+
+        activity.apply(.promptSubmitted, isBeingViewed: true)
+        #expect(!activity.completedTurn)
+        activity.apply(.turnFinished(message: nil), isBeingViewed: true)
+        activity.apply(.launched, isBeingViewed: true)
+        #expect(!activity.completedTurn)
     }
 }
