@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Written by .github/workflows/release.yml to the gh-pages branch. -->
+	<key>SUFeedURL</key>
+	<string>https://robertjndw.github.io/archipel/appcast.xml</string>
+	<!-- Public half of the EdDSA key from Sparkle's generate_keys. The release workflow refuses to
+	     publish while this is still the placeholder, since every update would fail verification. -->
+	<key>SUPublicEDKey</key>
+	<string>REPLACE_WITH_SPARKLE_PUBLIC_KEY</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+</dict>
+</plist>

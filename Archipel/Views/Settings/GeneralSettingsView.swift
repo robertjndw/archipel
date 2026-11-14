@@ -4,11 +4,13 @@ import SwiftUI
 
 struct GeneralSettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Updater.self) private var updater
     @State private var isChoosingFolder = false
 
     var body: some View {
         @Bindable var settings = model.settings
         @Bindable var stayAwake = model.stayAwake
+        @Bindable var updater = updater
         let installed = ExternalEditor.installed()
         Form {
             Section {
@@ -86,6 +88,26 @@ struct GeneralSettingsView: View {
                     Text("Quitting stops agents. Their conversations resume when you reopen the session.")
                 }
             }
+
+            Section {
+                Toggle("Check for updates automatically", isOn: $updater.checksAutomatically)
+                Toggle(isOn: $updater.receivesBetaUpdates) {
+                    Text("Include beta versions")
+                    Text("Betas arrive earlier and may be rough around the edges. When a stable version is newer than your beta, you get that one.")
+                }
+                HStack {
+                    Spacer()
+                    Button("Check Now") { updater.checkForUpdates() }
+                        .disabled(!updater.canCheckForUpdates)
+                }
+            } header: {
+                Text("Updates")
+            } footer: {
+                if !Updater.isEnabled {
+                    Text("Updates are turned off in debug builds.")
+                }
+            }
+            .disabled(!Updater.isEnabled)
         }
         .formStyle(.grouped)
         .fileImporter(isPresented: $isChoosingFolder, allowedContentTypes: [.folder]) { result in
@@ -143,6 +165,7 @@ private struct WorktreesFolderPicker: View {
 #Preview("General") {
     GeneralSettingsView()
         .environment(AppModel.preview())
+        .environment(Updater())
         // The size the Settings window gives each pane.
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: 540)
@@ -157,6 +180,7 @@ private struct WorktreesFolderPicker: View {
     model.settings.showsMenuBarExtra = false
     return GeneralSettingsView()
         .environment(model)
+        .environment(Updater())
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: 540)
 }

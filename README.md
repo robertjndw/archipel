@@ -125,6 +125,9 @@ Run `./scripts/install.sh` again to update. It quits and relaunches an installed
 copy that is running, and leaves it untouched if the build fails. It replaces a
 copy installed from a DMG too.
 
+Copies installed from a DMG update themselves. Beta versions can be turned on
+under Settings > General > Updates.
+
 ## How agent status works
 
 Archipel starts each agent itself and injects what it needs per launch, so your own
@@ -183,8 +186,9 @@ open -n --env ARCHIPEL_SUPPORT_DIR=/tmp/archipel-dev path/to/Archipel.app
   in a window of its own.
 - `Packages/TerminalKit` - the only code that talks to Ghostty. Includes
   `terminal-demo`, a one-window harness for testing a surface in isolation.
-- `scripts/` - `build-ghostty.sh`, `install.sh`, and `build-dmg.sh` and
-  `notarize.sh`, which the release workflow uses. See
+- `scripts/` - `build-ghostty.sh`, `install.sh`, and `build-dmg.sh`,
+  `notarize.sh` and `update-appcast.py`, which the release workflow uses.
+  Releases and in-app updates (beta and stable channels) are described in
   [docs/releasing.md](docs/releasing.md).
 - `Configs/` - shared build settings and the optional `Local.xcconfig`.
 

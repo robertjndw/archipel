@@ -9,6 +9,7 @@ struct ArchipelApp: App {
     @State private var model = ArchipelApp.makeModel()
     @State private var palette = CommandPaletteModel()
     @State private var switcher = TabSwitcherModel()
+    @State private var updater = Updater()
     @State private var isAddingProject = false
     @AppStorage("showInspector") private var showInspector = true
 
@@ -43,6 +44,10 @@ struct ArchipelApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             SidebarCommands()
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…", systemImage: "arrow.down.circle") { updater.checkForUpdates() }
+                    .disabled(!Updater.isEnabled || !updater.canCheckForUpdates)
+            }
             CommandGroup(replacing: .newItem) {
                 if let worktree = model.selectedWorktree {
                     let modifiers: [EventModifiers] = [.command, [.command, .option], [.command, .shift]]
@@ -159,6 +164,7 @@ struct ArchipelApp: App {
         Settings {
             SettingsView()
                 .environment(model)
+                .environment(updater)
                 // Here and not on the main window, which may be closed while Settings is open.
                 .onChange(of: model.settings.appearance) { applyAppearance() }
                 .onChange(of: model.settings.showsDockBadge) { model.refreshDockBadge() }

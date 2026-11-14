@@ -26,11 +26,13 @@ struct SettingsView: View {
 #Preview("Window") {
     SettingsView()
         .environment(AppModel.preview())
+        .environment(Updater())
 }
 
 #Preview("Window, dark") {
     SettingsView()
         .environment(AppModel.preview())
+        .environment(Updater())
         .preferredColorScheme(.dark)
 }
 #endif

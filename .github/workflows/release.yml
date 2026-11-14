@@ -5,7 +5,10 @@ name: Release
 # workflow artifact instead, without touching any release.
 #
 # Signing is optional: with the Developer ID secrets set the DMG is signed and
-# notarized, without them it is signed ad-hoc. See docs/releasing.md.
+# notarized, without them it is signed ad-hoc. Only a notarized DMG is added to
+# the Sparkle appcast on gh-pages, and only when SPARKLE_PRIVATE_KEY is set. A
+# prerelease goes to the beta channel, a normal release to everyone.
+# See docs/releasing.md.
 on:
   release:
     types: [published]
@@ -14,8 +17,9 @@ on:
 permissions:
   contents: write
 
+# The appcast is a single file on gh-pages; two releases at once would race on it.
 concurrency:
-  group: release-${{ github.event.release.tag_name || github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -32,26 +36,55 @@ jobs:
       XCODE_APP: /Applications/Xcode_27.2.app
       HAS_DEVELOPER_ID: ${{ secrets.DEVELOPER_ID_P12_BASE64 != '' }}
       HAS_NOTARY_KEY: ${{ secrets.NOTARY_API_KEY != '' }}
+      HAS_SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+      # Keep in step with MACOSX_DEPLOYMENT_TARGET, so Sparkle never offers an update
+      # to a Mac that can't run it.
+      MINIMUM_SYSTEM_VERSION: "27.0"
     steps:
       - uses: actions/checkout@v4
 
       - name: Work out the version
         env:
           TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
+          publish_appcast=false
           if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
             if [[ ! "$TAG" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?)$ ]]; then
               echo "::error::Tag $TAG is not a version like v1.2.3 or v1.2.3-beta.1"
               exit 1
             fi
             version="${BASH_REMATCH[1]}"
+            # The app picks its default update channel from the suffix, so the two have to agree.
+            if [[ "$PRERELEASE" == "true" && "$version" != *-* ]]; then
+              echo "::error::Prereleases need a suffix such as v$version-beta.1"
+              exit 1
+            fi
+            if [[ "$PRERELEASE" != "true" && "$version" == *-* ]]; then
+              echo "::error::$TAG has a prerelease suffix but is not marked as a prerelease"
+              exit 1
+            fi
+            if [[ "$HAS_SPARKLE_KEY" == "true" && "$HAS_DEVELOPER_ID" == "true" && "$HAS_NOTARY_KEY" == "true" ]]; then
+              publish_appcast=true
+            else
+              echo "::warning::Not adding this release to the appcast. That needs SPARKLE_PRIVATE_KEY and the Developer ID and notarization secrets."
+            fi
           else
             version="0.0.0-dev.${{ github.run_number }}"
           fi
+          # Checked before the long build, since every update would fail verification on the Macs
+          # that download it.
+          if [[ "$publish_appcast" == "true" ]] && grep -q REPLACE_WITH_SPARKLE_PUBLIC_KEY Archipel/Info.plist; then
+            echo "::error::Set SUPublicEDKey in Archipel/Info.plist, see docs/releasing.md"
+            exit 1
+          fi
           {
             echo "VERSION=$version"
-            # CFBundleVersion has to grow with every build; the run number does.
+            # CFBundleVersion has to grow with every build, and Sparkle compares it across both
+            # channels. The run number does both.
             echo "BUILD=${{ github.run_number }}"
+            echo "CHANNEL=$([[ "$PRERELEASE" == "true" ]] && echo beta)"
+            echo "PUBLISH_APPCAST=$publish_appcast"
           } >> "$GITHUB_ENV"
 
       - name: Select Xcode
@@ -140,6 +173,53 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$TAG" "$DMG" --clobber
+
+      - name: Add the release to the appcast
+        if: github.event_name == 'release' && env.PUBLISH_APPCAST == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NOTES: ${{ github.event.release.body }}
+        run: |
+          # build-dmg.sh resolves packages into its own DerivedData, which is where Sparkle's
+          # command line tools end up.
+          sign_update=".build/dmg-derived/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update"
+          signature="$(echo "$SPARKLE_PRIVATE_KEY" | "$sign_update" --ed-key-file - -p "$DMG")"
+          length="$(stat -f %z "$DMG")"
+
+          notes="$RUNNER_TEMP/notes.html"
+          if [[ -n "$RELEASE_NOTES" ]]; then
+            gh api markdown -f text="$RELEASE_NOTES" -f mode=gfm -f context="$GITHUB_REPOSITORY" > "$notes"
+          else
+            : > "$notes"
+          fi
+
+          pages="$RUNNER_TEMP/gh-pages"
+          if git fetch --depth 1 origin gh-pages; then
+            git worktree add -B gh-pages "$pages" FETCH_HEAD
+          else
+            git worktree add --orphan -b gh-pages "$pages"
+          fi
+          touch "$pages/.nojekyll"
+
+          python3 -I scripts/update-appcast.py \
+            --appcast "$pages/appcast.xml" \
+            --version "$VERSION" \
+            --build "$BUILD" \
+            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$DMG")" \
+            --length "$length" \
+            --signature "$signature" \
+            --minimum-system-version "$MINIMUM_SYSTEM_VERSION" \
+            ${CHANNEL:+--channel "$CHANNEL"} \
+            --release-notes-html "$notes"
+
+          cd "$pages"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml .nojekyll
+          git commit -m "chore: publish $VERSION to the ${CHANNEL:-stable} channel"
+          git push origin gh-pages
 
       - name: Upload the DMG as an artifact
         if: github.event_name != 'release'
