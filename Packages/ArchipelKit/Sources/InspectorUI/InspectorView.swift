@@ -29,6 +29,21 @@ public struct InspectorView: View {
     }
 
     public var body: some View {
+        // A plain stack instead of safeAreaBar or safeAreaInset. With a bar the system draws a
+        // hairline on hover, and with an inset the rows show through the header.
+        VStack(spacing: 0) {
+            InspectorTabSwitcher(selection: $tab)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
+                // Lines the switcher up with the app's pane tab row, 36pt tall.
+                .frame(height: 36)
+            content
+        }
+        .background(Color.inspectorBackground)
+    }
+
+    @ViewBuilder
+    private var content: some View {
         Group {
             if let root {
                 // A new identity per root throws away the old models, tasks and expansion state.
@@ -43,15 +58,6 @@ public struct InspectorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // A bar rather than a stacked header, so the lists scroll under it with
-        // the system's edge effect instead of stopping at a divider.
-        .safeAreaBar(edge: .top, spacing: 0) {
-            InspectorTabSwitcher(selection: $tab)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 12)
-                // Lines the switcher up with the app's pane tab row, 36pt tall.
-                .frame(height: 36)
-        }
     }
 
     public enum Tab: String, CaseIterable, Identifiable {
@@ -140,9 +146,19 @@ struct InspectorActions {
 }
 
 /// The strip under the picker: what is being shown on the left, a refresh control on the right.
-struct InspectorHeader<Title: View>: View {
+/// `accessory` sits just before Refresh, for tab-specific controls like the sync menu.
+struct InspectorHeader<Title: View, Accessory: View>: View {
     let refresh: () -> Void
-    @ViewBuilder let title: Title
+    let title: Title
+    let accessory: Accessory
+    /// Bumped on every click to spin the icon once. A refresh is usually too quick to show progress.
+    @State private var spins = 0
+
+    init(refresh: @escaping () -> Void, @ViewBuilder title: () -> Title, @ViewBuilder accessory: () -> Accessory) {
+        self.refresh = refresh
+        self.title = title()
+        self.accessory = accessory()
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -151,14 +167,27 @@ struct InspectorHeader<Title: View>: View {
                 .truncationMode(.middle)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
-            Button("Refresh", systemImage: "arrow.clockwise", action: refresh)
+            accessory
+            Button("Refresh", systemImage: "arrow.clockwise") {
+                spins += 1
+                refresh()
+            }
                 .labelStyle(.iconOnly)
+                .symbolEffect(.rotate.clockwise.wholeSymbol, value: spins)
                 .buttonStyle(.borderless)
                 .help("Refresh")
         }
         .font(.callout)
         .padding(.leading, 14)
         .padding(.trailing, 10)
-        .padding(.vertical, 4)
+        // Extra space on top so the title doesn't stick to the picker.
+        .padding(.top, 10)
+        .padding(.bottom, 4)
+    }
+}
+
+extension InspectorHeader where Accessory == EmptyView {
+    init(refresh: @escaping () -> Void, @ViewBuilder title: () -> Title) {
+        self.init(refresh: refresh, title: title, accessory: { EmptyView() })
     }
 }

@@ -7,12 +7,13 @@ struct CommitControl: Equatable {
     enum Mode: Equatable { case commit, commitAll }
 
     var mode: Mode
+    var hasChanges: Bool
     var isEnabled: Bool
 
     init(status: GitStatus, message: String, isBusy: Bool) {
+        hasChanges = !status.staged.isEmpty || !status.unstaged.isEmpty
         // With nothing staged, "Commit All" is the only thing a commit can mean.
-        mode = status.staged.isEmpty ? .commitAll : .commit
-        let hasChanges = !status.staged.isEmpty || !status.unstaged.isEmpty
+        mode = status.staged.isEmpty && hasChanges ? .commitAll : .commit
         let hasMessage = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         isEnabled = hasChanges && hasMessage && !isBusy
     }
@@ -48,10 +49,13 @@ struct SyncState: Equatable {
 
     var canPush: Bool { canPublishOrPush && !isBusy }
 
-    /// Shown only when there is something to pull. A diverged branch still gets the button: pulling
-    /// then explains why it will not fast-forward, which is more useful than a missing button.
-    var showsPull: Bool { isPublished && !isDetached && behind > 0 }
-    var canPull: Bool { showsPull && !isBusy }
+    /// Whether the primary button should offer Pull. Also true for a diverged branch: the pull fails
+    /// with an explanation, which beats a push that git rejects.
+    var needsPull: Bool { isPublished && !isDetached && behind > 0 }
+
+    /// Pull fetches first, so from the menu it is useful even when the last known count is zero.
+    var canPull: Bool { isPublished && !isDetached && !isBusy }
+    var canFetch: Bool { hasRemote && !isBusy }
 
     var pushTitle: LocalizedStringKey { isPublished ? "Push" : "Publish Branch" }
 
@@ -62,6 +66,79 @@ struct SyncState: Equatable {
             return "The branch is \(behind) behind \(upstream ?? "its upstream"). Pull first, otherwise git rejects the push."
         }
         return ahead > 0 ? "Push \(ahead) commits to \(upstream ?? "the upstream")." : "Nothing to push."
+    }
+
+    var summary: LocalizedStringKey {
+        if isDetached { return "Detached HEAD" }
+        guard let upstream else { return hasRemote ? "Not published" : "No remote" }
+        if ahead == 0 && behind == 0 { return "Up to date with \(upstream)" }
+        return "\(ahead) ahead, \(behind) behind \(upstream)"
+    }
+}
+
+/// The main button under the message. Like in VS Code it commits while there are changes and
+/// otherwise offers pull, push or publish. Pull and push are always in the header's sync menu too.
+enum PrimaryAction: Equatable {
+    case commit(CommitControl)
+    case pull(commits: Int, isEnabled: Bool)
+    case push(commits: Int, isEnabled: Bool)
+    case publish(isEnabled: Bool)
+
+    init(commit: CommitControl, sync: SyncState) {
+        if commit.hasChanges {
+            self = .commit(commit)
+        } else if sync.needsPull {
+            // Pull before push: git rejects a push to an upstream that has moved on.
+            self = .pull(commits: sync.behind, isEnabled: sync.canPull)
+        } else if sync.canPublishOrPush {
+            self = sync.isPublished
+                ? .push(commits: sync.ahead, isEnabled: sync.canPush)
+                : .publish(isEnabled: sync.canPush)
+        } else {
+            // Nothing to do. A disabled Commit looks less alarming than a disabled Push.
+            self = .commit(commit)
+        }
+    }
+
+    var isEnabled: Bool {
+        switch self {
+        case .commit(let control): control.isEnabled
+        case .pull(_, let isEnabled), .push(_, let isEnabled), .publish(let isEnabled): isEnabled
+        }
+    }
+
+    var activity: ChangesModel.Activity {
+        switch self {
+        case .commit: .commit
+        case .pull: .pull
+        case .push, .publish: .push
+        }
+    }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .commit(let control): control.title
+        case .pull(let commits, _): "Pull ^[\(commits) Commit](inflect: true)"
+        case .push(let commits, _): "Push ^[\(commits) Commit](inflect: true)"
+        case .publish: "Publish Branch"
+        }
+    }
+
+    /// Up for push, down for pull.
+    var wiggle: WiggleSymbolEffect {
+        switch self {
+        case .pull: .wiggle.down
+        case .commit, .push, .publish: .wiggle.up
+        }
+    }
+
+    var symbol: String? {
+        switch self {
+        case .commit: nil
+        case .pull: "arrow.down"
+        case .push: "arrow.up"
+        case .publish: "icloud.and.arrow.up"
+        }
     }
 }
 
@@ -76,39 +153,6 @@ struct PullRequestLookup: Equatable {
     var outcome: Outcome
 }
 
-/// The pull request button: absent, an existing PR, or the create action.
-enum PullRequestControl: Equatable {
-    case hidden
-    case existing(GitPullRequest)
-    case create(isEnabled: Bool, help: LocalizedStringKey)
-
-    init(status: GitStatus, hasRemote: Bool, hasGitHub: Bool, lookup: PullRequestLookup?, isBusy: Bool) {
-        // A result for another branch says nothing about this one, and an unknown result stays hidden
-        // so the button does not flicker in and out.
-        guard hasGitHub, let branch = status.branch, let lookup, lookup.branch == branch else {
-            self = .hidden
-            return
-        }
-        switch lookup.outcome {
-        case .unavailable:
-            self = .hidden
-        case .found(let pullRequest):
-            self = .existing(pullRequest)
-        case .none:
-            let published = status.upstream != nil
-            let possible = published || hasRemote
-            let help: LocalizedStringKey = if !possible {
-                "This repository has no remote."
-            } else if !published || status.ahead > 0 {
-                "Pushes the branch, then opens the pull request page in the browser."
-            } else {
-                "Opens the pull request page in the browser."
-            }
-            self = .create(isEnabled: possible && !isBusy, help: help)
-        }
-    }
-}
-
 extension GitPullRequest {
     var symbol: String { state == .merged ? "arrow.triangle.merge" : "arrow.triangle.pull" }
 
@@ -121,7 +165,7 @@ extension GitPullRequest {
     }
 }
 
-/// Pinned under the file list: message, commit button, sync state and pull request control.
+/// Pinned under the file list: message, the primary action and the pull request control.
 struct CommitArea: View {
     @Bindable var model: ChangesModel
     /// Set by the host (the Commit… command) to put the cursor in the message field.
@@ -129,8 +173,7 @@ struct CommitArea: View {
     @FocusState private var messageFocused: Bool
 
     var body: some View {
-        let commit = model.commitControl
-        let sync = model.syncState
+        let action = model.primaryAction
 
         VStack(alignment: .leading, spacing: 8) {
             TextField("Commit message", text: $model.message, axis: .vertical)
@@ -148,35 +191,27 @@ struct CommitArea: View {
                     focusRequest = false
                 }
 
-            Button(action: model.commit) {
+            Button(action: model.performPrimaryAction) {
                 HStack(spacing: 6) {
-                    if model.activity == .commit { ProgressView().controlSize(.small) }
-                    Text(commit.title)
+                    if let symbol = action.symbol {
+                        Image(systemName: symbol)
+                            .symbolEffect(action.wiggle, options: .repeat(.continuous), isActive: model.activity == action.activity)
+                            .contentTransition(.symbolEffect(.replace))
+                    } else if model.activity == action.activity {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(action.title)
                 }
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.glassProminent)
             .controlSize(.large)
-            .disabled(!commit.isEnabled)
-            // Scoped to the focused field so Cmd-Return elsewhere in the window is left alone.
-            .keyboardShortcut(messageFocused ? KeyboardShortcut(.return, modifiers: .command) : nil)
-            .help(commit.mode == .commitAll ? "Stages all changes, then commits them." : "Commits the staged changes.")
-
-            HStack(spacing: 6) {
-                SyncSummary(sync: sync, activity: model.activity)
-                Spacer(minLength: 0)
-                if sync.showsPull {
-                    Button("Pull", action: model.pull)
-                        .buttonStyle(.glass)
-                        .disabled(!sync.canPull)
-                        .help("Fast-forwards to \(sync.upstream ?? "the upstream"). Never merges or rebases.")
-                }
-                Button(sync.pushTitle, action: model.push)
-                    .buttonStyle(.glass)
-                    .disabled(!sync.canPush)
-                    .help(sync.help)
-            }
-            .font(.callout)
+            .disabled(!action.isEnabled)
+            // Only while the field is focused and the button commits, so Cmd-Return never pushes.
+            .keyboardShortcut(messageFocused && action.activity == .commit ? KeyboardShortcut(.return, modifiers: .command) : nil)
+            .help(help(for: action))
+            .contentTransition(.interpolate)
+            .animation(.smooth(duration: 0.2), value: action)
 
             pullRequestButton
         }
@@ -186,12 +221,17 @@ struct CommitArea: View {
         .padding(.bottom, 12)
     }
 
+    private func help(for action: PrimaryAction) -> LocalizedStringKey {
+        switch action {
+        case .commit(let control): control.mode == .commitAll ? "Stages all changes, then commits them." : "Commits the staged changes."
+        case .pull: "Fast-forwards to \(model.syncState.upstream ?? "the upstream"). Never merges or rebases."
+        case .push, .publish: model.syncState.help
+        }
+    }
+
     @ViewBuilder
     private var pullRequestButton: some View {
-        switch model.pullRequestControl {
-        case .hidden:
-            EmptyView()
-        case .existing(let pullRequest):
+        if let pullRequest = model.pullRequest {
             Button {
                 NSWorkspace.shared.open(pullRequest.url)
             } label: {
@@ -204,50 +244,88 @@ struct CommitArea: View {
             }
             .buttonStyle(.glass)
             .help(pullRequest.title)
-        case .create(let isEnabled, let help):
-            Button(action: model.createPullRequest) {
-                HStack(spacing: 6) {
-                    if model.activity == .pullRequest { ProgressView().controlSize(.small) }
-                    Text("Create Pull Request")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glass)
-            .disabled(!isEnabled)
-            .help(help)
         }
     }
 }
 
-private struct SyncSummary: View {
-    let sync: SyncState
-    let activity: ChangesModel.Activity?
+/// Pull, push and fetch in the header next to Refresh, similar to Xcode's Integrate menu.
+/// The label shows the ahead/behind counts.
+struct SyncMenu: View {
+    let model: ChangesModel
 
     var body: some View {
-        HStack(spacing: 6) {
-            if let activity {
-                ProgressView().controlSize(.small)
-                Text(activity.progressTitle)
-            } else if sync.isDetached {
-                Text("Detached HEAD")
-            } else if !sync.isPublished {
-                Text("Not published")
-            } else if sync.ahead == 0 && sync.behind == 0 {
-                Text("Up to date")
-            } else {
-                if sync.ahead > 0 {
-                    Label(String(sync.ahead), systemImage: "arrow.up")
-                        .accessibilityLabel("\(sync.ahead) ahead")
-                }
-                if sync.behind > 0 {
-                    Label(String(sync.behind), systemImage: "arrow.down")
-                        .accessibilityLabel("\(sync.behind) behind")
-                }
-            }
+        let sync = model.syncState
+
+        Menu {
+            Button("Pull", systemImage: "arrow.down", action: model.pull)
+                .disabled(!sync.canPull)
+            Button(sync.pushTitle, systemImage: sync.isPublished ? "arrow.up" : "icloud.and.arrow.up", action: model.push)
+                .disabled(!sync.canPush)
+            Divider()
+            Button("Fetch", systemImage: "arrow.triangle.2.circlepath", action: model.fetch)
+                .disabled(!sync.canFetch)
+        } label: {
+            label(sync)
         }
-        .monospacedDigit()
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .help(sync.upstream.map { "Tracking \($0)" } ?? "")
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(sync.isDetached && !sync.canFetch)
+        .help(sync.summary)
+        .accessibilityLabel("Sync")
+        .accessibilityValue(Text(sync.summary))
     }
+
+    @ViewBuilder
+    private func label(_ sync: SyncState) -> some View {
+        // Commit progress already shows on the bottom button.
+        if let activity = model.activity, activity != .commit {
+            ActivitySymbol(activity: activity)
+        } else if sync.ahead > 0 || sync.behind > 0 {
+            HStack(spacing: 4) {
+                if sync.behind > 0 { Label(String(sync.behind), systemImage: "arrow.down") }
+                if sync.ahead > 0 { Label(String(sync.ahead), systemImage: "arrow.up") }
+            }
+            .labelStyle(.compact)
+            .monospacedDigit()
+            .contentTransition(.numericText())
+            .animation(.smooth, value: sync)
+        } else {
+            Image(systemName: "arrow.up.arrow.down")
+        }
+    }
+}
+
+/// Shown instead of a spinner while a remote action runs.
+private struct ActivitySymbol: View {
+    let activity: ChangesModel.Activity
+
+    var body: some View {
+        switch activity {
+        case .fetch:
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .symbolEffect(.rotate.clockwise.wholeSymbol, options: .repeat(.continuous))
+        case .pull:
+            Image(systemName: "arrow.down")
+                .symbolEffect(.wiggle.down, options: .repeat(.continuous))
+        case .push, .commit:
+            Image(systemName: "arrow.up")
+                .symbolEffect(.wiggle.up, options: .repeat(.continuous))
+        }
+    }
+}
+
+/// Tight spacing so "↓2 ↑1" reads as one indicator.
+private struct CompactLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 1) {
+            configuration.icon.imageScale(.small)
+            configuration.title
+        }
+    }
+}
+
+private extension LabelStyle where Self == CompactLabelStyle {
+    static var compact: CompactLabelStyle { .init() }
 }

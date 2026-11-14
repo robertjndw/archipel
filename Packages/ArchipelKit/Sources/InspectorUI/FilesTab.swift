@@ -101,6 +101,17 @@ struct FilesTab: View {
     @State private var selection: Set<URL> = []
 
     var body: some View {
+        VStack(spacing: 0) {
+            InspectorHeader(refresh: refresh) {
+                Label(model.root.lastPathComponent, systemImage: FileIcon.folder)
+            }
+            list
+        }
+        .task { await model.refresh() }
+        .onAppActivation(perform: refresh)
+    }
+
+    private var list: some View {
         Group {
             if let error = model.rootError {
                 ContentUnavailableView("Can't Read Folder", systemImage: "exclamationmark.triangle", description: Text(error))
@@ -111,6 +122,7 @@ struct FilesTab: View {
                 }
                 .listStyle(.sidebar)
                 .compactRows()
+                .scrollEdgeFade()
                 .contextMenu(forSelectionType: URL.self) { urls in
                     contextMenu(for: urls)
                 } primaryAction: { urls in
@@ -124,13 +136,6 @@ struct FilesTab: View {
             }
         }
         .frame(maxHeight: .infinity)
-        .safeAreaBar(edge: .top, spacing: 0) {
-            InspectorHeader(refresh: refresh) {
-                Label(model.root.lastPathComponent, systemImage: FileIcon.folder)
-            }
-        }
-        .task { await model.refresh() }
-        .onAppActivation(perform: refresh)
     }
 
     /// Double click or Return: files open for keeps, folders toggle.

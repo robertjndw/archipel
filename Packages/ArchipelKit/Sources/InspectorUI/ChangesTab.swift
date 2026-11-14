@@ -30,7 +30,6 @@ final class ChangesModel {
     var message = ""
     private(set) var activity: Activity?
     private(set) var hasRemote = false
-    private(set) var hasGitHub = false
     private(set) var pullRequestLookup: PullRequestLookup?
     private let searchPATH: @MainActor () async -> String
     private var gitHubTask: Task<GitHubClient?, Never>?
@@ -38,14 +37,14 @@ final class ChangesModel {
     private var lookupBranch: String?
 
     enum Activity: Equatable {
-        case commit, push, pull, pullRequest
+        case commit, push, pull, fetch
 
         var progressTitle: LocalizedStringKey {
             switch self {
             case .commit: "Committing…"
             case .push: "Pushing…"
             case .pull: "Pulling…"
-            case .pullRequest: "Opening…"
+            case .fetch: "Fetching…"
             }
         }
     }
@@ -63,11 +62,15 @@ final class ChangesModel {
         SyncState(status: status, hasRemote: hasRemote, isBusy: activity != nil)
     }
 
-    var pullRequestControl: PullRequestControl {
-        PullRequestControl(
-            status: status, hasRemote: hasRemote, hasGitHub: hasGitHub,
-            lookup: pullRequestLookup, isBusy: activity != nil
-        )
+    var primaryAction: PrimaryAction {
+        PrimaryAction(commit: commitControl, sync: syncState)
+    }
+
+    /// The current branch's pull request. A result for another branch says nothing about this one.
+    var pullRequest: GitPullRequest? {
+        guard let branch = status.branch, let lookup = pullRequestLookup, lookup.branch == branch,
+              case .found(let pullRequest) = lookup.outcome else { return nil }
+        return pullRequest
     }
 
     func refresh() async {
@@ -130,6 +133,14 @@ final class ChangesModel {
         }
     }
 
+    func performPrimaryAction() {
+        switch primaryAction {
+        case .commit: commit()
+        case .pull: pull()
+        case .push, .publish: push()
+        }
+    }
+
     func push() {
         guard syncState.canPush else { return }
         run(.push) { [git, root] in try await git.push(in: root) } onSuccess: { [self] in
@@ -142,17 +153,9 @@ final class ChangesModel {
         run(.pull) { [git, root] in try await git.pull(in: root) } onSuccess: {}
     }
 
-    func createPullRequest() {
-        guard case .create(true, _) = pullRequestControl else { return }
-        // Decided before the work starts: after the push the status still shows the old counts.
-        let needsPush = status.upstream == nil || status.ahead > 0
-        run(.pullRequest) { [git, root, weak self] in
-            guard let client = await self?.resolveGitHub() else { throw GitError(message: "The GitHub CLI (gh) was not found.") }
-            if needsPush { try await git.push(in: root) }
-            try await client.createPullRequestInBrowser(in: root)
-        } onSuccess: { [self] in
-            await refreshRemoteInfo()
-        }
+    func fetch() {
+        guard syncState.canFetch else { return }
+        run(.fetch) { [git, root] in try await git.fetch(in: root) } onSuccess: {}
     }
 
     /// Network and process work that changes slowly: the remote list and the branch's pull request.
@@ -171,7 +174,6 @@ final class ChangesModel {
         let client = await gitHubTask?.value
         // A missing gh is retried next time, since the user may install it while the app runs.
         if client == nil { gitHubTask = nil }
-        hasGitHub = client != nil
         return client
     }
 
@@ -246,27 +248,25 @@ struct ChangesTab: View {
     @State private var showsUnstaged = true
 
     var body: some View {
-        content
-            .frame(maxHeight: .infinity)
-            .safeAreaBar(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    InspectorHeader(refresh: refresh) {
-                        if let branch = model.status.branch {
-                            Label(branch, systemImage: "arrow.triangle.branch")
-                        } else if model.phase == .ready {
-                            Label("Detached HEAD", systemImage: "arrow.triangle.branch")
-                        }
-                    }
-                    if let message = model.actionError ?? model.refreshError {
-                        ErrorBanner(message: message, dismiss: model.actionError == nil ? nil : { model.actionError = nil })
-                    }
+        VStack(spacing: 0) {
+            InspectorHeader(refresh: refresh) {
+                if let branch = model.status.branch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                } else if model.phase == .ready {
+                    Label("Detached HEAD", systemImage: "arrow.triangle.branch")
                 }
+            } accessory: {
+                if model.phase == .ready { SyncMenu(model: model) }
             }
-            .safeAreaBar(edge: .bottom, spacing: 0) {
-                if model.phase == .ready {
-                    CommitArea(model: model, focusRequest: $focusCommitMessage)
-                }
+            if let message = model.actionError ?? model.refreshError {
+                ErrorBanner(message: message, dismiss: model.actionError == nil ? nil : { model.actionError = nil })
             }
+            content
+                .frame(maxHeight: .infinity)
+            if model.phase == .ready {
+                CommitArea(model: model, focusRequest: $focusCommitMessage)
+            }
+        }
         .refreshing(every: .seconds(3)) { await model.refresh() }
         .task { await model.refreshRemoteInfo() }
         .onChange(of: model.status.branch) { refreshRemoteInfo() }
@@ -302,8 +302,7 @@ struct ChangesTab: View {
             }
             .listStyle(.sidebar)
             .compactRows()
-            // The commit area holds a text field; a hard edge keeps it legible over the rows.
-            .scrollEdgeEffectStyle(.hard, for: .bottom)
+            .scrollEdgeFade()
             .contextMenu(forSelectionType: ChangeID.self) { ids in
                 if let id = ids.first, let change = model.change(for: id) {
                     ChangeContextMenu(change: change, staged: id.staged, model: model, actions: actions)
