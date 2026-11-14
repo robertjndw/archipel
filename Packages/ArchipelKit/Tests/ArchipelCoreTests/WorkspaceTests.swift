@@ -112,6 +112,43 @@ struct WorkspaceTests {
         #expect(ws == before)
     }
 
+    @Test func removeWithDismissRecordsPathOnly() {
+        var (ws, p, _, other) = fixture()
+        let key = Project.worktreeKey(other.path)
+        ws.removeWorktree(id: other.id)
+        #expect(ws.project(id: p.id)?.dismissedWorktreePaths == [])
+
+        ws.addWorktree(other, to: p.id)
+        ws.removeWorktree(id: other.id, dismiss: true)
+        #expect(ws.project(id: p.id)?.dismissedWorktreePaths == [key])
+
+        ws.addWorktree(other, to: p.id)
+        #expect(ws.project(id: p.id)?.dismissedWorktreePaths == [])
+    }
+
+    @Test func mainWorktreeIsNeverDismissed() {
+        var (ws, p, main, _) = fixture()
+        ws.removeWorktree(id: main.id, dismiss: true)
+        #expect(ws.project(id: p.id)?.worktrees.contains { $0.id == main.id } == true)
+        #expect(ws.project(id: p.id)?.dismissedWorktreePaths == [])
+    }
+
+    @Test func dismissAndRestoreWorktrees() {
+        var (ws, p, _, _) = fixture()
+        ws.dismissWorktree(path: URL(fileURLWithPath: "/tmp/a/"), in: p.id)
+        ws.dismissWorktree(path: URL(fileURLWithPath: "/tmp/b"), in: p.id)
+        #expect(ws.project(id: p.id)?.dismissedWorktreePaths == ["/tmp/a", "/tmp/b"])
+
+        ws.restoreDismissedWorktrees(in: p.id)
+        #expect(ws.project(id: p.id)?.dismissedWorktreePaths == [])
+    }
+
+    @Test func worktreeKeyIgnoresTrailingSlash() {
+        #expect(Project.worktreeKey(URL(fileURLWithPath: "/a/b/")) == Project.worktreeKey(URL(fileURLWithPath: "/a/b")))
+        #expect(Project.worktreeKey(URL(fileURLWithPath: "/a/b/")) == "/a/b")
+        #expect(Project.worktreeKey(URL(fileURLWithPath: "/a/c/../b")) == "/a/b")
+    }
+
     @Test func mainWorktreeCannotBeRemoved() {
         var (ws, p, main, other) = fixture()
         ws.removeWorktree(id: main.id)

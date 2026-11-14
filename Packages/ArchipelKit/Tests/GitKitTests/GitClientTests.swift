@@ -126,6 +126,56 @@ final class GitClientTests {
         }
     }
 
+    @Test func forceRemovesDirtyWorktree() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        let wt = base.appending(path: "wt-dirty")
+        try await git.addWorktree(repository: repo, path: wt, branch: "dirty", createBranch: true)
+        try "dirty\n".write(to: wt.appending(path: "a.txt"), atomically: true, encoding: .utf8)
+
+        try await git.removeWorktree(repository: repo, path: wt, force: true)
+
+        #expect(!FileManager.default.fileExists(atPath: wt.path))
+        #expect(try await git.worktrees(of: repo).count == 1)
+    }
+
+    @Test func deleteBranchReportsMergedAndUnmerged() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        try sh("branch", "merged")
+
+        let wt = base.appending(path: "wt-ahead")
+        try await git.addWorktree(repository: repo, path: wt, branch: "ahead", createBranch: true)
+        try "extra\n".write(to: wt.appending(path: "extra.txt"), atomically: true, encoding: .utf8)
+        try shIn(wt, "add", "-A")
+        try shIn(wt, "commit", "-q", "-m", "extra")
+        try await git.removeWorktree(repository: repo, path: wt)
+
+        #expect(try await git.deleteBranch("merged", in: repo) == .deleted)
+        #expect(try await git.deleteBranch("ahead", in: repo) == .keptUnmerged)
+        #expect(try await git.localBranches(in: repo) == ["ahead", "main"])
+    }
+
+    @Test func deleteBranchThrowsForUnknownBranch() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        await #expect(throws: GitError.self) {
+            _ = try await self.git.deleteBranch("nope", in: self.repo)
+        }
+    }
+
+    @Test func worktreeWithMissingFolderIsPrunable() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        let wt = base.appending(path: "wt-gone")
+        try await git.addWorktree(repository: repo, path: wt, branch: "gone", createBranch: true)
+        try FileManager.default.removeItem(at: wt)
+
+        let entries = try await git.worktrees(of: repo)
+
+        #expect(entries.map(\.isPrunable) == [false, true])
+    }
+
     @Test func currentBranchAndRepositoryDetection() async throws {
         let plain = base.appending(path: "plain")
         try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
@@ -259,9 +309,17 @@ final class GitClientTests {
     }
 
     private func sh(_ arguments: String...) throws {
+        try shIn(repo, arguments)
+    }
+
+    private func shIn(_ directory: URL, _ arguments: String...) throws {
+        try shIn(directory, arguments)
+    }
+
+    private func shIn(_ directory: URL, _ arguments: [String]) throws {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/git")
-        process.arguments = ["-C", repo.path] + arguments
+        process.arguments = ["-C", directory.path] + arguments
         process.standardOutput = FileHandle.nullDevice
         try process.run()
         process.waitUntilExit()

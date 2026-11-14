@@ -218,6 +218,7 @@ public struct Workspace: Codable, Equatable, Sendable {
         var worktree = worktree
         worktree.normalize()
         islands[loc.island].projects[loc.project].worktrees.append(worktree)
+        islands[loc.island].projects[loc.project].dismissedWorktreePaths.remove(Project.worktreeKey(worktree.path))
         selectWorktree(worktree.id)
         return true
     }
@@ -228,17 +229,30 @@ public struct Workspace: Codable, Equatable, Sendable {
         islands[loc.island].projects[loc.project].worktrees[loc.worktree].normalize()
     }
 
-    /// The main worktree is the project folder itself, so it cannot be removed.
-    public mutating func removeWorktree(id: Worktree.ID) {
+    /// The main worktree is the project folder itself, so it cannot be removed. With `dismiss` the
+    /// path is remembered so detection does not offer the folder straight back.
+    public mutating func removeWorktree(id: Worktree.ID, dismiss: Bool = false) {
         guard let loc = locate(worktreeID: id) else { return }
         let project = islands[loc.island].projects[loc.project]
         guard !project.worktrees[loc.worktree].isMain else { return }
         let islandID = islands[loc.island].id
-        islands[loc.island].projects[loc.project].worktrees.remove(at: loc.worktree)
+        let removed = islands[loc.island].projects[loc.project].worktrees.remove(at: loc.worktree)
+        if dismiss {
+            islands[loc.island].projects[loc.project].dismissedWorktreePaths.insert(Project.worktreeKey(removed.path))
+        }
         if selectedWorktreeIDByIsland[islandID] == id {
             selectedWorktreeIDByIsland[islandID] = project.worktrees.first(where: \.isMain)?.id
         }
         pruneSelections()
+    }
+
+    /// Stops detection from suggesting a worktree the user does not want in the sidebar.
+    public mutating func dismissWorktree(path: URL, in projectID: Project.ID) {
+        updateProject(id: projectID) { $0.dismissedWorktreePaths.insert(Project.worktreeKey(path)) }
+    }
+
+    public mutating func restoreDismissedWorktrees(in projectID: Project.ID) {
+        updateProject(id: projectID) { $0.dismissedWorktreePaths.removeAll() }
     }
 
     // MARK: Sessions and tabs

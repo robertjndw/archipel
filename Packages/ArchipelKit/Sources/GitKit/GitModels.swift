@@ -14,12 +14,25 @@ public struct GitWorktreeEntry: Equatable, Sendable {
     public var path: URL
     public var branch: String?
     public var isMain: Bool
+    /// Locked worktrees refuse `git worktree remove` unless forced twice.
+    public var isLocked: Bool
+    /// Git still knows the worktree but its folder is gone; `git worktree prune` would drop it.
+    public var isPrunable: Bool
 
-    public init(path: URL, branch: String?, isMain: Bool) {
+    public init(path: URL, branch: String?, isMain: Bool, isLocked: Bool = false, isPrunable: Bool = false) {
         self.path = path
         self.branch = branch
         self.isMain = isMain
+        self.isLocked = isLocked
+        self.isPrunable = isPrunable
     }
+}
+
+/// What `git branch -d` did with a branch.
+public enum GitBranchDeletion: Equatable, Sendable {
+    case deleted
+    /// Not merged into HEAD or its upstream, so git kept it rather than lose commits.
+    case keptUnmerged
 }
 
 public enum GitChangeKind: Sendable {
@@ -159,13 +172,23 @@ enum GitParser {
         var entries: [GitWorktreeEntry] = []
         var path: String?
         var branch: String?
+        var isLocked = false
+        var isPrunable = false
 
         func flush() {
             if let path {
-                entries.append(GitWorktreeEntry(path: URL(filePath: path, directoryHint: .isDirectory), branch: branch, isMain: entries.isEmpty))
+                entries.append(GitWorktreeEntry(
+                    path: URL(filePath: path, directoryHint: .isDirectory),
+                    branch: branch,
+                    isMain: entries.isEmpty,
+                    isLocked: isLocked,
+                    isPrunable: isPrunable
+                ))
             }
             path = nil
             branch = nil
+            isLocked = false
+            isPrunable = false
         }
 
         for line in output.unicodeScalars.split(separator: "\0", omittingEmptySubsequences: false) {
@@ -176,6 +199,10 @@ enum GitParser {
                 path = value
             } else if let ref = line.dropPrefix("branch ") {
                 branch = ref.hasPrefix("refs/heads/") ? String(ref.dropFirst("refs/heads/".count)) : ref
+            } else if line.elementsEqual("locked".unicodeScalars) || line.dropPrefix("locked ") != nil {
+                isLocked = true
+            } else if line.elementsEqual("prunable".unicodeScalars) || line.dropPrefix("prunable ") != nil {
+                isPrunable = true
             }
         }
         flush()

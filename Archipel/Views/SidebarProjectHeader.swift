@@ -61,6 +61,9 @@ struct SidebarProjectHeader: View {
     @ViewBuilder
     private var menu: some View {
         Button("Add Worktree…", systemImage: "plus") { addingWorktreeTo = project }
+        if !project.dismissedWorktreePaths.isEmpty {
+            Button("Show Dismissed Worktrees", systemImage: "eye") { model.restoreDismissedWorktrees(in: project.id) }
+        }
         Divider()
         Button("Rename…", systemImage: "pencil") {
             renaming = RenameTarget(kind: .project(project.id), name: project.name)

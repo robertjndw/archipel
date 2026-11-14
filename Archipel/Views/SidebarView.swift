@@ -8,7 +8,7 @@ struct SidebarView: View {
     let toggleSidebar: () -> Void
     @State private var renaming: RenameTarget?
     @State private var addingWorktreeTo: Project?
-    @State private var deleting: Worktree?
+    @State private var removing: Worktree?
     @State private var islandEditor: IslandEditor.Mode?
 
     var body: some View {
@@ -24,11 +24,15 @@ struct SidebarView: View {
                             sessions: model.sessionRows(for: worktree),
                             isSelected: worktree.id == model.selectedWorktree?.id,
                             tint: tint,
-                            deleting: $deleting,
+                            removing: $removing,
                             renaming: $renaming
                         )
                         .tag(worktree.id)
-                        .contextMenu { SidebarWorktreeMenu(worktree: worktree, deleting: $deleting) }
+                        .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
+                    }
+                    let suggested = model.suggestedWorktrees(for: project)
+                    if !suggested.isEmpty {
+                        DetectedWorktreesRow(project: project, entries: suggested)
                     }
                 } header: {
                     SidebarProjectHeader(project: project, renaming: $renaming, addingWorktreeTo: $addingWorktreeTo)
@@ -69,15 +73,8 @@ struct SidebarView: View {
         .sheet(item: $islandEditor) { mode in
             IslandEditor(mode: mode)
         }
-        .confirmationDialog(
-            "Delete the worktree \(deleting?.displayName ?? "")?",
-            item: $deleting
-        ) { worktree in
-            Button("Delete Worktree", role: .destructive) {
-                model.removeWorktree(worktree.id, deleteFromDisk: true)
-            }
-        } message: { worktree in
-            Text("The folder \(worktree.path.path) is removed and its sessions are closed. The branch is kept. Git refuses if the worktree has uncommitted changes.")
+        .sheet(item: $removing) { worktree in
+            RemoveWorktreeSheet(worktree: worktree)
         }
     }
 

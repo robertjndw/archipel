@@ -13,7 +13,7 @@ struct SidebarWorktreeRow: View {
     let sessions: [SessionRowContent]
     let isSelected: Bool
     let tint: Color
-    @Binding var deleting: Worktree?
+    @Binding var removing: Worktree?
     @Binding var renaming: RenameTarget?
     @State private var isHovered = false
 
@@ -48,9 +48,12 @@ struct SidebarWorktreeRow: View {
             }
         }
         .padding(.vertical, 6)
+        .opacity(isMissing ? 0.6 : 1)
         .onHover { isHovered = $0 }
         .animation(.snappy(duration: 0.2), value: content.trailing)
     }
+
+    private var isMissing: Bool { model.missingWorktrees.contains(worktree.id) }
 
     private var symbol: String {
         worktree.branch == nil ? "folder" : "arrow.triangle.branch"
@@ -58,6 +61,17 @@ struct SidebarWorktreeRow: View {
 
     @ViewBuilder
     private var detail: some View {
+        if isMissing {
+            Text("Folder missing")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        } else {
+            contentDetail
+        }
+    }
+
+    @ViewBuilder
+    private var contentDetail: some View {
         switch content.detail {
         case .message(let message, let needsUser):
             Text(message)
@@ -88,7 +102,7 @@ struct SidebarWorktreeRow: View {
                 }
                 .help("New \(model.defaultAgent.displayName) Session")
                 Menu("More", systemImage: "ellipsis") {
-                    SidebarWorktreeMenu(worktree: worktree, deleting: $deleting)
+                    SidebarWorktreeMenu(worktree: worktree, removing: $removing)
                 }
                 .menuIndicator(.hidden)
                 .help("More")
@@ -241,7 +255,7 @@ struct SidebarSessionRow: View {
 struct SidebarWorktreeMenu: View {
     @Environment(AppModel.self) private var model
     let worktree: Worktree
-    @Binding var deleting: Worktree?
+    @Binding var removing: Worktree?
 
     var body: some View {
         NewSessionButtons(worktree: worktree.id)
@@ -268,12 +282,12 @@ struct SidebarWorktreeMenu: View {
             Divider()
             Button("Project Settings…", systemImage: "gearshape") { model.openProjectSettings(project.id) }
         }
-        if !worktree.isMain {
-            Divider()
-            Button("Remove from Sidebar", systemImage: "minus.circle") {
-                model.removeWorktree(worktree.id, deleteFromDisk: false)
-            }
-            Button("Delete Worktree…", systemImage: "trash", role: .destructive) { deleting = worktree }
+        Divider()
+        if worktree.isMain {
+            Button("Primary Checkout Can't Be Removed", systemImage: "lock") {}
+                .disabled(true)
+        } else {
+            Button("Remove Worktree…", systemImage: "minus.circle") { removing = worktree }
         }
     }
 }

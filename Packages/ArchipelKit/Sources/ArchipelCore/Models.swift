@@ -177,6 +177,9 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
     public var worktreesDirectory: URL?
     /// Branch or ref that new branches start from. nil starts from the main checkout's HEAD.
     public var baseBranch: String?
+    /// Standardized paths of worktrees the user took out of the sidebar or declined, so detection
+    /// stops suggesting them. They can still be added by hand from the Add Worktree sheet.
+    public var dismissedWorktreePaths: Set<String>
 
     public init(
         id: UUID = UUID(),
@@ -188,7 +191,8 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
         tint: Tint? = nil,
         icon: ProjectIcon = .automatic,
         worktreesDirectory: URL? = nil,
-        baseBranch: String? = nil
+        baseBranch: String? = nil,
+        dismissedWorktreePaths: Set<String> = []
     ) {
         self.id = id
         self.name = name
@@ -200,6 +204,7 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
         self.icon = icon
         self.worktreesDirectory = worktreesDirectory
         self.baseBranch = baseBranch
+        self.dismissedWorktreePaths = dismissedWorktreePaths
     }
 
     public init(from decoder: any Decoder) throws {
@@ -214,6 +219,12 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
         icon = try c.decodeIfPresent(ProjectIcon.self, forKey: .icon) ?? .automatic
         worktreesDirectory = try c.decodeIfPresent(URL.self, forKey: .worktreesDirectory)
         baseBranch = try c.decodeIfPresent(String.self, forKey: .baseBranch)
+        dismissedWorktreePaths = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedWorktreePaths) ?? []
+    }
+
+    /// The key detection and dismissal compare by, so `/a/b` and `/a/b/` are the same worktree.
+    public static func worktreeKey(_ path: URL) -> String {
+        path.standardizedFileURL.path(percentEncoded: false).trimmingSuffix("/")
     }
 }
 
@@ -237,5 +248,11 @@ public struct Island: Codable, Equatable, Identifiable, Sendable {
         self.symbol = symbol
         self.tint = tint
         self.projects = projects
+    }
+}
+
+private extension String {
+    func trimmingSuffix(_ suffix: String) -> String {
+        count > 1 && hasSuffix(suffix) ? String(dropLast(suffix.count)) : self
     }
 }

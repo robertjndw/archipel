@@ -41,6 +41,12 @@ final class AppModel {
     /// Transient repository state for the sidebar rows of the selected island.
     var gitSummaries: [Worktree.ID: GitSummary] = [:]
     var pullRequests: [Worktree.ID: PullRequestLookup] = [:]
+    /// Everything `git worktree list` reported per project at the last refresh. Suggestions are
+    /// derived from it on read, so adding or dismissing one updates the sidebar without a git call.
+    var gitWorktrees: [Project.ID: [GitWorktreeEntry]] = [:]
+    /// Tracked worktrees whose folder was deleted behind our back.
+    var missingWorktrees: Set<Worktree.ID> = []
+    @ObservationIgnored var worktreeDiscoveryGeneration = 0
     @ObservationIgnored var gitRefresh = GitRefreshState()
     private let store: WorkspaceStore
     private let terminalApp: TerminalApp?
@@ -99,6 +105,7 @@ final class AppModel {
         }
         for id in visibleSessionIDs { ensureRunning(id) }
         refreshBranches()
+        refreshWorktreeDiscovery()
         refreshGitStatus(lookingUpPullRequests: true)
         loadProjectIcons()
         watchPaneClicks()
@@ -180,6 +187,7 @@ final class AppModel {
         terminalApp?.setAppFocused(true)
         for id in visibleSessionIDs { markViewed(id) }
         refreshBranches()
+        refreshWorktreeDiscovery()
         refreshGitStatus(lookingUpPullRequests: true, minimumPullRequestAge: .seconds(30))
         startGitStatusTimer()
     }
@@ -252,16 +260,71 @@ final class AppModel {
 
     // MARK: Projects
 
-    func addProject(folder: URL) {
-        guard let island = selectedIsland else { return }
+    /// One at a time, so two picked worktrees of the same repository end up in one project
+    /// instead of racing to create it twice.
+    func addProjects(folders: [URL]) {
+        Task {
+            for folder in folders { await addProject(folder: folder) }
+            refreshBranches()
+            refreshWorktreeDiscovery()
+        }
+    }
+
+    /// Like VS Code, a picked linked worktree is treated as part of its repository: the main
+    /// checkout becomes the project (and its locked primary), and the picked folder joins it as a
+    /// worktree. Plain folders and main checkouts become projects as they are.
+    private func addProject(folder: URL) async {
+        if let tracked = project(atFolder: folder), let main = tracked.worktrees.first(where: \.isMain) {
+            changingSelection { $0.selectWorktree(main.id) }
+            return
+        }
+        if let main = await mainCheckout(ofLinkedWorktree: folder) {
+            let worktree = Worktree(path: folder, branch: await git.currentBranch(in: folder))
+            if let existing = project(atFolder: main) {
+                changingSelection {
+                    $0.updateProject(id: existing.id) { $0.isExpanded = true }
+                    if !$0.addWorktree(worktree, to: existing.id),
+                       let tracked = existing.worktrees.first(where: { Self.resolvedKey($0.path) == Self.resolvedKey(folder) }) {
+                        $0.selectWorktree(tracked.id)
+                    }
+                }
+                return
+            }
+            let project = insertProject(folder: main)
+            changingSelection { _ = $0.addWorktree(worktree, to: project.id) }
+            return
+        }
+        insertProject(folder: folder)
+    }
+
+    private func project(atFolder folder: URL) -> Project? {
+        // Resolved because git hands back the main checkout with symlinks followed.
+        let key = Self.resolvedKey(folder)
+        return workspace.islands.flatMap(\.projects).first { Self.resolvedKey($0.folderURL) == key }
+    }
+
+    @discardableResult
+    private func insertProject(folder: URL) -> Project {
         let main = Worktree(path: folder, isMain: true)
         let project = Project(name: folder.lastPathComponent, folderURL: folder, worktrees: [main])
+        guard let island = selectedIsland else { return project }
         changingSelection {
             _ = $0.addProject(project, to: island.id)
             $0.selectWorktree(main.id)
         }
-        refreshBranches()
         loadIcon(of: project)
+        return project
+    }
+
+    /// The main checkout when `folder` is the root of a linked worktree; nil for main checkouts,
+    /// subfolders, bare repositories and plain folders.
+    private func mainCheckout(ofLinkedWorktree folder: URL) async -> URL? {
+        guard let entries = try? await git.worktrees(of: folder),
+              let main = entries.first, main.isMain,
+              entries.dropFirst().contains(where: { Self.resolvedKey($0.path) == Self.resolvedKey(folder) }),
+              await git.isRepository(main.path)
+        else { return nil }
+        return main.path
     }
 
     func renameProject(_ id: Project.ID, to name: String) {
@@ -283,11 +346,19 @@ final class AppModel {
 
     // MARK: Worktrees
 
-    /// Git worktrees of the project that are not in the sidebar yet.
+    /// Git worktrees of the project that are not in the sidebar yet, dismissed ones included.
+    /// Prunable ones are left out: their folder is gone, so there is nothing to open.
     func availableWorktrees(for project: Project) async throws -> [GitWorktreeEntry] {
-        let known = Set(project.worktrees.map { $0.path.standardizedFileURL.path })
-        return try await git.worktrees(of: project.folderURL)
-            .filter { !known.contains($0.path.standardizedFileURL.path) }
+        let entries = try await git.worktrees(of: project.folderURL)
+        let current = workspace.project(id: project.id) ?? project
+        let aligned = Self.aligned(entries, to: current)
+        gitWorktrees[project.id] = aligned
+        return Self.untracked(aligned ?? entries, in: current)
+    }
+
+    static func untracked(_ entries: [GitWorktreeEntry], in project: Project) -> [GitWorktreeEntry] {
+        let known = Set(project.worktrees.map { Project.worktreeKey($0.path) })
+        return entries.filter { !$0.isPrunable && !known.contains(Project.worktreeKey($0.path)) }
     }
 
     func addExistingWorktree(_ entry: GitWorktreeEntry, to project: Project.ID) {
@@ -316,25 +387,50 @@ final class AppModel {
         }
     }
 
-    /// Takes the worktree out of the sidebar. With `deleteFromDisk` the folder
-    /// is removed through git as well, which refuses when it has uncommitted
-    /// changes; the branch is always kept.
-    func removeWorktree(_ id: Worktree.ID, deleteFromDisk: Bool) {
+    /// Takes the worktree out of the sidebar. With `deleteFolder` git removes the folder too,
+    /// forcing past uncommitted changes when `force` is set (the sheet only sets it after warning
+    /// about them). `deleteBranch` names the branch the user agreed to delete; it is deleted only if
+    /// the worktree still had it checked out, and git keeps it when unmerged.
+    /// Throws, leaving everything in place, when git refuses to remove the folder. A branch that
+    /// cannot be deleted does not throw: the worktree is gone by then, so it is reported instead.
+    func removeWorktree(_ id: Worktree.ID, deleteFolder: Bool, deleteBranch: String?, force: Bool) async throws -> BranchRemoval {
         guard let worktree = workspace.worktree(id: id), !worktree.isMain,
               let project = workspace.project(containingWorktree: id)
-        else { return }
-        Task {
-            if deleteFromDisk {
-                do {
-                    try await git.removeWorktree(repository: project.folderURL, path: worktree.path)
-                } catch {
-                    problem = "The worktree was not removed. \(error.localizedDescription)"
-                    return
-                }
-            }
-            for session in worktree.sessions { tearDown(session.id) }
-            changingSelection { $0.removeWorktree(id: id) }
+        else { return .notRequested }
+        // Asked fresh because the cached name lags behind checkouts made in the terminal.
+        let checkedOut = deleteFolder && deleteBranch != nil ? await git.currentBranch(in: worktree.path) : nil
+        if deleteFolder {
+            try await git.removeWorktree(repository: project.folderURL, path: worktree.path, force: force)
         }
+        // Re-read: sessions may have been opened while git was busy.
+        let sessions = workspace.worktree(id: id)?.sessions ?? worktree.sessions
+        for session in sessions { tearDown(session.id) }
+        // A folder that stays on disk would be suggested again right away.
+        changingSelection { $0.removeWorktree(id: id, dismiss: !deleteFolder) }
+        missingWorktrees.remove(id)
+        refreshWorktreeDiscovery()
+
+        guard deleteFolder, let branch = deleteBranch else { return .notRequested }
+        // The user confirmed the name shown in the sheet. If the worktree switched branches since,
+        // that name is not what it had checked out, so nothing is deleted on a guess.
+        guard checkedOut == branch else {
+            return .failed(branch, "the worktree no longer had it checked out.")
+        }
+        do {
+            return switch try await git.deleteBranch(branch, in: project.folderURL) {
+            case .deleted: .deleted(branch)
+            case .keptUnmerged: .keptUnmerged(branch)
+            }
+        } catch {
+            return .failed(branch, error.localizedDescription)
+        }
+    }
+
+    enum BranchRemoval: Equatable {
+        case notRequested
+        case deleted(String)
+        case keptUnmerged(String)
+        case failed(String, String)
     }
 
     /// The branch of a checkout changes behind our back whenever the user or

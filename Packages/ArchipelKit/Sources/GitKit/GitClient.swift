@@ -33,8 +33,22 @@ public struct GitClient: Sendable {
         try await run(args, in: repository, readOnly: false)
     }
 
-    public func removeWorktree(repository: URL, path: URL) async throws {
-        try await run(["worktree", "remove", "--", path.path], in: repository, readOnly: false)
+    /// Without `force` git refuses a worktree with uncommitted or untracked changes. Locked worktrees
+    /// stay protected either way: git wants `--force` twice for those, and we never send that.
+    public func removeWorktree(repository: URL, path: URL, force: Bool = false) async throws {
+        let args = ["worktree", "remove"] + (force ? ["--force"] : []) + ["--", path.path]
+        try await run(args, in: repository, readOnly: false)
+    }
+
+    /// Safe delete with `-d`: a branch not merged into HEAD (or its upstream) is kept, not thrown away.
+    public func deleteBranch(_ branch: String, in repository: URL) async throws -> GitBranchDeletion {
+        // C locale so the message below is not translated.
+        let result = try await GitProcess.run(["branch", "-d", branch], in: repository, readOnly: false, environment: ["LC_ALL": "C"])
+        if result.status == 0 { return .deleted }
+        // git has no dedicated exit code for this, so the message is the only way to tell it apart
+        // from a missing branch or one checked out elsewhere.
+        if result.stderr.contains("not fully merged") { return .keptUnmerged }
+        throw GitError(command: "git branch", output: result)
     }
 
     public func status(in folder: URL) async throws -> GitStatus {
@@ -195,8 +209,9 @@ enum GitProcess {
 
     static let gitExecutable = URL(filePath: "/usr/bin/git")
 
-    static func run(_ arguments: [String], in folder: URL, readOnly: Bool) async throws -> Output {
-        var environment = ["GIT_TERMINAL_PROMPT": "0"]
+    /// `environment` is layered over the defaults below.
+    static func run(_ arguments: [String], in folder: URL, readOnly: Bool, environment extra: [String: String] = [:]) async throws -> Output {
+        var environment = ["GIT_TERMINAL_PROMPT": "0"].merging(extra) { _, new in new }
         if readOnly {
             // Keeps status from taking index.lock to refresh the index, which would race an agent's own git commands.
             environment["GIT_OPTIONAL_LOCKS"] = "0"

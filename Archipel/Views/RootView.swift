@@ -39,7 +39,7 @@ struct RootView: View {
         .tint(model.selectedIsland?.tint.color)
         .fileImporter(isPresented: $isAddingProject, allowedContentTypes: [.folder], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {
-                for url in urls { model.addProject(folder: url) }
+                model.addProjects(folders: urls)
             }
         }
         .confirmationDialog(

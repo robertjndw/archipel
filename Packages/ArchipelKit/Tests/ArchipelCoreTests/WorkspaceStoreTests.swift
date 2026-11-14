@@ -35,6 +35,24 @@ struct WorkspaceStoreTests {
         #expect(text.contains("\n"))
     }
 
+    @Test func dismissedWorktreePathsDefaultToEmptyAndRoundTrip() throws {
+        let json = """
+        {"id": "FC22F8C5-F068-43A6-B99B-C507CA7A2550", "name": "demo", "folderURL": "file:///tmp/demo/", "worktrees": []}
+        """
+        let decoded = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
+        #expect(decoded.dismissedWorktreePaths.isEmpty)
+
+        let url = tempFile()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent().deletingLastPathComponent()) }
+        let store = WorkspaceStore(fileURL: url)
+        var ws = Workspace()
+        let p = makeProject()
+        ws.addProject(p, to: ws.islands[0].id)
+        ws.dismissWorktree(path: URL(fileURLWithPath: "/tmp/p-gone"), in: p.id)
+        try store.save(ws)
+        #expect(try store.load().project(id: p.id)?.dismissedWorktreePaths == ["/tmp/p-gone"])
+    }
+
     @Test func missingFileGivesDefault() throws {
         let store = WorkspaceStore(fileURL: tempFile())
         let ws = try store.load()

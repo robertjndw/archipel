@@ -82,6 +82,8 @@ struct GitParserTests {
             "worktree /repo/main", "HEAD 1111", "branch refs/heads/main", "",
             "worktree /repo/wt with space", "HEAD 2222", "detached", "",
             "worktree /repo/feature", "HEAD 3333", "branch refs/heads/feature/x", "locked", "",
+            "worktree /repo/gone", "HEAD 4444", "branch refs/heads/gone", "prunable gitdir file points to non-existent location", "",
+            "worktree /repo/held", "HEAD 5555", "detached", "locked in use by CI", "prunable", "",
             "",
         ].joined(separator: "\0")
 
@@ -90,7 +92,9 @@ struct GitParserTests {
         #expect(entries == [
             GitWorktreeEntry(path: URL(filePath: "/repo/main", directoryHint: .isDirectory), branch: "main", isMain: true),
             GitWorktreeEntry(path: URL(filePath: "/repo/wt with space", directoryHint: .isDirectory), branch: nil, isMain: false),
-            GitWorktreeEntry(path: URL(filePath: "/repo/feature", directoryHint: .isDirectory), branch: "feature/x", isMain: false),
+            GitWorktreeEntry(path: URL(filePath: "/repo/feature", directoryHint: .isDirectory), branch: "feature/x", isMain: false, isLocked: true),
+            GitWorktreeEntry(path: URL(filePath: "/repo/gone", directoryHint: .isDirectory), branch: "gone", isMain: false, isPrunable: true),
+            GitWorktreeEntry(path: URL(filePath: "/repo/held", directoryHint: .isDirectory), branch: nil, isMain: false, isLocked: true, isPrunable: true),
         ])
     }
 }
