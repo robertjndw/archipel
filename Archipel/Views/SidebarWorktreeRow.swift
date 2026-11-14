@@ -8,28 +8,46 @@ struct SidebarWorktreeRow: View {
     @Environment(AppModel.self) private var model
     let worktree: Worktree
     let content: WorktreeRowContent
+    /// The worktree's sessions when it has several. They are part of this row, so the selection
+    /// highlight holds a worktree together with what runs in it.
+    let sessions: [SessionRowContent]
+    let isSelected: Bool
     let tint: Color
     @Binding var deleting: Worktree?
+    @Binding var renaming: RenameTarget?
     @State private var isHovered = false
 
+    /// Icon column plus its gap, which is where the title and everything under it starts.
+    private static let textInset: CGFloat = 28
+
     var body: some View {
-        HStack(spacing: 6) {
-            Label {
-                VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(tint)
+                    .frame(width: Self.textInset - 8, alignment: .center)
+                    .padding(.trailing, 8)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(content.title)
                         .fontWeight(content.isUnread ? .semibold : .regular)
                         .truncationMode(.middle)
                     detail
                 }
                 .lineLimit(1)
-            } icon: {
-                Image(systemName: symbol)
-                    .foregroundStyle(tint)
+                Spacer(minLength: 6)
+                trailing
             }
-            Spacer(minLength: 0)
-            trailing
+            if !sessions.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(sessions) { session in
+                        SidebarSessionRow(content: session, isInSelectedWorktree: isSelected, renaming: $renaming)
+                    }
+                }
+                .padding(.leading, Self.textInset)
+            }
         }
-        .padding(.vertical, content.detail == nil ? 0 : 2)
+        .padding(.vertical, 6)
         .onHover { isHovered = $0 }
         .animation(.snappy(duration: 0.2), value: content.trailing)
     }
@@ -43,7 +61,7 @@ struct SidebarWorktreeRow: View {
         switch content.detail {
         case .message(let message, let needsUser):
             Text(message)
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(needsUser ? AnyShapeStyle(.primary.opacity(0.75)) : AnyShapeStyle(.secondary))
                 .help(message)
         case .metadata(let variants):
@@ -97,7 +115,7 @@ struct SidebarMetadataLine: View {
                 view(for: item)
             }
         }
-        .font(.caption)
+        .font(.subheadline)
         .monospacedDigit()
         .foregroundStyle(.secondary)
     }
@@ -173,8 +191,8 @@ struct SidebarMetadataLine: View {
     }
 }
 
-/// A session under its worktree, shown when the worktree has more than one. Not a selectable row of
-/// the list: the list selects worktrees, and a click here picks the session inside one.
+/// A session inside its worktree's row, shown when the worktree has more than one. A click picks the
+/// session; the list itself only ever selects worktrees.
 struct SidebarSessionRow: View {
     @Environment(AppModel.self) private var model
     let content: SessionRowContent
@@ -182,30 +200,34 @@ struct SidebarSessionRow: View {
     @Binding var renaming: RenameTarget?
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: SidebarMetadataLine.symbol(for: content.agent))
-                .imageScale(.small)
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
-            Text(content.title)
-                .font(.callout)
-                .fontWeight(isCurrent ? .medium : .regular)
-                .foregroundStyle(isCurrent ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-            StatusGlyph(activity: content.activity)
-                .controlSize(.mini)
+        Button {
+            model.select(session: content.id)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: SidebarMetadataLine.symbol(for: content.agent))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                Text(content.title)
+                    .font(.callout)
+                    .fontWeight(isCurrent ? .medium : .regular)
+                    .foregroundStyle(isCurrent ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                // A session that was never started has nothing to report; a glyph on every such
+                // line would only be noise.
+                if content.activity.status != .notStarted {
+                    StatusGlyph(activity: content.activity)
+                        .controlSize(.mini)
+                        .scaleEffect(0.85)
+                }
+            }
+            .frame(height: 24)
+            .contentShape(.rect)
         }
-        // Lines the agent icon up under the worktree title rather than its icon.
-        .padding(.leading, 22)
-        .contentShape(.rect)
-        .onTapGesture { model.select(session: content.id) }
-        .selectionDisabled()
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
+        .buttonStyle(.plain)
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
-        .accessibilityAction { model.select(session: content.id) }
         .contextMenu {
             Button("Show Session", systemImage: "terminal") { model.select(session: content.id) }
             Button("Rename…", systemImage: "pencil") {

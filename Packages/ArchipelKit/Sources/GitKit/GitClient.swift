@@ -53,6 +53,13 @@ public struct GitClient: Sendable {
         try await run(["commit", "-m", message], in: folder, readOnly: false)
     }
 
+    /// The URL of `origin`, or nil without one.
+    public func originURL(in folder: URL) async -> String? {
+        guard let output = try? await run(["remote", "get-url", "origin"], in: folder) else { return nil }
+        let url = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return url.isEmpty ? nil : url
+    }
+
     /// True when any remote is configured.
     public func hasRemote(in folder: URL) async -> Bool {
         let output = try? await run(["remote"], in: folder)

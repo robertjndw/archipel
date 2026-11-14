@@ -8,6 +8,19 @@ extension AppModel {
         AgentDefinition.builtIn(id: settings.defaultAgentID) ?? .claude
     }
 
+    /// True while at least one project of the selected island shows its worktrees.
+    var hasExpandedProjects: Bool {
+        selectedIsland?.projects.contains(where: \.isExpanded) ?? false
+    }
+
+    /// Collapses or expands every project of the selected island in one step.
+    func setAllProjects(expanded: Bool) {
+        let ids = selectedIsland?.projects.map(\.id) ?? []
+        mutate { workspace in
+            for id in ids { workspace.updateProject(id: id) { $0.isExpanded = expanded } }
+        }
+    }
+
     func islandSummaries() -> [Island.ID: AttentionSummary] {
         Dictionary(uniqueKeysWithValues: workspace.islands.map { ($0.id, attentionSummary(of: $0, activities: activities)) })
     }

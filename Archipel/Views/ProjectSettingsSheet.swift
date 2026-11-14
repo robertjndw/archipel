@@ -122,7 +122,7 @@ struct ProjectSettingsSheet: View {
         } header: {
             Text("Icon")
         } footer: {
-            Text("Automatic uses an icon found in the repository, such as its app icon, favicon or logo, and falls back to the project's initial.")
+            Text("Automatic uses an icon found in the repository, such as its app icon, favicon or logo. Without one it uses the avatar of the repository's owner on GitHub, and otherwise the project's initial.")
         }
 
         Section {

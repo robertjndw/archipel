@@ -13,14 +13,21 @@ struct SidebarProjectHeader: View {
     var body: some View {
         let summary = attentionSummary(of: project, activities: model.activities)
         let tint = model.tint(of: project).color
-        HStack(spacing: 6) {
-            ProjectIconView(project: project, size: 16)
+        HStack(spacing: 8) {
+            ProjectIconView(project: project, size: 20)
+            // Primary, unlike a plain section title: the project is an item with an icon of its
+            // own, the way a project or an account heads its group in Xcode and Mail.
             Text(project.name)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 4)
             trailing(summary: summary, tint: tint)
         }
+        // Room above, so each project reads as a group of its own.
+        .padding(.top, 8)
+        .padding(.bottom, 4)
         .contentShape(.rect)
         .onHover { isHovered = $0 }
         .animation(.snappy(duration: 0.2), value: isHovered)

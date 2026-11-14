@@ -1,5 +1,6 @@
 import AppKit
 import ArchipelCore
+import GitKit
 
 extension AppModel {
     func updateProject(_ id: Project.ID, _ change: (inout Project) -> Void) {
@@ -43,7 +44,8 @@ extension AppModel {
     }
 }
 
-/// Looks for an image that already represents a repository: its app icon, favicon or logo.
+/// Looks for an image that already represents a repository: its app icon, favicon or logo, and
+/// failing those the avatar of its owner on GitHub.
 nonisolated enum ProjectIconFinder {
     /// Checked in order, relative to the repository root.
     private static let wellKnownPaths = [
@@ -70,7 +72,19 @@ nonisolated enum ProjectIconFinder {
             let url = root.appending(path: path)
             if FileManager.default.fileExists(atPath: url.path), let image = thumbnail(of: url) { return image }
         }
-        return nil
+        return await gitHubAvatar(for: root)
+    }
+
+    /// The avatar of the repository's owner on GitHub, for a repository that ships no icon of its
+    /// own. URLSession's cache keeps this from being a download on every launch.
+    private static func gitHubAvatar(for root: URL) async -> NSImage? {
+        guard let origin = await GitClient().originURL(in: root),
+              let url = GitHubRemote(remoteURL: origin)?.avatarURL(size: 128),
+              let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let image = NSImage(data: data)
+        else { return nil }
+        return thumbnail(of: image)
     }
 
     @concurrent
@@ -111,9 +125,11 @@ nonisolated enum ProjectIconFinder {
     /// Rendered once into a small bitmap, so a 1024 px app icon does not stay in memory at full size.
     /// The image keeps its proportions; a wide logo ends up letterboxed, not squashed.
     private static func thumbnail(of url: URL) -> NSImage? {
-        guard let source = NSImage(contentsOf: url), source.isValid,
-              source.size.width > 0, source.size.height > 0
-        else { return nil }
+        NSImage(contentsOf: url).flatMap(thumbnail(of:))
+    }
+
+    private static func thumbnail(of source: NSImage) -> NSImage? {
+        guard source.isValid, source.size.width > 0, source.size.height > 0 else { return nil }
         let side = 128
         guard let bitmap = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side,

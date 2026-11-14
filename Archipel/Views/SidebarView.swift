@@ -21,28 +21,27 @@ struct SidebarView: View {
                         SidebarWorktreeRow(
                             worktree: worktree,
                             content: model.rowContent(for: worktree),
+                            sessions: model.sessionRows(for: worktree),
+                            isSelected: worktree.id == model.selectedWorktree?.id,
                             tint: tint,
-                            deleting: $deleting
+                            deleting: $deleting,
+                            renaming: $renaming
                         )
                         .tag(worktree.id)
-                        let isSelected = worktree.id == model.selectedWorktree?.id
-                        ForEach(model.sessionRows(for: worktree)) { session in
-                            SidebarSessionRow(content: session, isInSelectedWorktree: isSelected, renaming: $renaming)
-                        }
+                        .contextMenu { SidebarWorktreeMenu(worktree: worktree, deleting: $deleting) }
                     }
                 } header: {
                     SidebarProjectHeader(project: project, renaming: $renaming, addingWorktreeTo: $addingWorktreeTo)
                 }
             }
         }
-        // Right-clicking a row passes its id; right-clicking empty space passes none.
-        .contextMenu(forSelectionType: Worktree.ID.self) { ids in
-            if let id = ids.first, let worktree = model.workspace.worktree(id: id) {
-                SidebarWorktreeMenu(worktree: worktree, deleting: $deleting)
-            } else {
-                Button("Add Project…", systemImage: "folder.badge.plus") { isAddingProject = true }
-                Button("New Island…", systemImage: "plus.square.on.square") { islandEditor = .create }
-            }
+        // For the empty part of the list. Rows and project headers bring their own menus, which a
+        // list-wide selection menu would replace on the headers.
+        .contextMenu {
+            Button("Add Project…", systemImage: "folder.badge.plus") { isAddingProject = true }
+            Button("New Island…", systemImage: "plus.square.on.square") { islandEditor = .create }
+            Divider()
+            ProjectsDisclosureButton()
         }
         .overlay {
             if let island, island.projects.isEmpty {
@@ -55,15 +54,14 @@ struct SidebarView: View {
                 }
             }
         }
-        .safeAreaBar(edge: .top, spacing: 0) {
+        // Insets, not bars: as a bar the system draws a hairline across the sidebar next to the
+        // header or the switcher whenever the pointer is over it.
+        .safeAreaInset(edge: .top, spacing: 0) {
             SidebarHeader(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
         }
-        // An inset, not a bar: as a bar the system draws a hairline across the sidebar above the
-        // switcher whenever the pointer is over it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             IslandSwitcher()
         }
-        .scrollEdgeEffectStyle(.soft, for: .top)
         .renameAlert($renaming)
         .sheet(item: $addingWorktreeTo) { project in
             WorktreeSheet(project: project)
@@ -103,6 +101,24 @@ struct SidebarView: View {
     }
 }
 
+/// Collapses every project of the island, or expands them all again once none is open.
+private struct ProjectsDisclosureButton: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let collapses = model.hasExpandedProjects
+        Button(
+            collapses ? "Collapse All Projects" : "Expand All Projects",
+            systemImage: collapses ? "rectangle.compress.vertical" : "rectangle.expand.vertical"
+        ) {
+            withAnimation(reduceMotion ? nil : .snappy) { model.setAllProjects(expanded: !collapses) }
+        }
+        .help(collapses ? "Collapse All Projects" : "Expand All Projects")
+        .disabled(model.selectedIsland?.projects.isEmpty ?? true)
+    }
+}
+
 /// Sits in the strip next to the window buttons, where a toolbar would be, the way Xcode's navigator
 /// and Finder's sidebar keep their controls up there.
 private struct SidebarHeader: View {
@@ -112,7 +128,7 @@ private struct SidebarHeader: View {
 
     var body: some View {
         let waiting = attentionSummary(of: model.workspace, activities: model.activities).needsAttention
-        HStack(spacing: 4) {
+        HStack(spacing: 10) {
             // No title: the switcher at the bottom already names the island.
             Spacer(minLength: 0)
             if waiting > 0 {
@@ -129,6 +145,8 @@ private struct SidebarHeader: View {
                 .accessibilityValue("\(waiting) waiting")
                 .transition(.scale.combined(with: .opacity))
             }
+            ProjectsDisclosureButton()
+                .labelStyle(.iconOnly)
             Button("Add Project", systemImage: "folder.badge.plus") { isAddingProject = true }
                 .help("Add a folder to this island (⇧⌘O)")
             Button("Hide Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
@@ -136,7 +154,8 @@ private struct SidebarHeader: View {
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.borderless)
-        .controlSize(.large)
+        // Monochrome like the buttons over Xcode's navigator; the accent color stays with the content.
+        .foregroundStyle(.secondary)
         .animation(.snappy, value: waiting > 0)
         // Leaves the window buttons their corner.
         .padding(.leading, 78)
