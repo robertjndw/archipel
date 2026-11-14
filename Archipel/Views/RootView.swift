@@ -8,8 +8,10 @@ struct RootView: View {
     @Binding var isAddingProject: Bool
     @AppStorage("showInspector") private var showInspector = true
     @State private var columns = NavigationSplitViewVisibility.all
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        @Bindable var model = model
         NavigationSplitView(columnVisibility: $columns) {
             SidebarView(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 400)
@@ -42,8 +44,7 @@ struct RootView: View {
         }
         .confirmationDialog(
             "Do you want to save the changes you made to \(closingFileName)?",
-            isPresented: isDecidingClose,
-            presenting: model.tabAwaitingCloseDecision
+            item: $model.tabAwaitingCloseDecision
         ) { tab in
             Button("Save") { model.resolveClose(of: tab, saving: true) }
             Button("Don't Save", role: .destructive) { model.resolveClose(of: tab, saving: false) }
@@ -54,10 +55,10 @@ struct RootView: View {
         .sheet(item: projectInSettings) { project in
             ProjectSettingsSheet(project: project)
         }
-        .alert("Archipel ran into a problem", isPresented: hasProblem) {
-            Button("OK") { model.problem = nil }
-        } message: {
-            Text(model.problem ?? "")
+        .alert("Archipel ran into a problem", item: $model.problem) { _ in
+            Button("OK") {}
+        } message: { problem in
+            Text(problem)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.appDidBecomeActive()
@@ -76,7 +77,7 @@ struct RootView: View {
     }
 
     private func toggleSidebar() {
-        withAnimation { columns = columns == .detailOnly ? .all : .detailOnly }
+        withAnimation(reduceMotion ? nil : .default) { columns = columns == .detailOnly ? .all : .detailOnly }
     }
 
     private var closingFileName: String {
@@ -84,18 +85,10 @@ struct RootView: View {
         return "this file"
     }
 
-    private var isDecidingClose: Binding<Bool> {
-        Binding(get: { model.tabAwaitingCloseDecision != nil }, set: { if !$0 { model.tabAwaitingCloseDecision = nil } })
-    }
-
     private var projectInSettings: Binding<Project?> {
         Binding(
             get: { model.projectSettingsID.flatMap { model.workspace.project(id: $0) } },
             set: { model.projectSettingsID = $0?.id }
         )
-    }
-
-    private var hasProblem: Binding<Bool> {
-        Binding(get: { model.problem != nil }, set: { if !$0 { model.problem = nil } })
     }
 }

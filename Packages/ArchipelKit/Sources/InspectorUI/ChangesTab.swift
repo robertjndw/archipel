@@ -231,26 +231,27 @@ struct ChangesTab: View {
     @State private var showsUnstaged = true
 
     var body: some View {
-        VStack(spacing: 0) {
-            InspectorHeader(refresh: refresh) {
-                if let branch = model.status.branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
-                } else if model.phase == .ready {
-                    Label("Detached HEAD", systemImage: "arrow.triangle.branch")
+        content
+            .frame(maxHeight: .infinity)
+            .safeAreaBar(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    InspectorHeader(refresh: refresh) {
+                        if let branch = model.status.branch {
+                            Label(branch, systemImage: "arrow.triangle.branch")
+                        } else if model.phase == .ready {
+                            Label("Detached HEAD", systemImage: "arrow.triangle.branch")
+                        }
+                    }
+                    if let message = model.actionError ?? model.refreshError {
+                        ErrorBanner(message: message, dismiss: model.actionError == nil ? nil : { model.actionError = nil })
+                    }
                 }
             }
-
-            if let message = model.actionError ?? model.refreshError {
-                ErrorBanner(message: message, dismiss: model.actionError == nil ? nil : { model.actionError = nil })
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                if model.phase == .ready {
+                    CommitArea(model: model)
+                }
             }
-
-            content
-                .frame(maxHeight: .infinity)
-
-            if model.phase == .ready {
-                CommitArea(model: model)
-            }
-        }
         .task {
             // Lives only while this tab is on screen, so the polling stops when the user switches away.
             while !Task.isCancelled {
@@ -295,6 +296,8 @@ struct ChangesTab: View {
             }
             .listStyle(.sidebar)
             .compactRows()
+            // The commit area holds a text field; a hard edge keeps it legible over the rows.
+            .scrollEdgeEffectStyle(.hard, for: .bottom)
             .contextMenu(forSelectionType: ChangeID.self) { ids in
                 if let id = ids.first, let change = model.change(for: id) {
                     ChangeContextMenu(change: change, staged: id.staged, model: model, actions: actions)
@@ -430,7 +433,7 @@ private struct ErrorBanner: View {
             }
         }
         .padding(8)
-        .background(.yellow.opacity(0.12), in: .rect(cornerRadius: 6))
+        .background(.yellow.opacity(0.12), in: .rect(cornerRadius: 10))
         .padding(.horizontal, 8)
         .padding(.bottom, 6)
     }

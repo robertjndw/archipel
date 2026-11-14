@@ -1,62 +1,343 @@
 import AppKit
 import ArchipelCore
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Edits a project's setup and run scripts.
+extension URL {
+    /// The path with the home directory shortened to `~`, for showing to people.
+    var abbreviatedPath: String { (path as NSString).abbreviatingWithTildeInPath }
+}
+
+/// Edits a project's identity, worktree defaults and scripts. Nothing is applied until Save.
 struct ProjectSettingsSheet: View {
+    private enum Page: String, CaseIterable, Identifiable {
+        case general = "General"
+        case worktrees = "Worktrees"
+        case scripts = "Scripts"
+
+        var id: Self { self }
+    }
+
+    private enum IconKind: Hashable { case automatic, symbol, image }
+
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let project: Project
 
+    @State private var page = Page.general
+    @State private var name = ""
+    @State private var icon = ProjectIcon.automatic
+    @State private var tint: Tint?
+    @State private var worktreesDirectory: URL?
+    @State private var baseBranch: String?
     @State private var setup = ""
     @State private var run = ""
+    @State private var branches: [String]?
+    @State private var previewImage: NSImage?
+    @State private var isPickingImage = false
+    @State private var isPickingFolder = false
+    @State private var didLoad = false
 
     var body: some View {
-        Form {
-            Section {
-                ScriptEditor(text: $setup)
-            } header: {
-                Text("Setup script")
-            } footer: {
-                Text("Runs once in each new worktree, for example to install dependencies or copy .env from the main checkout.")
+        VStack(spacing: 0) {
+            Picker("Page", selection: $page) {
+                ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
             }
-            Section {
-                ScriptEditor(text: $run)
-            } header: {
-                Text("Run script")
-            } footer: {
-                Text("Started with Run (⌘R), for example a dev server. Running again restarts it.")
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            // On a view of its own: of two file importers on the same view only the last one presents.
+            .fileImporter(isPresented: $isPickingImage, allowedContentTypes: [.image]) { result in
+                if case .success(let url) = result { icon = .image(url) }
             }
-            Section {
-                Text("""
-                Scripts run with zsh in the worktree folder, as their own session tab. These variables are set:
-                ARCHIPEL_WORKTREE_PATH: the worktree folder
-                ARCHIPEL_ROOT_PATH: the project's main checkout
-                ARCHIPEL_BRANCH: the worktree's branch, when it has one
-                """)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
+
+            Form {
+                switch page {
+                case .general: generalSections
+                case .worktrees: worktreeSections
+                case .scripts: scriptSections
+                }
             }
+            .formStyle(.grouped)
         }
-        .formStyle(.grouped)
-        .frame(width: 520)
+        .frame(width: 520, height: 600)
         .navigationTitle("\(project.name) Settings")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
-                    model.saveScripts(ProjectScripts(setup: setup, run: run), of: project.id)
-                    dismiss()
-                }
+                Button("Save") { save() }
+                    .disabled(trimmedName.isEmpty)
             }
         }
-        .onAppear {
-            setup = project.scripts.setup
-            run = project.scripts.run
+        .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result { worktreesDirectory = url }
         }
+        .task { await load() }
+        .task(id: icon) { await refreshPreview() }
+    }
+
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var previewColor: Color {
+        (tint ?? model.tint(of: project)).color
+    }
+
+    // MARK: General
+
+    @ViewBuilder
+    private var generalSections: some View {
+        Section {
+            HStack(spacing: 16) {
+                ProjectIconTile(icon: icon, image: previewImage, name: trimmedName, color: previewColor, size: 56)
+                TextField("Name", text: $name, prompt: Text("Project name"))
+                    .textFieldStyle(.plain)
+                    .labelsHidden()
+                    .font(.title2.weight(.semibold))
+            }
+            .padding(.vertical, 4)
+        }
+
+        Section {
+            Picker("Icon", selection: iconKind) {
+                Text("Automatic").tag(IconKind.automatic)
+                Text("Symbol").tag(IconKind.symbol)
+                Text("Custom Image").tag(IconKind.image)
+            }
+            switch icon {
+            case .automatic:
+                EmptyView()
+            case .symbol(let current):
+                ProjectSymbolGrid(selection: current) { icon = .symbol($0) }
+            case .image(let url):
+                LabeledContent("Image") {
+                    HStack {
+                        Text(url.lastPathComponent).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        Button("Choose…") { isPickingImage = true }
+                    }
+                }
+            }
+        } header: {
+            Text("Icon")
+        } footer: {
+            Text("Automatic uses an icon found in the repository, such as its app icon, favicon or logo, and falls back to the project's initial.")
+        }
+
+        Section {
+            ProjectTintPicker(tint: $tint)
+        } header: {
+            Text("Color")
+        } footer: {
+            Text("Same as Island follows the color of the island this project is in.")
+        }
+
+        Section {
+            LabeledContent("Repository") {
+                Text(project.folderURL.abbreviatedPath)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([project.folderURL])
+            }
+        }
+    }
+
+    private var iconKind: Binding<IconKind> {
+        Binding {
+            switch icon {
+            case .automatic: .automatic
+            case .symbol: .symbol
+            case .image: .image
+            }
+        } set: { kind in
+            switch kind {
+            case .automatic:
+                icon = .automatic
+            case .symbol:
+                if case .symbol = icon { return }
+                icon = .symbol(ProjectSymbolGrid.symbols[0])
+            case .image:
+                if case .image = icon { return }
+                isPickingImage = true
+            }
+        }
+    }
+
+    // MARK: Worktrees
+
+    private var defaultFolder: URL {
+        model.settings.worktreesRoot.appending(path: project.name, directoryHint: .isDirectory)
+    }
+
+    @ViewBuilder
+    private var worktreeSections: some View {
+        Section {
+            LabeledContent("Folder") {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text((worktreesDirectory ?? defaultFolder).abbreviatedPath)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                    if worktreesDirectory == nil {
+                        Text("Default").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            HStack {
+                Button("Choose…") { isPickingFolder = true }
+                Button("Use Default") { worktreesDirectory = nil }
+                    .disabled(worktreesDirectory == nil)
+            }
+        } header: {
+            Text("Location")
+        } footer: {
+            Text("New worktrees are created in \(examplePath). The default folder is set in Archipel's settings.")
+        }
+
+        Section {
+            if let branches {
+                Picker("Base branch", selection: $baseBranch) {
+                    Text("Current HEAD").tag(String?.none)
+                    ForEach(baseBranchChoices(from: branches), id: \.self) { Text($0).tag(Optional($0)) }
+                }
+            } else {
+                TextField("Base branch", text: baseBranchText, prompt: Text("Current HEAD"))
+            }
+        } header: {
+            Text("New Branches")
+        } footer: {
+            Text("New branches start from this branch. Current HEAD uses whatever the main checkout has checked out.")
+        }
+    }
+
+    private var examplePath: String {
+        var draft = project
+        draft.worktreesDirectory = worktreesDirectory
+        draft.name = trimmedName.isEmpty ? project.name : trimmedName
+        let url = WorktreeLocation.path(for: draft, branch: "feature/login", defaultRoot: model.settings.worktreesRoot)
+        return url.abbreviatedPath
+    }
+
+    /// Keeps a saved base branch selectable even when it no longer exists locally.
+    private func baseBranchChoices(from branches: [String]) -> [String] {
+        guard let baseBranch, !branches.contains(baseBranch) else { return branches }
+        return [baseBranch] + branches
+    }
+
+    private var baseBranchText: Binding<String> {
+        Binding {
+            baseBranch ?? ""
+        } set: {
+            let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            baseBranch = value.isEmpty ? nil : value
+        }
+    }
+
+    // MARK: Scripts
+
+    @ViewBuilder
+    private var scriptSections: some View {
+        Section {
+            ScriptEditor(text: $setup)
+        } header: {
+            Text("Setup script")
+        } footer: {
+            Text("Runs once in each new worktree, for example to install dependencies or copy .env from the main checkout.")
+        }
+        Section {
+            ScriptEditor(text: $run)
+        } header: {
+            Text("Run script")
+        } footer: {
+            Text("Started with Run (⌘R), for example a dev server. Running again restarts it.")
+        }
+        Section {
+            Text("""
+            Scripts run with zsh in the worktree folder, as their own session tab. These variables are set:
+            ARCHIPEL_WORKTREE_PATH: the worktree folder
+            ARCHIPEL_ROOT_PATH: the project's main checkout
+            ARCHIPEL_BRANCH: the worktree's branch, when it has one
+            """)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+        }
+    }
+
+    // MARK: Loading and saving
+
+    private func load() async {
+        guard !didLoad else { return }
+        didLoad = true
+        if model.projectSettingsShowsScripts { page = .scripts }
+        name = project.name
+        icon = project.icon
+        tint = project.tint
+        worktreesDirectory = project.worktreesDirectory
+        baseBranch = project.baseBranch
+        setup = project.scripts.setup
+        run = project.scripts.run
+        branches = try? await model.git.localBranches(in: project.folderURL)
+    }
+
+    private func refreshPreview() async {
+        let image: NSImage? = switch icon {
+        case .symbol: nil
+        case .image(let url): await ProjectIconFinder.load(url)
+        case .automatic: await ProjectIconFinder.findIcon(in: project.folderURL)
+        }
+        // A slower load for an earlier choice must not replace the current one.
+        if !Task.isCancelled { previewImage = image }
+    }
+
+    private func save() {
+        let scripts = ProjectScripts(setup: setup, run: run)
+        model.updateProject(project.id) {
+            $0.name = trimmedName
+            $0.icon = icon
+            $0.tint = tint
+            $0.worktreesDirectory = worktreesDirectory
+            $0.baseBranch = baseBranch
+        }
+        model.saveScripts(scripts, of: project.id)
+        dismiss()
+    }
+}
+
+/// Swatches for every tint, plus "Same as Island" as the first choice.
+private struct ProjectTintPicker: View {
+    @Binding var tint: Tint?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            swatch(nil, label: "Same as Island") {
+                Circle().strokeBorder(.secondary, style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+            }
+            ForEach(Tint.allCases, id: \.self) { value in
+                swatch(value, label: value.displayName) { Circle().fill(value.color.gradient) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func swatch(_ value: Tint?, label: String, @ViewBuilder _ content: () -> some View) -> some View {
+        Button { tint = value } label: {
+            content()
+                .frame(width: 22, height: 22)
+                .padding(3)
+                .overlay {
+                    if tint == value { Circle().strokeBorder(.primary.opacity(0.6), lineWidth: 2) }
+                }
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(tint == value ? .isSelected : [])
     }
 }
 

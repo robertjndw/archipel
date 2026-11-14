@@ -25,10 +25,14 @@ struct ReviewCommentsButton: View {
                         .monospacedDigit()
                 } icon: {
                     Image(systemName: "text.bubble")
+                        .foregroundStyle(.tint)
                 }
                 .labelStyle(.titleAndIcon)
             }
-            .buttonStyle(.borderless)
+            // The one glass control in the diff header: the comments are what
+            // the review is working towards, so they should stand out.
+            .buttonStyle(.glass)
+            .controlSize(.small)
             .help("Review Comments")
             .accessibilityLabel(count == 1 ? Text("1 review comment") : Text("\(count) review comments"))
             .popover(isPresented: $isPresented, arrowEdge: .bottom) {
@@ -140,7 +144,7 @@ private struct ReviewCommentsList: View {
             } label: {
                 Label("Send to \(target.title)", systemImage: target.symbolName)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
         default:
             Menu("Send to") {
                 ForEach(review.targets) { target in

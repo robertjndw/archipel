@@ -21,17 +21,7 @@ public struct InspectorView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            Picker("View", selection: $tab) {
-                ForEach(Tab.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
-            Divider()
-
+        Group {
             if let root {
                 // A new identity per root throws away the old models, tasks and expansion state.
                 InspectorContent(root: root, tab: tab, actions: actions, searchPATH: searchPATH)
@@ -42,8 +32,17 @@ public struct InspectorView: View {
                     systemImage: "sidebar.right",
                     description: Text("Select a worktree to browse its files and changes.")
                 )
-                .frame(maxHeight: .infinity)
             }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // A bar rather than a stacked header, so the lists scroll under it with
+        // the system's edge effect instead of stopping at a divider.
+        .safeAreaBar(edge: .top, spacing: 0) {
+            InspectorTabSwitcher(selection: $tab)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
+                // Lines the switcher up with the app's pane tab row, 36pt tall.
+                .frame(height: 36)
         }
     }
 
@@ -51,6 +50,48 @@ public struct InspectorView: View {
         case files, changes
         var id: Self { self }
         var title: LocalizedStringKey { self == .files ? "Files" : "Changes" }
+        var symbol: String { self == .files ? "folder" : "plus.forwardslash.minus" }
+    }
+}
+
+/// Files / Changes as one glass capsule with a selection that slides between the two, the same
+/// shape the island switcher has at the other end of the window. A segmented picker stays flat here.
+private struct InspectorTabSwitcher: View {
+    @Binding var selection: InspectorView.Tab
+    @Namespace private var highlight
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(InspectorView.Tab.allCases) { tab in
+                let isSelected = tab == selection
+                Button {
+                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { selection = tab }
+                } label: {
+                    Label(tab.title, systemImage: tab.symbol)
+                        .font(.callout.weight(isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, minHeight: 22)
+                        .background {
+                            if isSelected {
+                                // A fill, not a second layer of glass on the capsule's glass.
+                                Capsule()
+                                    .fill(.tint.opacity(0.18))
+                                    .matchedGeometryEffect(id: "selection", in: highlight)
+                            }
+                        }
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .glassEffect(.regular, in: .capsule)
+        .frame(maxWidth: 240)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("View")
     }
 }
 
@@ -100,7 +141,8 @@ struct InspectorHeader<Title: View>: View {
                 .help("Refresh")
         }
         .font(.callout)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .padding(.vertical, 4)
     }
 }

@@ -230,6 +230,21 @@ final class GitClientTests {
         #expect(binary.isBinary)
     }
 
+    @Test func diffStatCountsStagedAndUnstagedLinesButNotUntrackedFiles() async throws {
+        await #expect(throws: GitError.self) { try await self.git.diffStat(in: self.repo) }
+
+        try write("a.txt", "1\n2\n3\n")
+        try write("b.txt", "x\n")
+        try commitAll()
+        #expect(try await git.diffStat(in: repo) == .zero)
+
+        try write("a.txt", "1\nchanged\n3\nnew\n")
+        try sh("add", "a.txt")
+        try write("b.txt", "")
+        try write("untracked.txt", "ignored by the stat\n")
+        #expect(try await git.diffStat(in: repo) == GitDiffStat(insertions: 2, deletions: 2))
+    }
+
     // MARK: Helpers
 
     private func write(_ path: String, _ contents: String) throws {

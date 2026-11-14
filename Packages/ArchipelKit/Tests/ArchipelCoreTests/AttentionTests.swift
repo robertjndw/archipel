@@ -29,12 +29,12 @@ struct AttentionTests {
     @Test func rollUps() {
         let ws = workspace()
         let acts = activities()
-        #expect(attentionSummary(of: [a, b, c], activities: acts) == .init(needsAttention: 1, unread: 2))
+        #expect(attentionSummary(of: [a, b, c], activities: acts) == .init(needsAttention: 1, unread: 2, working: 1))
         #expect(attentionSummary(of: ws.islands[0].projects[0].worktrees[0], activities: acts) == .init(needsAttention: 1, unread: 2))
         #expect(attentionSummary(of: ws.islands[0].projects[0], activities: acts) == .init(needsAttention: 1, unread: 2))
-        #expect(attentionSummary(of: ws.islands[0], activities: acts) == .init(needsAttention: 1, unread: 2))
+        #expect(attentionSummary(of: ws.islands[0], activities: acts) == .init(needsAttention: 1, unread: 2, working: 1))
         #expect(attentionSummary(of: ws.islands[1], activities: acts) == .init(needsAttention: 1, unread: 0))
-        #expect(attentionSummary(of: ws, activities: acts) == .init(needsAttention: 2, unread: 2))
+        #expect(attentionSummary(of: ws, activities: acts) == .init(needsAttention: 2, unread: 2, working: 1))
         #expect(attentionSummary(of: ws, activities: [:]) == .zero)
     }
 
@@ -65,5 +65,20 @@ struct AttentionTests {
 
     @Test func nextWithUnknownCurrentStartsAtTop() {
         #expect(nextSessionNeedingAttention(after: .init(), in: workspace(), activities: activities()) == a.id)
+    }
+
+    @Test func dominantSignalAndDescription() {
+        #expect(AttentionSummary.zero.dominant == nil)
+        #expect(AttentionSummary.zero.accessibilityDescription.isEmpty)
+        #expect(AttentionSummary(working: 2).dominant == .working)
+        #expect(AttentionSummary(unread: 1, working: 2).dominant == .unread)
+        let all = AttentionSummary(needsAttention: 3, unread: 1, working: 1)
+        #expect(all.dominant == .needsAttention(3))
+        #expect(all.accessibilityDescription == "3 waiting for you, 1 unread, 1 agent working")
+    }
+
+    @Test func startingCountsAsWorking() {
+        let acts = [a.id: SessionActivity(status: .starting), b.id: SessionActivity(status: .finished)]
+        #expect(attentionSummary(of: [a, b], activities: acts) == .init(working: 1))
     }
 }

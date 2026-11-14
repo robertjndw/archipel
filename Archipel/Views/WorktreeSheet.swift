@@ -38,17 +38,22 @@ struct WorktreeSheet: View {
 
                 switch mode {
                 case .newBranch:
-                    TextField("Branch", text: $newBranch, prompt: Text("feature/my-change"))
-                    Text("Creates the branch from the current HEAD in a new folder under ~/.archipel/worktrees.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    Section {
+                        TextField("Branch", text: $newBranch, prompt: Text("feature/my-change"))
+                    } footer: {
+                        Text(newBranchFooter)
+                    }
                 case .existingBranch:
                     if branches.isEmpty {
                         Text("Every local branch is already checked out in a worktree.")
                             .foregroundStyle(.secondary)
                     } else {
-                        Picker("Branch", selection: $existingBranch) {
-                            ForEach(branches, id: \.self) { Text($0).tag($0) }
+                        Section {
+                            Picker("Branch", selection: $existingBranch) {
+                                ForEach(branches, id: \.self) { Text($0).tag($0) }
+                            }
+                        } footer: {
+                            Text("Checks the branch out in a new folder in \(destinationFolder).")
                         }
                     }
                 case .existingWorktree:
@@ -56,11 +61,15 @@ struct WorktreeSheet: View {
                         Text("This repository has no other worktrees.")
                             .foregroundStyle(.secondary)
                     } else {
-                        Picker("Worktree", selection: $existingWorktree) {
-                            ForEach(worktrees, id: \.path) { entry in
-                                Text("\(entry.branch ?? "detached") (\(entry.path.lastPathComponent))")
-                                    .tag(Optional(entry.path))
+                        Section {
+                            Picker("Worktree", selection: $existingWorktree) {
+                                ForEach(worktrees, id: \.path) { entry in
+                                    Text("\(entry.branch ?? "detached") (\(entry.path.lastPathComponent))")
+                                        .tag(Optional(entry.path))
+                                }
                             }
+                        } footer: {
+                            Text("Adds a worktree that already exists on disk. Nothing is moved or copied.")
                         }
                     }
                 }
@@ -74,7 +83,8 @@ struct WorktreeSheet: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440)
+        .frame(width: 460)
+        .navigationTitle("Add Worktree")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
@@ -91,16 +101,28 @@ struct WorktreeSheet: View {
         newBranch.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var newBranchFooter: String {
+        let base = project.baseBranch.map { "\($0)" } ?? "the current HEAD"
+        let path = model.worktreePath(for: project, branch: trimmedBranch.isEmpty ? "branch-name" : trimmedBranch)
+        return "Creates the branch from \(base) in a new folder at \(path.abbreviatedPath)."
+    }
+
+    private var destinationFolder: String {
+        model.worktreePath(for: project, branch: "branch-name").deletingLastPathComponent().abbreviatedPath
+    }
+
     private var canAdd: Bool {
         guard isRepository else { return false }
         return switch mode {
-        case .newBranch: !trimmedBranch.isEmpty
+        // The prefilled prefix alone is not a branch name yet.
+        case .newBranch: !trimmedBranch.isEmpty && trimmedBranch != model.settings.branchPrefix
         case .existingBranch: !existingBranch.isEmpty
         case .existingWorktree: existingWorktree != nil
         }
     }
 
     private func load() async {
+        if newBranch.isEmpty { newBranch = model.settings.branchPrefix }
         isRepository = await model.git.isRepository(project.folderURL)
         guard isRepository else { return }
         do {

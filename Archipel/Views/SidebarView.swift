@@ -9,20 +9,39 @@ struct SidebarView: View {
     @State private var renaming: RenameTarget?
     @State private var addingWorktreeTo: Project?
     @State private var deleting: Worktree?
+    @State private var islandEditor: IslandEditor.Mode?
 
     var body: some View {
         let island = model.selectedIsland
         List(selection: selection) {
             ForEach(island?.projects ?? []) { project in
                 Section(isExpanded: expansion(of: project)) {
+                    let tint = model.tint(of: project).color
                     ForEach(project.worktrees) { worktree in
-                        WorktreeRow(content: model.rowContent(for: worktree), hasBranch: worktree.branch != nil)
-                            .tag(worktree.id)
-                            .contextMenu { worktreeMenu(worktree) }
+                        SidebarWorktreeRow(
+                            worktree: worktree,
+                            content: model.rowContent(for: worktree),
+                            tint: tint,
+                            deleting: $deleting
+                        )
+                        .tag(worktree.id)
+                        let isSelected = worktree.id == model.selectedWorktree?.id
+                        ForEach(model.sessionRows(for: worktree)) { session in
+                            SidebarSessionRow(content: session, isInSelectedWorktree: isSelected, renaming: $renaming)
+                        }
                     }
                 } header: {
-                    ProjectHeader(project: project, renaming: $renaming, addingWorktreeTo: $addingWorktreeTo)
+                    SidebarProjectHeader(project: project, renaming: $renaming, addingWorktreeTo: $addingWorktreeTo)
                 }
+            }
+        }
+        // Right-clicking a row passes its id; right-clicking empty space passes none.
+        .contextMenu(forSelectionType: Worktree.ID.self) { ids in
+            if let id = ids.first, let worktree = model.workspace.worktree(id: id) {
+                SidebarWorktreeMenu(worktree: worktree, deleting: $deleting)
+            } else {
+                Button("Add Project…", systemImage: "folder.badge.plus") { isAddingProject = true }
+                Button("New Island…", systemImage: "plus.square.on.square") { islandEditor = .create }
             }
         }
         .overlay {
@@ -36,15 +55,21 @@ struct SidebarView: View {
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            header(island)
+        .safeAreaBar(edge: .top, spacing: 0) {
+            SidebarHeader(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
         }
+        // An inset, not a bar: as a bar the system draws a hairline across the sidebar above the
+        // switcher whenever the pointer is over it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             IslandSwitcher()
         }
+        .scrollEdgeEffectStyle(.soft, for: .top)
         .renameAlert($renaming)
         .sheet(item: $addingWorktreeTo) { project in
             WorktreeSheet(project: project)
+        }
+        .sheet(item: $islandEditor) { mode in
+            IslandEditor(mode: mode)
         }
         .confirmationDialog(
             "Delete the worktree \(deleting?.displayName ?? "")?",
@@ -57,26 +82,6 @@ struct SidebarView: View {
         } message: { worktree in
             Text("The folder \(worktree.path.path) is removed and its sessions are closed. The branch is kept. Git refuses if the worktree has uncommitted changes.")
         }
-    }
-
-    /// Sits in the strip next to the window buttons, where a toolbar would be.
-    private func header(_ island: Island?) -> some View {
-        HStack(spacing: 10) {
-            Text(island?.name ?? "Archipel")
-                .font(.headline)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            Button("Add Project", systemImage: "folder.badge.plus") { isAddingProject = true }
-                .help("Add a folder to this island")
-            Button("Hide Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
-                .help("Hide Sidebar")
-        }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
-        // Leaves the window buttons their corner.
-        .padding(.leading, 78)
-        .padding(.trailing, 12)
-        .frame(height: PaneTabBar.height)
     }
 
     private var selection: Binding<Worktree.ID?> {
@@ -96,168 +101,47 @@ struct SidebarView: View {
             set: { model.setProject(project.id, expanded: $0) }
         )
     }
-
-    @ViewBuilder
-    private func worktreeMenu(_ worktree: Worktree) -> some View {
-        NewSessionButtons(worktree: worktree.id)
-        Divider()
-        let scripts = model.project(ofWorktree: worktree.id)?.scripts
-        Button("Run", systemImage: "play") { model.runProject(in: worktree.id) }
-        if scripts?.setupCommand != nil {
-            Button("Run Setup Script", systemImage: "wrench.and.screwdriver") { model.startScript(.setup, in: worktree.id) }
-        }
-        Divider()
-        Button("Show in Finder", systemImage: "folder") {
-            NSWorkspace.shared.activateFileViewerSelecting([worktree.path])
-        }
-        if !worktree.isMain {
-            Divider()
-            Button("Remove from Sidebar", systemImage: "minus.circle") {
-                model.removeWorktree(worktree.id, deleteFromDisk: false)
-            }
-            Button("Delete Worktree…", systemImage: "trash", role: .destructive) { deleting = worktree }
-        }
-    }
 }
 
-private struct ProjectHeader: View {
+/// Sits in the strip next to the window buttons, where a toolbar would be, the way Xcode's navigator
+/// and Finder's sidebar keep their controls up there.
+private struct SidebarHeader: View {
     @Environment(AppModel.self) private var model
-    let project: Project
-    @Binding var renaming: RenameTarget?
-    @Binding var addingWorktreeTo: Project?
+    @Binding var isAddingProject: Bool
+    let toggleSidebar: () -> Void
 
     var body: some View {
-        HStack {
-            Text(project.name)
-            Spacer()
-            Button("Add Worktree", systemImage: "plus") { addingWorktreeTo = project }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .help("Add a worktree to \(project.name)")
-        }
-        .contextMenu {
-            Button("Add Worktree…", systemImage: "plus") { addingWorktreeTo = project }
-            Divider()
-            Button("Rename…", systemImage: "pencil") {
-                renaming = RenameTarget(kind: .project(project.id), name: project.name)
-            }
-            Button("Show in Finder", systemImage: "folder") {
-                NSWorkspace.shared.activateFileViewerSelecting([project.folderURL])
-            }
-            Button("Project Settings…", systemImage: "gearshape") { model.openProjectSettings(project.id) }
-            let others = model.workspace.islands.filter { $0.id != model.selectedIsland?.id }
-            if !others.isEmpty {
-                Menu("Move to Island", systemImage: "arrow.right.square") {
-                    ForEach(others) { island in
-                        Button(island.name, systemImage: island.symbol) {
-                            model.moveProject(project.id, to: island.id)
-                        }
-                    }
-                }
-            }
-            Divider()
-            Button("Remove Project", systemImage: "trash", role: .destructive) { model.removeProject(project) }
-        }
-    }
-}
-
-private struct WorktreeRow: View {
-    let content: WorktreeRowContent
-    let hasBranch: Bool
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Label {
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
-                        Text(content.title)
-                            .fontWeight(content.isUnread ? .semibold : .regular)
-                            .truncationMode(.middle)
-                        if content.hasMetadata {
-                            Spacer(minLength: 0)
-                            WorktreeMetadata(content: content)
-                        }
-                    }
-                    if let detail = content.detail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .help(detail)
-                    }
-                }
-                .lineLimit(1)
-            } icon: {
-                Image(systemName: hasBranch ? "arrow.triangle.branch" : "folder")
-            }
+        let waiting = attentionSummary(of: model.workspace, activities: model.activities).needsAttention
+        HStack(spacing: 4) {
+            // No title: the switcher at the bottom already names the island.
             Spacer(minLength: 0)
-            switch content.trailing {
-            case .status(let activity):
-                StatusGlyph(activity: activity)
-            case .sessionCount(let count):
-                Text(count, format: .number)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .accessibilityLabel("\(count) sessions")
-            case .none:
-                EmptyView()
+            if waiting > 0 {
+                // Jumps anywhere, other islands included, so it counts the whole workspace.
+                Button {
+                    model.selectNextNeedingAttention()
+                } label: {
+                    Label("Next Session Waiting for You", systemImage: "bell.badge.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.orange, .secondary)
+                        .symbolEffect(.bounce, options: .nonRepeating, value: waiting)
+                }
+                .help(waiting == 1 ? "1 session is waiting for you (⇧⌘U)" : "\(waiting) sessions are waiting for you (⇧⌘U)")
+                .accessibilityValue("\(waiting) waiting")
+                .transition(.scale.combined(with: .opacity))
             }
+            Button("Add Project", systemImage: "folder.badge.plus") { isAddingProject = true }
+                .help("Add a folder to this island (⇧⌘O)")
+            Button("Hide Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
+                .help("Hide Sidebar")
         }
-    }
-}
-
-/// Changed files, ahead/behind and the pull request, compact enough to share the first line with the
-/// branch at the sidebar's minimum width. The branch name truncates first; these never do.
-private struct WorktreeMetadata: View {
-    let content: WorktreeRowContent
-
-    var body: some View {
-        HStack(spacing: 5) {
-            if let changed = content.changedFiles {
-                item("pencil", changed)
-            }
-            if let ahead = content.ahead {
-                item("arrow.up", ahead)
-            }
-            if let behind = content.behind {
-                item("arrow.down", behind)
-            }
-            if let pullRequest = content.pullRequest {
-                Text(pullRequest.title)
-                    .font(.caption2.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(pullRequest.state.color)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(pullRequest.state.color.opacity(0.15), in: .capsule)
-            }
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(content.metadataAccessibilityLabel)
-    }
-
-    private func item(_ symbol: String, _ value: Int) -> some View {
-        HStack(spacing: 1) {
-            Image(systemName: symbol)
-                .imageScale(.small)
-                .foregroundStyle(.tertiary)
-            Text(value, format: .number)
-                .monospacedDigit()
-        }
-    }
-}
-
-private extension PullRequestBadge.State {
-    var color: Color {
-        switch self {
-        case .open: .green
-        case .draft: .gray
-        case .merged: .purple
-        case .closed: .red
-        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .controlSize(.large)
+        .animation(.snappy, value: waiting > 0)
+        // Leaves the window buttons their corner.
+        .padding(.leading, 78)
+        .padding(.trailing, 10)
+        .frame(height: PaneTabBar.height)
     }
 }
 

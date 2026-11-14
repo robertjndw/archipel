@@ -1,0 +1,97 @@
+import AgentKit
+import Foundation
+import Observation
+
+/// App-wide preferences, kept in UserDefaults. Per-project choices live on `Project` in the workspace file.
+@Observable
+final class AppSettings {
+    enum Appearance: String, CaseIterable, Identifiable {
+        case system, light, dark
+        var id: Self { self }
+    }
+
+    // MARK: General
+
+    /// What ⌘T and the plain "new session" buttons start.
+    var defaultAgentID: String { didSet { defaults.set(defaultAgentID, forKey: Key.defaultAgentID) } }
+    /// Root for new worktrees of projects without a folder of their own: `<root>/<project>/<branch>`.
+    var worktreesRoot: URL { didSet { defaults.set(worktreesRoot.path, forKey: Key.worktreesRoot) } }
+    /// Prepended to the name typed for a new branch, e.g. `robert/`.
+    var branchPrefix: String { didSet { defaults.set(branchPrefix, forKey: Key.branchPrefix) } }
+    var confirmsQuitWhileWorking: Bool { didSet { defaults.set(confirmsQuitWhileWorking, forKey: Key.confirmsQuitWhileWorking) } }
+
+    // MARK: Appearance
+
+    var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) } }
+    var showsGitStatusInSidebar: Bool { didSet { defaults.set(showsGitStatusInSidebar, forKey: Key.showsGitStatusInSidebar) } }
+    /// Also decides whether `gh` is asked at all.
+    var showsPullRequests: Bool { didSet { defaults.set(showsPullRequests, forKey: Key.showsPullRequests) } }
+    var showsAgentMessagesInSidebar: Bool { didSet { defaults.set(showsAgentMessagesInSidebar, forKey: Key.showsAgentMessagesInSidebar) } }
+
+    // MARK: Notifications
+
+    var notifiesWhenAttentionNeeded: Bool { didSet { defaults.set(notifiesWhenAttentionNeeded, forKey: Key.notifiesWhenAttentionNeeded) } }
+    var notifiesWhenFinished: Bool { didSet { defaults.set(notifiesWhenFinished, forKey: Key.notifiesWhenFinished) } }
+    var notifiesWhenExited: Bool { didSet { defaults.set(notifiesWhenExited, forKey: Key.notifiesWhenExited) } }
+    var playsNotificationSound: Bool { didSet { defaults.set(playsNotificationSound, forKey: Key.playsNotificationSound) } }
+    var showsDockBadge: Bool { didSet { defaults.set(showsDockBadge, forKey: Key.showsDockBadge) } }
+    /// Banners for a session you are not looking at are redundant while Archipel itself is frontmost.
+    var suppressesNotificationsWhileActive: Bool {
+        didSet { defaults.set(suppressesNotificationsWhileActive, forKey: Key.suppressesNotificationsWhileActive) }
+    }
+
+    // MARK: Agents
+
+    /// Extra command line arguments per agent id, as the user typed them.
+    var agentArguments: [String: String] { didSet { defaults.set(agentArguments, forKey: Key.agentArguments) } }
+
+    /// The user's extra arguments for an agent, already split into words.
+    func extraArguments(for agentID: String) -> [String] {
+        ArgumentSplitter.split(agentArguments[agentID] ?? "")
+    }
+
+    static let standardWorktreesRoot = URL.homeDirectory.appending(path: ".archipel/worktrees", directoryHint: .isDirectory)
+
+    @ObservationIgnored private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        func bool(_ key: String, _ fallback: Bool) -> Bool {
+            defaults.object(forKey: key) == nil ? fallback : defaults.bool(forKey: key)
+        }
+        defaultAgentID = defaults.string(forKey: Key.defaultAgentID) ?? "claude"
+        worktreesRoot = defaults.string(forKey: Key.worktreesRoot)
+            .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? Self.standardWorktreesRoot
+        branchPrefix = defaults.string(forKey: Key.branchPrefix) ?? ""
+        confirmsQuitWhileWorking = bool(Key.confirmsQuitWhileWorking, true)
+        appearance = defaults.string(forKey: Key.appearance).flatMap(Appearance.init) ?? .system
+        showsGitStatusInSidebar = bool(Key.showsGitStatusInSidebar, true)
+        showsPullRequests = bool(Key.showsPullRequests, true)
+        showsAgentMessagesInSidebar = bool(Key.showsAgentMessagesInSidebar, true)
+        notifiesWhenAttentionNeeded = bool(Key.notifiesWhenAttentionNeeded, true)
+        notifiesWhenFinished = bool(Key.notifiesWhenFinished, true)
+        notifiesWhenExited = bool(Key.notifiesWhenExited, true)
+        playsNotificationSound = bool(Key.playsNotificationSound, true)
+        showsDockBadge = bool(Key.showsDockBadge, true)
+        suppressesNotificationsWhileActive = bool(Key.suppressesNotificationsWhileActive, false)
+        agentArguments = defaults.dictionary(forKey: Key.agentArguments) as? [String: String] ?? [:]
+    }
+
+    private enum Key {
+        static let defaultAgentID = "settings.defaultAgentID"
+        static let worktreesRoot = "settings.worktreesRoot"
+        static let branchPrefix = "settings.branchPrefix"
+        static let confirmsQuitWhileWorking = "settings.confirmsQuitWhileWorking"
+        static let appearance = "settings.appearance"
+        static let showsGitStatusInSidebar = "settings.showsGitStatusInSidebar"
+        static let showsPullRequests = "settings.showsPullRequests"
+        static let showsAgentMessagesInSidebar = "settings.showsAgentMessagesInSidebar"
+        static let notifiesWhenAttentionNeeded = "settings.notifiesWhenAttentionNeeded"
+        static let notifiesWhenFinished = "settings.notifiesWhenFinished"
+        static let notifiesWhenExited = "settings.notifiesWhenExited"
+        static let playsNotificationSound = "settings.playsNotificationSound"
+        static let showsDockBadge = "settings.showsDockBadge"
+        static let suppressesNotificationsWhileActive = "settings.suppressesNotificationsWhileActive"
+        static let agentArguments = "settings.agentArguments"
+    }
+}

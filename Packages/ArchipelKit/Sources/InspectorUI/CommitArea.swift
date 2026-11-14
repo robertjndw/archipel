@@ -130,8 +130,9 @@ struct CommitArea: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .focused($messageFocused)
-                .padding(6)
-                .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 6))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .glassEffect(.regular, in: .rect(cornerRadius: 12))
                 .disabled(model.activity == .commit)
 
             Button(action: model.commit) {
@@ -141,7 +142,8 @@ struct CommitArea: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
+            .controlSize(.large)
             .disabled(!commit.isEnabled)
             // Scoped to the focused field so Cmd-Return elsewhere in the window is left alone.
             .keyboardShortcut(messageFocused ? KeyboardShortcut(.return, modifiers: .command) : nil)
@@ -151,6 +153,7 @@ struct CommitArea: View {
                 SyncSummary(sync: sync, activity: model.activity)
                 Spacer(minLength: 0)
                 Button(sync.pushTitle, action: model.push)
+                    .buttonStyle(.glass)
                     .disabled(!sync.canPush)
                     .help(sync.help)
             }
@@ -160,9 +163,8 @@ struct CommitArea: View {
         }
         .controlSize(.regular)
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+        .padding(.top, 8)
+        .padding(.bottom, 12)
     }
 
     @ViewBuilder
@@ -181,6 +183,7 @@ struct CommitArea: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .buttonStyle(.glass)
             .help(pullRequest.title)
         case .create(let isEnabled, let help):
             Button(action: model.createPullRequest) {
@@ -190,6 +193,7 @@ struct CommitArea: View {
                 }
                 .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.glass)
             .disabled(!isEnabled)
             .help(help)
         }

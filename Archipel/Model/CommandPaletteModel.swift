@@ -40,16 +40,22 @@ struct PaletteCommand: Identifiable {
         let worktreeID = model.selectedWorktree?.id
         let hasSelection = worktreeID != nil
 
-        func newSession(_ id: String, _ title: String, _ agent: AgentDefinition, _ hint: String) -> PaletteCommand {
-            PaletteCommand(id: id, title: title, symbol: agent.symbolName, shortcutHint: hint, isAvailable: hasSelection) {
+        // Same order as the File menu: the default agent has ⌘T, the others follow.
+        let defaultAgent = AgentDefinition.builtIn(id: model.settings.defaultAgentID) ?? .claude
+        let agents = [defaultAgent] + AgentDefinition.builtIns.filter { $0.id != defaultAgent.id }
+        let newSessions = zip(agents, ["⌘T", "⌥⌘T", "⇧⌘T"]).map { agent, hint in
+            PaletteCommand(
+                id: "new-\(agent.id)",
+                title: "New \(agent.displayName) Session",
+                symbol: agent.symbolName,
+                shortcutHint: hint,
+                isAvailable: hasSelection
+            ) {
                 if let worktreeID { model.newSession(in: worktreeID, agent: agent) }
             }
         }
 
-        return [
-            newSession("new-claude", "New Claude Code Session", .claude, "⌘T"),
-            newSession("new-codex", "New Codex Session", .codex, "⌥⌘T"),
-            newSession("new-shell", "New Shell Session", .shell, "⇧⌘T"),
+        return newSessions + [
             PaletteCommand(id: "add-project", title: "Add Project…", symbol: "folder.badge.plus", shortcutHint: "⇧⌘O", perform: addProject),
             PaletteCommand(id: "toggle-inspector", title: "Toggle Inspector", symbol: "sidebar.trailing", shortcutHint: "⌥⌘0", perform: toggleInspector),
             PaletteCommand(

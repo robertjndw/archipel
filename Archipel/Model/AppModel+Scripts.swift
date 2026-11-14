@@ -24,7 +24,8 @@ extension AppModel {
         id.flatMap { workspace.project(containingWorktree: $0) }
     }
 
-    func openProjectSettings(_ id: Project.ID) {
+    func openProjectSettings(_ id: Project.ID, showingScripts: Bool = false) {
+        projectSettingsShowsScripts = showingScripts
         projectSettingsID = id
     }
 
@@ -37,7 +38,7 @@ extension AppModel {
     func runProject(in worktreeID: Worktree.ID) {
         guard let project = project(ofWorktree: worktreeID) else { return }
         guard project.scripts.runCommand != nil else {
-            openProjectSettings(project.id)
+            openProjectSettings(project.id, showingScripts: true)
             return
         }
         startScript(.run, in: worktreeID)

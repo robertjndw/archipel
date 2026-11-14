@@ -15,12 +15,12 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    func post(sessionID: Session.ID, title: String, subtitle: String, body: String?) {
+    func post(sessionID: Session.ID, title: String, subtitle: String, body: String?, playsSound: Bool) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.subtitle = subtitle
         if let body { content.body = body }
-        content.sound = .default
+        if playsSound { content.sound = .default }
         content.userInfo = [Self.sessionKey: sessionID.uuidString]
         // One notification per session: a newer state replaces the older one
         // instead of stacking up in Notification Center.

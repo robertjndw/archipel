@@ -92,6 +92,7 @@ private struct FileEditorContent: View {
 
     private var openInDefaultApp: some View {
         Button("Open in Default App") { NSWorkspace.shared.open(buffer.url) }
+            .buttonStyle(.glass)
     }
 }
 
@@ -104,8 +105,10 @@ private struct ConflictBar: View {
             Text(conflict == .deleted ? "This file was deleted on disk." : "This file changed on disk.")
         } actions: {
             Button(conflict == .deleted ? "Close File" : "Reload") { buffer.discardChanges() }
+                .buttonStyle(.glass)
                 .help(conflict == .deleted ? "Discard your edits" : "Discard your edits and load the version on disk")
             Button("Keep My Changes") { buffer.keepChanges() }
+                .buttonStyle(.glass)
                 .help("Your next save overwrites the file on disk")
         }
     }
@@ -146,8 +149,8 @@ private struct InlineBar<Message: View, Actions: View>: View {
                 .controlSize(.small)
         }
         .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
         .background(tint.opacity(0.1))
     }
 }

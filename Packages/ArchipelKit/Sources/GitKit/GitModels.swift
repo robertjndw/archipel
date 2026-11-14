@@ -76,13 +76,16 @@ public struct GitSummary: Equatable, Sendable {
     public var behind: Int
     /// Distinct paths, so a file that is both staged and modified again counts once.
     public var changedFiles: Int
+    /// Not part of `summary(in:)`, which is one status call; callers that want it ask `diffStat(in:)`.
+    public var diffStat: GitDiffStat?
 
-    public init(branch: String?, upstream: String?, ahead: Int, behind: Int, changedFiles: Int) {
+    public init(branch: String?, upstream: String?, ahead: Int, behind: Int, changedFiles: Int, diffStat: GitDiffStat? = nil) {
         self.branch = branch
         self.upstream = upstream
         self.ahead = ahead
         self.behind = behind
         self.changedFiles = changedFiles
+        self.diffStat = diffStat
     }
 }
 

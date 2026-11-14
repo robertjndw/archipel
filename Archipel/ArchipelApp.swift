@@ -16,7 +16,10 @@ struct ArchipelApp: App {
                 .environment(model)
                 .environment(palette)
                 .frame(minWidth: 720, minHeight: 420)
-                .onAppear { delegate.model = model }
+                .onAppear {
+                    delegate.model = model
+                    applyAppearance()
+                }
         }
         .defaultSize(width: 1280, height: 800)
         .windowStyle(.hiddenTitleBar)
@@ -24,27 +27,22 @@ struct ArchipelApp: App {
             SidebarCommands()
             CommandGroup(replacing: .newItem) {
                 if let worktree = model.selectedWorktree {
-                    Button("New Claude Code Session", systemImage: AgentDefinition.claude.symbolName) {
-                        model.newSession(in: worktree.id, agent: .claude)
+                    let defaultAgent = AgentDefinition.builtIn(id: model.settings.defaultAgentID) ?? .claude
+                    let others = AgentDefinition.builtIns.filter { $0.id != defaultAgent.id }
+                    newSessionButton(defaultAgent, in: worktree.id).keyboardShortcut("t")
+                    if let first = others.first {
+                        newSessionButton(first, in: worktree.id).keyboardShortcut("t", modifiers: [.command, .option])
                     }
-                    .keyboardShortcut("t")
-                    Button("New Codex Session", systemImage: AgentDefinition.codex.symbolName) {
-                        model.newSession(in: worktree.id, agent: .codex)
+                    if others.count > 1 {
+                        newSessionButton(others[1], in: worktree.id).keyboardShortcut("t", modifiers: [.command, .shift])
                     }
-                    .keyboardShortcut("t", modifiers: [.command, .option])
-                    Button("New Shell Session", systemImage: AgentDefinition.shell.symbolName) {
-                        model.newSession(in: worktree.id, agent: .shell)
-                    }
-                    .keyboardShortcut("t", modifiers: [.command, .shift])
                     Divider()
                 }
                 Button("Add Project…", systemImage: "folder.badge.plus") { isAddingProject = true }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
-                if let tab = model.focusedTab {
-                    Divider()
-                    Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
-                        .keyboardShortcut("w")
-                }
+                Divider()
+                Button(model.focusedTab == nil ? "Close" : "Close Tab", systemImage: "xmark") { closeTabOrWindow() }
+                    .keyboardShortcut("w")
             }
             CommandGroup(replacing: .saveItem) {
                 // Sent up the responder chain so it reaches whichever editor has the keyboard focus.
@@ -112,10 +110,43 @@ struct ArchipelApp: App {
                     .keyboardShortcut("u", modifiers: [.command, .shift])
             }
         }
+        Settings {
+            SettingsView()
+                .environment(model)
+                // Here and not on the main window, which may be closed while Settings is open.
+                .onChange(of: model.settings.appearance) { applyAppearance() }
+                .onChange(of: model.settings.showsDockBadge) { model.refreshDockBadge() }
+        }
     }
 }
 
 extension ArchipelApp {
+    /// ⌘W belongs to whatever is in front: with Settings as the key window it must not end a
+    /// session in the main window behind it.
+    private func closeTabOrWindow() {
+        let key = NSApp.keyWindow
+        let isSettings = key?.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true
+        if !isSettings, let tab = model.focusedTab {
+            model.close(tab: tab.id)
+        } else {
+            key?.performClose(nil)
+        }
+    }
+
+    private func applyAppearance() {
+        NSApp.appearance = switch model.settings.appearance {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+
+    private func newSessionButton(_ agent: AgentDefinition, in worktree: Worktree.ID) -> some View {
+        Button("New \(agent.displayName) Session", systemImage: agent.symbolName) {
+            model.newSession(in: worktree, agent: agent)
+        }
+    }
+
     private func present(_ mode: CommandPaletteModel.Mode) {
         let commands = PaletteCommand.standard(
             model: model,
@@ -153,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 break
             }
         }
-        guard model.hasWorkingSessions else { return .terminateNow }
+        guard model.hasWorkingSessions, model.settings.confirmsQuitWhileWorking else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Quit Archipel while agents are working?"
         alert.informativeText = "Running agents will be stopped. Their conversations are kept and resume the next time you open the session."

@@ -30,12 +30,14 @@ struct GitRefreshState {
     /// its answer may predate whatever prompted the request.
     var queued: [Worktree.ID: Request] = [:]
     var pullRequestsInFlight: Set<Worktree.ID> = []
+    var diffStatCheckedAt: [Worktree.ID: ContinuousClock.Instant] = [:]
     var gitHub: Task<GitHubClient?, Never>?
     var timer: Task<Void, Never>?
 }
 
 extension AppModel {
     static let gitStatusInterval = Duration.seconds(10)
+    static let diffStatInterval = Duration.seconds(60)
     /// `gh` is a network call per worktree, and a pull request rarely appears or changes state without
     /// the user knowing, so this can be slow.
     static let pullRequestInterval = Duration.seconds(300)
@@ -80,10 +82,17 @@ extension AppModel {
                 changedFiles: $0.changedFiles,
                 ahead: $0.ahead,
                 behind: $0.behind,
+                insertions: $0.diffStat?.insertions ?? 0,
+                deletions: $0.diffStat?.deletions ?? 0,
                 pullRequest: pullRequest.map(Self.badge)
             )
         }
-        return WorktreeRowContent(worktree: worktree, activity: activity(for: worktree), git: git)
+        let options = WorktreeRowContent.Options(
+            showsGitStatus: settings.showsGitStatusInSidebar,
+            showsPullRequests: settings.showsPullRequests,
+            showsMessages: settings.showsAgentMessagesInSidebar
+        )
+        return WorktreeRowContent(worktree: worktree, activity: activity(for: worktree), git: git, options: options)
     }
 
     private static func badge(for pullRequest: GitPullRequest) -> PullRequestBadge {
@@ -103,10 +112,29 @@ extension AppModel {
         }
         gitRefresh.summariesInFlight.insert(id)
         let git = git
+        let wantsDiffStat = settings.showsGitStatusInSidebar
+        let previous = gitSummaries[id]
+        let diffStatIsFresh = gitRefresh.diffStatCheckedAt[id].map { $0.duration(to: .now) < Self.diffStatInterval } ?? false
         Task { [weak self] in
             // A folder that is not a repository (or has vanished) throws; that only means "no summary".
-            let summary = try? await git.summary(in: worktree.path)
+            var summary = try? await git.summary(in: worktree.path)
+            var countedLines = false
+            // A second git call, so only when there is something to count. An unborn branch throws,
+            // which leaves the line counts out and the file count in.
+            if wantsDiffStat, let changed = summary?.changedFiles, changed > 0 {
+                var previousStatus = previous
+                previousStatus?.diffStat = nil
+                // Unlike status, a diff reads every changed file. While the status is the same the
+                // last count is reused for a while, so a huge generated file is not diffed every poll.
+                if diffStatIsFresh, previousStatus == summary, let known = previous?.diffStat {
+                    summary?.diffStat = known
+                } else {
+                    summary?.diffStat = try? await git.diffStat(in: worktree.path)
+                    countedLines = true
+                }
+            }
             guard let self else { return }
+            if countedLines { self.gitRefresh.diffStatCheckedAt[id] = .now }
             self.gitRefresh.summariesInFlight.remove(id)
             guard let current = self.workspace.worktree(id: id) else {
                 self.gitRefresh.queued[id] = nil
@@ -118,7 +146,7 @@ extension AppModel {
             if let summary, current.branch != summary.branch {
                 self.mutate { $0.updateWorktree(id: id) { $0.branch = summary.branch } }
             }
-            if request.lookingUpPullRequests {
+            if request.lookingUpPullRequests, self.settings.showsPullRequests {
                 self.lookUpPullRequest(of: id, summary: summary, minimumAge: request.minimumPullRequestAge)
             }
             if let next = self.gitRefresh.queued.removeValue(forKey: id) {

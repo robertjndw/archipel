@@ -25,9 +25,10 @@ public struct GitClient: Sendable {
             .map(String.init)
     }
 
-    public func addWorktree(repository: URL, path: URL, branch: String, createBranch: Bool) async throws {
+    /// `base` is the ref a new branch starts from; nil means HEAD. It is ignored for an existing branch.
+    public func addWorktree(repository: URL, path: URL, branch: String, createBranch: Bool, base: String? = nil) async throws {
         let args = createBranch
-            ? ["worktree", "add", "-b", branch, "--", path.path]
+            ? ["worktree", "add", "-b", branch, "--", path.path] + (base.map { [$0] } ?? [])
             : ["worktree", "add", "--", path.path, branch]
         try await run(args, in: repository, readOnly: false)
     }

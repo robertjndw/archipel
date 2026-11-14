@@ -25,6 +25,11 @@ final class AppModel {
     let reviewComments = ReviewCommentStore()
     /// The project whose settings sheet is open. Lives here because both the sidebar and Run open it.
     var projectSettingsID: Project.ID?
+    /// Set when the sheet is opened to configure a script, so it starts on that page.
+    var projectSettingsShowsScripts = false
+    let settings = AppSettings()
+    /// Images for projects whose icon is a file or was found in the repository. See `loadIcon(of:)`.
+    var projectIcons: [Project.ID: NSImage] = [:]
 
     /// The script a session runs instead of its agent. Deliberately not persisted: after a relaunch
     /// a script tab comes back as a plain shell, so a setup script or dev server never starts by itself.
@@ -95,6 +100,7 @@ final class AppModel {
         for id in visibleSessionIDs { ensureRunning(id) }
         refreshBranches()
         refreshGitStatus(lookingUpPullRequests: true)
+        loadProjectIcons()
         watchPaneClicks()
     }
 
@@ -213,6 +219,11 @@ final class AppModel {
         refreshDockBadge()
     }
 
+    /// Clears the unread state of a worktree's sessions without opening them.
+    func markRead(worktree id: Worktree.ID) {
+        for session in workspace.worktree(id: id)?.sessions ?? [] { markViewed(session.id) }
+    }
+
     private func isBeingViewed(_ id: Session.ID) -> Bool {
         NSApp.isActive && visibleSessionIDs.contains(id)
     }
@@ -250,6 +261,7 @@ final class AppModel {
             $0.selectWorktree(main.id)
         }
         refreshBranches()
+        loadIcon(of: project)
     }
 
     func renameProject(_ id: Project.ID, to name: String) {
@@ -283,16 +295,20 @@ final class AppModel {
         changingSelection { _ = $0.addWorktree(worktree, to: project) }
     }
 
-    /// Worktrees are created outside the repository so they never show up as
-    /// untracked files inside it.
+    /// Worktrees are created outside the repository by default so they never
+    /// show up as untracked files inside it.
     func createWorktree(in project: Project, branch: String, createBranch: Bool) async throws {
-        let folder = branch.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." ? $0 : "-" }
-        let path = URL.homeDirectory
-            .appending(path: ".archipel/worktrees", directoryHint: .isDirectory)
-            .appending(path: project.name, directoryHint: .isDirectory)
-            .appending(path: String(folder), directoryHint: .isDirectory)
+        // The sheet may have been open while the settings changed.
+        let project = workspace.project(id: project.id) ?? project
+        let path = worktreePath(for: project, branch: branch)
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try await git.addWorktree(repository: project.folderURL, path: path, branch: branch, createBranch: createBranch)
+        try await git.addWorktree(
+            repository: project.folderURL,
+            path: path,
+            branch: branch,
+            createBranch: createBranch,
+            base: project.baseBranch
+        )
         let worktree = Worktree(path: path, branch: branch)
         changingSelection { _ = $0.addWorktree(worktree, to: project.id) }
         if workspace.project(id: project.id)?.scripts.setupCommand != nil {
@@ -490,6 +506,9 @@ final class AppModel {
         if session.agentSessionID != nil, let resume = definition.resumeCommand(for: context) {
             command = resume
         }
+        if script == nil, definition.id != AgentDefinition.shell.id {
+            command.arguments += settings.extraArguments(for: definition.id)
+        }
         command = command.adding(location)
         if let script { command = ScriptLaunch.command(script: script.command, context: context, worktree: location) }
 
@@ -637,6 +656,13 @@ final class AppModel {
         case .exited(let code): headline = code == 0 ? "Ended" : "Exited with code \(code)"
         case .notStarted, .starting, .working: return
         }
+        let enabled = switch activity.status {
+        case .needsAttention: settings.notifiesWhenAttentionNeeded
+        case .finished: settings.notifiesWhenFinished
+        default: settings.notifiesWhenExited
+        }
+        guard enabled else { return }
+        if settings.suppressesNotificationsWhileActive, NSApp.isActive { return }
         let location = [
             workspace.island(containing: session.id)?.name,
             workspace.project(containing: session.id)?.name,
@@ -646,12 +672,13 @@ final class AppModel {
             sessionID: session.id,
             title: "\(session.displayTitle): \(headline)",
             subtitle: location.compactMap(\.self).joined(separator: " / "),
-            body: activity.lastMessage
+            body: activity.lastMessage,
+            playsSound: settings.playsNotificationSound
         )
     }
 
-    private func refreshDockBadge() {
-        notifier.setDockBadge(attentionSummary(of: workspace, activities: activities).needsAttention)
+    func refreshDockBadge() {
+        notifier.setDockBadge(settings.showsDockBadge ? attentionSummary(of: workspace, activities: activities).needsAttention : 0)
     }
 
     // MARK: Pane focus

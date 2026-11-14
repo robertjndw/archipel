@@ -86,11 +86,17 @@ private struct PaneView: View {
             } description: {
                 Text("Start an agent or a shell in \(worktree.displayName), or open a file from the sidebar on the right.")
             } actions: {
-                ForEach(AgentDefinition.builtIns) { agent in
-                    Button(agent.displayName, systemImage: agent.symbolName) {
-                        model.newSession(in: worktree.id, agent: agent, pane: pane.id)
+                GlassEffectContainer {
+                    HStack(spacing: 8) {
+                        ForEach(AgentDefinition.builtIns) { agent in
+                            Button(agent.displayName, systemImage: agent.symbolName) {
+                                model.newSession(in: worktree.id, agent: agent, pane: pane.id)
+                            }
+                        }
                     }
                 }
+                .buttonStyle(.glass)
+                .controlSize(.large)
             }
         }
     }
@@ -115,6 +121,8 @@ private struct SessionContent: View {
                     Text(failure)
                 } actions: {
                     Button("Try Again") { model.restartSession(sessionID) }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.large)
                 }
             } else {
                 ProgressView()
@@ -129,21 +137,26 @@ private struct SessionContent: View {
     }
 }
 
+/// Sits below the terminal rather than over it, so the last lines of output
+/// stay readable.
 private struct ExitedBar: View {
     let code: Int32
     let restart: () -> Void
 
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
             Label(
                 code == 0 ? "This session has ended." : "This session exited with code \(code).",
                 systemImage: code == 0 ? "stop.circle" : "exclamationmark.triangle"
             )
-            Spacer()
-            Button("Restart", action: restart)
+            .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Button("Restart", systemImage: "arrow.clockwise", action: restart)
+                .buttonStyle(.glassProminent)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(.windowBackground)
+        .overlay(alignment: .top) { Divider() }
     }
 }

@@ -1,0 +1,63 @@
+import AgentKit
+import SwiftUI
+
+struct GeneralSettingsView: View {
+    @Environment(AppModel.self) private var model
+    @State private var isChoosingFolder = false
+
+    var body: some View {
+        @Bindable var settings = model.settings
+        Form {
+            Section {
+                Picker("Default agent", selection: $settings.defaultAgentID) {
+                    ForEach(AgentDefinition.builtIns) { agent in
+                        Label(agent.displayName, systemImage: agent.symbolName).tag(agent.id)
+                    }
+                }
+            } footer: {
+                Text("Started by New Session (⌘T) and the plus button. The other agents stay in the File menu.")
+            }
+
+            Section {
+                LabeledContent("Folder") {
+                    Text(settings.worktreesRoot.abbreviatingWithTildeInPath)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Spacer()
+                    Button("Reset") { settings.worktreesRoot = AppSettings.standardWorktreesRoot }
+                        .disabled(settings.worktreesRoot.standardizedFileURL == AppSettings.standardWorktreesRoot.standardizedFileURL)
+                    Button("Choose…") { isChoosingFolder = true }
+                }
+            } header: {
+                Text("Worktrees")
+            } footer: {
+                Text("New worktrees are created in <folder>/<project>/<branch>. A project can use a folder of its own in its project settings. Existing worktrees stay where they are.")
+            }
+
+            Section {
+                TextField("Branch prefix", text: $settings.branchPrefix, prompt: Text("robert/"))
+                    .autocorrectionDisabled()
+            } footer: {
+                Text("Filled in when you create a new branch, for example robert/ gives robert/fix-login. You can still edit it per branch.")
+            }
+
+            Section {
+                Toggle("Confirm before quitting while agents are working", isOn: $settings.confirmsQuitWhileWorking)
+            } footer: {
+                Text("Quitting stops running agents. Their conversations are kept and resume the next time you open the session.")
+            }
+        }
+        .formStyle(.grouped)
+        .fileImporter(isPresented: $isChoosingFolder, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result { settings.worktreesRoot = url }
+        }
+    }
+}
+
+private extension URL {
+    var abbreviatingWithTildeInPath: String { (path as NSString).abbreviatingWithTildeInPath }
+}

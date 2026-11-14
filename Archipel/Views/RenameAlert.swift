@@ -23,7 +23,7 @@ private struct RenameAlert: ViewModifier {
     @Binding var target: RenameTarget?
 
     func body(content: Content) -> some View {
-        content.alert("Rename", isPresented: isPresented, presenting: target) { target in
+        content.alert("Rename", item: $target) { target in
             RenameFields(target: target) { name in
                 switch target.kind {
                 case .project(let id): model.renameProject(id, to: name)
@@ -31,10 +31,6 @@ private struct RenameAlert: ViewModifier {
                 }
             }
         }
-    }
-
-    private var isPresented: Binding<Bool> {
-        Binding(get: { target != nil }, set: { if !$0 { target = nil } })
     }
 }
 

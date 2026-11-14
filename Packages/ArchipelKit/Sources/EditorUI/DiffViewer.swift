@@ -160,8 +160,8 @@ private struct DiffHeader: View {
             }
         }
         .font(.callout)
-        .padding(.horizontal, 10)
-        .frame(height: 28)
+        .padding(.horizontal, 12)
+        .frame(height: 32)
     }
 
     @ViewBuilder

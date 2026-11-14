@@ -100,11 +100,7 @@ struct FilesTab: View {
     @State private var selection: Set<URL> = []
 
     var body: some View {
-        VStack(spacing: 0) {
-            InspectorHeader(refresh: refresh) {
-                Label(model.root.lastPathComponent, systemImage: FileIcon.folder)
-            }
-
+        Group {
             if let error = model.rootError {
                 ContentUnavailableView("Can't Read Folder", systemImage: "exclamationmark.triangle", description: Text(error))
                     .frame(maxHeight: .infinity)
@@ -124,6 +120,12 @@ struct FilesTab: View {
                     guard selection.count == 1, let url = selection.first, !model.isDirectory(url) else { return }
                     actions.openFile(url, true)
                 }
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .safeAreaBar(edge: .top, spacing: 0) {
+            InspectorHeader(refresh: refresh) {
+                Label(model.root.lastPathComponent, systemImage: FileIcon.folder)
             }
         }
         .task { await model.refresh() }

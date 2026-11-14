@@ -152,6 +152,16 @@ public struct ProjectScripts: Codable, Equatable, Sendable {
     }
 }
 
+/// What stands for a project in the sidebar.
+public enum ProjectIcon: Codable, Equatable, Sendable {
+    /// An icon found in the repository (app icon, favicon, logo), or the project's initial when there is none.
+    case automatic
+    /// SF Symbol name.
+    case symbol(String)
+    /// An image file the user picked.
+    case image(URL)
+}
+
 public struct Project: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
@@ -160,6 +170,13 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
     public var isExpanded: Bool
     public var worktrees: [Worktree]
     public var scripts: ProjectScripts
+    /// nil follows the island's tint.
+    public var tint: Tint?
+    public var icon: ProjectIcon
+    /// Folder that new worktrees are created in, one subfolder per branch. nil uses the app-wide default.
+    public var worktreesDirectory: URL?
+    /// Branch or ref that new branches start from. nil starts from the main checkout's HEAD.
+    public var baseBranch: String?
 
     public init(
         id: UUID = UUID(),
@@ -167,7 +184,11 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
         folderURL: URL,
         isExpanded: Bool = true,
         worktrees: [Worktree] = [],
-        scripts: ProjectScripts = ProjectScripts()
+        scripts: ProjectScripts = ProjectScripts(),
+        tint: Tint? = nil,
+        icon: ProjectIcon = .automatic,
+        worktreesDirectory: URL? = nil,
+        baseBranch: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -175,6 +196,10 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
         self.isExpanded = isExpanded
         self.worktrees = worktrees
         self.scripts = scripts
+        self.tint = tint
+        self.icon = icon
+        self.worktreesDirectory = worktreesDirectory
+        self.baseBranch = baseBranch
     }
 
     public init(from decoder: any Decoder) throws {
@@ -185,6 +210,10 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
         isExpanded = try c.decodeIfPresent(Bool.self, forKey: .isExpanded) ?? true
         worktrees = try c.decode([Worktree].self, forKey: .worktrees)
         scripts = try c.decodeIfPresent(ProjectScripts.self, forKey: .scripts) ?? ProjectScripts()
+        tint = try c.decodeIfPresent(Tint.self, forKey: .tint)
+        icon = try c.decodeIfPresent(ProjectIcon.self, forKey: .icon) ?? .automatic
+        worktreesDirectory = try c.decodeIfPresent(URL.self, forKey: .worktreesDirectory)
+        baseBranch = try c.decodeIfPresent(String.self, forKey: .baseBranch)
     }
 }
 

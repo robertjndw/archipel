@@ -4,34 +4,51 @@ import SwiftUI
 /// The floating "Go to…" / "Open Quickly…" panel. Attach it as an overlay on the window content.
 struct CommandPalette: View {
     @Environment(CommandPaletteModel.self) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if palette.isPresented {
-            ZStack(alignment: .top) {
+        ZStack(alignment: .top) {
+            if palette.isPresented {
                 // Swallows clicks so they never reach the terminal underneath.
-                Color.black.opacity(0.12)
-                    .contentShape(Rectangle())
+                // Clear, like Spotlight: the panel's glass carries the focus.
+                Color.clear
+                    .contentShape(.rect)
                     .onTapGesture { palette.dismiss() }
                     .ignoresSafeArea()
                 PalettePanel()
-                    .frame(width: 560)
+                    .frame(width: 600)
                     .padding(.top, 80)
+                    .transition(transition)
             }
         }
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : .bouncy(duration: 0.3, extraBounce: 0.05), value: palette.isPresented)
+    }
+
+    /// Removal is instant: dismissing empties the rows in the same update, and
+    /// a fade would show the panel collapsing to "No results" on its way out.
+    private var transition: AnyTransition {
+        .asymmetric(
+            insertion: reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96, anchor: .top)),
+            removal: .identity
+        )
     }
 }
 
 private struct PalettePanel: View {
     @Environment(CommandPaletteModel.self) private var palette
 
-    private let rowHeight: CGFloat = 34
+    private let rowHeight: CGFloat = 36
     private let maxVisibleRows = 10
+    /// Rows are inset by this much from the panel edge; their radius follows.
+    private let rowInset: CGFloat = 8
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass")
+                    .font(.title2)
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 PaletteField(
                     placeholder: palette.mode == .goTo ? "Go to…" : "Open file…",
                     text: palette.query,
@@ -40,21 +57,20 @@ private struct PalettePanel: View {
                     onSubmit: { palette.activateSelection() },
                     onCancel: { palette.dismiss() }
                 )
-                .frame(height: 24)
+                .frame(height: 28)
                 if palette.isLoadingFiles {
                     ProgressView().controlSize(.small)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
             Divider()
+                .padding(.horizontal, rowInset)
             results
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator))
-        .shadow(color: .black.opacity(0.3), radius: 24, y: 10)
+        .glassEffect(.regular, in: .rect(cornerRadius: Chrome.panelRadius))
         // A tap on the panel itself must not reach the dismissing backdrop.
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(.rect(cornerRadius: Chrome.panelRadius))
         .onTapGesture {}
     }
 
@@ -63,13 +79,13 @@ private struct PalettePanel: View {
         if palette.rows.isEmpty {
             Text(emptyMessage)
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, minHeight: 56)
+                .frame(maxWidth: .infinity, minHeight: 64)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(palette.rows.enumerated()), id: \.element.id) { index, row in
-                            PaletteRowView(row: row, isSelected: index == palette.selection)
+                            PaletteRowView(row: row, isSelected: index == palette.selection, cornerRadius: Chrome.panelRadius - rowInset)
                                 .frame(height: rowHeight)
                                 .contentShape(Rectangle())
                                 .onTapGesture { palette.activate(index) }
@@ -78,9 +94,9 @@ private struct PalettePanel: View {
                                 }
                         }
                     }
-                    .padding(6)
+                    .padding(rowInset)
                 }
-                .frame(height: min(CGFloat(palette.rows.count), CGFloat(maxVisibleRows)) * rowHeight + 12)
+                .frame(height: min(CGFloat(palette.rows.count), CGFloat(maxVisibleRows)) * rowHeight + rowInset * 2)
                 .onChange(of: palette.selection) { _, selection in
                     guard palette.rows.indices.contains(selection) else { return }
                     proxy.scrollTo(palette.rows[selection].id)
@@ -102,6 +118,7 @@ private struct PalettePanel: View {
 private struct PaletteRowView: View {
     let row: PaletteRow
     let isSelected: Bool
+    let cornerRadius: CGFloat
 
     var body: some View {
         HStack(spacing: 10) {
@@ -123,15 +140,13 @@ private struct PaletteRowView: View {
                 StatusGlyph(activity: activity)
             }
             if let hint = row.shortcutHint {
-                Text(hint)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                ShortcutHint(hint)
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 10)
         .background {
             if isSelected {
-                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.tint.opacity(0.22))
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill(.tint.opacity(0.22))
             }
         }
     }
@@ -163,6 +178,29 @@ private struct PaletteRowView: View {
     }
 }
 
+/// Menu-style key glyphs: each key in its own fixed-width cell, so hints line
+/// up down the list the way they do in a menu.
+private struct ShortcutHint: View {
+    let keys: [String]
+
+    init(_ hint: String) {
+        keys = hint.map(String.init)
+    }
+
+    var body: some View {
+        HStack(spacing: 1) {
+            ForEach(Array(keys.enumerated()), id: \.offset) { _, key in
+                Text(verbatim: key)
+                    .frame(minWidth: 13)
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: keys.joined()))
+    }
+}
+
 // MARK: Text field
 
 /// An AppKit text field rather than SwiftUI's, because the terminal underneath is an AppKit view that holds first
@@ -182,7 +220,7 @@ private struct PaletteField: NSViewRepresentable {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = .systemFont(ofSize: 18)
+        field.font = .systemFont(ofSize: 20)
         field.lineBreakMode = .byTruncatingHead
         field.cell?.usesSingleLineMode = true
         field.delegate = context.coordinator

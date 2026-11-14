@@ -3,16 +3,47 @@ import Foundation
 public struct AttentionSummary: Equatable, Sendable {
     public var needsAttention: Int
     public var unread: Int
+    /// Sessions starting up or in the middle of a turn. Not attention as such, but what tells the user
+    /// that something is still going on in a place they are not looking at.
+    public var working: Int
 
-    public init(needsAttention: Int = 0, unread: Int = 0) {
+    public init(needsAttention: Int = 0, unread: Int = 0, working: Int = 0) {
         self.needsAttention = needsAttention
         self.unread = unread
+        self.working = working
     }
 
     public static let zero = AttentionSummary()
 
     public static func + (lhs: Self, rhs: Self) -> Self {
-        Self(needsAttention: lhs.needsAttention + rhs.needsAttention, unread: lhs.unread + rhs.unread)
+        Self(
+            needsAttention: lhs.needsAttention + rhs.needsAttention,
+            unread: lhs.unread + rhs.unread,
+            working: lhs.working + rhs.working
+        )
+    }
+
+    /// The single strongest signal, for places with room for one indicator.
+    public var dominant: Signal? {
+        if needsAttention > 0 { return .needsAttention(needsAttention) }
+        if unread > 0 { return .unread }
+        if working > 0 { return .working }
+        return nil
+    }
+
+    public enum Signal: Equatable, Sendable {
+        case needsAttention(Int)
+        case unread
+        case working
+    }
+
+    /// For VoiceOver; empty when there is nothing to report.
+    public var accessibilityDescription: String {
+        var parts: [String] = []
+        if needsAttention > 0 { parts.append("\(needsAttention) waiting for you") }
+        if unread > 0 { parts.append("\(unread) unread") }
+        if working > 0 { parts.append(working == 1 ? "1 agent working" : "\(working) agents working") }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -21,7 +52,8 @@ public func attentionSummary(of sessions: [Session], activities: [Session.ID: Se
         guard let activity = activities[session.id] else { return total }
         return total + AttentionSummary(
             needsAttention: activity.needsUser ? 1 : 0,
-            unread: activity.unread ? 1 : 0
+            unread: activity.unread ? 1 : 0,
+            working: activity.status == .working || activity.status == .starting ? 1 : 0
         )
     }
 }

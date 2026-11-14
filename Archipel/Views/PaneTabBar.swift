@@ -21,72 +21,81 @@ struct PaneTabBar: View {
 
     static let height: CGFloat = 36
 
+    @Namespace private var glass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// With one pane there is nothing to tell apart, so it always reads as active.
+    private var isActive: Bool { isFocused || worktree.panes.count == 1 }
+
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 6) {
             if showsSidebarToggle {
-                Button("Show Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .padding(.leading, 78)
-                    .padding(.trailing, 4)
-                    .help("Show Sidebar")
+                GlassToolbarGroup {
+                    Button("Show Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
+                        .help("Show Sidebar")
+                }
+                // Leaves the window buttons their corner.
+                .padding(.leading, 78)
             }
 
             ScrollView(.horizontal) {
-                HStack(spacing: 4) {
-                    ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
-                        TabButton(
-                            tab: tab,
-                            label: label(for: tab),
-                            isSelected: tab.id == pane.selectedTab?.id,
-                            isFocused: isFocused,
-                            select: { model.select(tab: tab.id) },
-                            pin: { model.pin(tab: tab.id) },
-                            close: { model.close(tab: tab.id) }
-                        )
-                        .contextMenu { tabMenu(tab) }
-                        .draggable(tab.id.uuidString)
-                        .dropDestination(for: String.self) { items, _ in
-                            drop(items, at: index)
+                // One container for the row, so the selection's glass morphs
+                // from the old tab to the new one instead of fading.
+                GlassEffectContainer {
+                    HStack(spacing: 2) {
+                        ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
+                            TabButton(
+                                tab: tab,
+                                label: label(for: tab),
+                                isSelected: tab.id == pane.selectedTab?.id,
+                                isActive: isActive,
+                                glass: glass,
+                                select: { model.select(tab: tab.id) },
+                                pin: { model.pin(tab: tab.id) },
+                                close: { model.close(tab: tab.id) }
+                            )
+                            .contextMenu { tabMenu(tab) }
+                            .draggable(tab.id.uuidString)
+                            .dropDestination(for: String.self) { items, _ in
+                                return drop(items, at: index)
+                            }
                         }
                     }
+                    // The scroll view clips, so the glass shadow needs room inside it.
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 6)
                 }
-                .padding(.horizontal, 8)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: pane.selectedTab?.id)
+                .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isActive)
             }
             .scrollIndicators(.hidden)
             // Dropping on the empty part of the bar appends.
             .dropDestination(for: String.self) { items, _ in
-                drop(items, at: nil)
+                return drop(items, at: nil)
             }
 
-            Menu {
-                NewSessionButtons(worktree: worktree.id, pane: pane.id)
-            } label: {
-                Image(systemName: "plus")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .padding(.horizontal, 8)
-            .help("New session")
-            .accessibilityLabel("New session")
+            GlassToolbarGroup {
+                Menu {
+                    NewSessionButtons(worktree: worktree.id, pane: pane.id)
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .toolbarGroupMenu()
+                .help("New session")
+                .accessibilityLabel("New session")
 
-            if pane.id == worktree.panes.last?.id {
-                let hasRunScript = model.project(ofWorktree: worktree.id)?.scripts.runCommand != nil
-                Button("Run", systemImage: "play") { model.runProject(in: worktree.id) }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .padding(.trailing, 10)
-                    .help(hasRunScript ? "Run this project's run script (⌘R)" : "Set up a run script for this project")
-                Button("Toggle Inspector", systemImage: "sidebar.trailing") { showInspector.toggle() }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .padding(.trailing, 10)
-                    .help("Show or hide files and changes")
+                if pane.id == worktree.panes.last?.id {
+                    let hasRunScript = model.project(ofWorktree: worktree.id)?.scripts.runCommand != nil
+                    Button("Run", systemImage: "play") { model.runProject(in: worktree.id) }
+                        .help(hasRunScript ? "Run this project's run script (⌘R)" : "Set up a run script for this project")
+                    Button("Toggle Inspector", systemImage: "sidebar.trailing") { showInspector.toggle() }
+                        .help("Show or hide files and changes")
+                }
             }
+            .padding(.trailing, 8)
         }
         .frame(height: Self.height)
-        .background(.bar)
+        .background(.windowBackground)
         .overlay(alignment: .bottom) { Divider() }
         .renameAlert($renaming)
     }
@@ -170,7 +179,9 @@ private struct TabButton: View {
     let tab: ArchipelCore.Tab
     let label: TabLabel
     let isSelected: Bool
-    let isFocused: Bool
+    /// Whether this tab's pane has focus; only then does the selection get glass.
+    let isActive: Bool
+    let glass: Namespace.ID
     let select: () -> Void
     let pin: () -> Void
     let close: () -> Void
@@ -179,11 +190,12 @@ private struct TabButton: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: label.symbol)
-                .foregroundStyle(isSelected && isFocused ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(isSelected && isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
             Text(label.title)
                 .lineLimit(1)
                 .italic(tab.isPreview)
                 .fontWeight(label.activity?.unread == true ? .semibold : .regular)
+                .foregroundStyle(isSelected && isActive ? .primary : .secondary)
             // The close button takes the status glyph's place on hover, so
             // tabs do not change width under the pointer.
             ZStack {
@@ -207,11 +219,14 @@ private struct TabButton: View {
             }
             .frame(width: 18)
         }
-        .padding(.leading, 10)
+        .padding(.leading, 12)
         .padding(.trailing, 6)
-        .frame(minWidth: 96, maxWidth: 220, minHeight: 26)
-        .background(isSelected ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 7))
-        .contentShape(.rect(cornerRadius: 7))
+        .frame(minWidth: 96, maxWidth: 220, minHeight: Chrome.controlHeight)
+        .background { selectionBackground }
+        // On the tab itself rather than in its background: glass in a container is drawn
+        // above the content of the view it backs, which would cover the label.
+        .glassEffect(isSelected && isActive ? .regular : .identity, in: .capsule)
+        .contentShape(.capsule)
         .gesture(TapGesture(count: 2).onEnded(pin))
         .simultaneousGesture(TapGesture().onEnded(select))
         .onHover { isHovering = $0 }
@@ -220,5 +235,19 @@ private struct TabButton: View {
         .accessibilityLabel(label.title)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, select)
+    }
+
+    /// The focused pane's selected tab is the one piece of glass in the row,
+    /// like Safari's compact tabs. An unfocused pane falls back to a flat fill,
+    /// which is what tells the panes apart at a glance.
+    @ViewBuilder
+    private var selectionBackground: some View {
+        if isSelected && isActive {
+            EmptyView()
+        } else if isSelected {
+            Capsule().fill(.quaternary)
+        } else if isHovering {
+            Capsule().fill(.quinary)
+        }
     }
 }
