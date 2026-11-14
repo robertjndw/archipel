@@ -24,12 +24,10 @@ struct CommandPalette: View {
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .bouncy(duration: 0.3, extraBounce: 0.05), value: palette.isPresented)
     }
 
-    /// Removal is instant: dismissing empties the rows in the same update, and
-    /// a fade would show the panel collapsing to "No results" on its way out.
     private var transition: AnyTransition {
         .asymmetric(
             insertion: reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96, anchor: .top)),
-            removal: .identity
+            removal: .opacity
         )
     }
 }

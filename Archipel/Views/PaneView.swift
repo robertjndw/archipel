@@ -33,6 +33,9 @@ struct WorktreeContentView: View {
                 systemImage: "sidebar.left",
                 description: Text("Choose a worktree in the sidebar, or add a project to this island.")
             )
+            // ContentUnavailableView only takes its ideal height, so without this the status bar
+            // ends up halfway up the window.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }

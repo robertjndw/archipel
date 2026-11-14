@@ -173,6 +173,7 @@ final class CommandPaletteModel {
         self.mode = mode
         query = ""
         selection = 0
+        rows = []
         files = []
         filesRoot = nil
         loadTask?.cancel()
@@ -188,7 +189,8 @@ final class CommandPaletteModel {
         loadTask?.cancel()
         rankTask?.cancel()
         generation += 1
-        rows = []
+        // Keep the rows until the next present. The panel is still fading out at this point and an
+        // empty list would flash "No results".
         files = []
         destinations = []
         if restoringFocus { restoreFocus() }

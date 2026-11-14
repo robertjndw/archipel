@@ -8,19 +8,22 @@ struct StatusBar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             // Once a minute is enough for "resets in" and for a window that has just reset.
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 UsageItems(now: context.date)
             }
             Spacer(minLength: 8)
             AgentsItem()
+            Divider()
+                .frame(height: 12)
             StayAwakeButton()
         }
         .font(.system(size: 11))
         .monospacedDigit()
-        .padding(.horizontal, 10)
-        .frame(height: 24)
+        // Extra room at the edges because the window's bottom corners are rounded.
+        .padding(.horizontal, 14)
+        .frame(height: 28)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
     }
