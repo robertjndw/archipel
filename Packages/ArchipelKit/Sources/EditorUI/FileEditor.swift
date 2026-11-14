@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UISupport
 
 /// Editor for one file. Text files are editable; images, PDFs and other previewable types show in
 /// Quick Look; binaries and very large files get an explanation instead.
@@ -39,19 +40,11 @@ private struct FileEditorContent: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .task {
-            // Lives as long as the editor is on screen; the poll covers a file that comes back after
-            // being deleted, which no watch can see.
-            buffer.beginWatching()
-            while !Task.isCancelled {
-                await buffer.reload()
-                try? await Task.sleep(for: .seconds(2))
-            }
-            buffer.endWatching()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await buffer.reload() }
-        }
+        .onAppear { buffer.beginWatching() }
+        .onDisappear { buffer.endWatching() }
+        // The watch sees edits; the poll covers a file that comes back after being deleted, which
+        // no watch can see.
+        .refreshing(every: .seconds(2)) { await buffer.reload() }
     }
 
     @ViewBuilder

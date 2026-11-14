@@ -13,10 +13,7 @@ public struct SessionActivity: Equatable, Sendable {
         self.lastMessage = lastMessage
     }
 
-    public var needsUser: Bool {
-        if case .needsAttention = status { return true }
-        return false
-    }
+    public var needsUser: Bool { status.needsUser }
 
     public mutating func markViewed() {
         unread = false

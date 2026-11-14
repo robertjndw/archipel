@@ -71,8 +71,7 @@ struct SidebarView: View {
         }
         .confirmationDialog(
             "Delete the worktree \(deleting?.displayName ?? "")?",
-            isPresented: isDeleting,
-            presenting: deleting
+            item: $deleting
         ) { worktree in
             Button("Delete Worktree", role: .destructive) {
                 model.removeWorktree(worktree.id, deleteFromDisk: true)
@@ -87,10 +86,6 @@ struct SidebarView: View {
             get: { model.selectedWorktree?.id },
             set: { model.select(worktree: $0) }
         )
-    }
-
-    private var isDeleting: Binding<Bool> {
-        Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
     }
 
     private func expansion(of project: Project) -> Binding<Bool> {

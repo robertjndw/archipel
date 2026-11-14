@@ -20,7 +20,7 @@ struct GeneralSettingsView: View {
 
             Section {
                 LabeledContent("Folder") {
-                    Text(settings.worktreesRoot.abbreviatingWithTildeInPath)
+                    Text(settings.worktreesRoot.abbreviatedPath)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -56,8 +56,4 @@ struct GeneralSettingsView: View {
             if case .success(let url) = result { settings.worktreesRoot = url }
         }
     }
-}
-
-private extension URL {
-    var abbreviatingWithTildeInPath: String { (path as NSString).abbreviatingWithTildeInPath }
 }

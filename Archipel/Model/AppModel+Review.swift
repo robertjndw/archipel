@@ -27,7 +27,7 @@ extension AppModel {
             ReviewTarget(
                 id: session.id,
                 title: session.displayTitle,
-                symbolName: AgentDefinition.builtIn(id: session.agent.rawValue)?.symbolName ?? "terminal"
+                symbolName: session.agent.definition.symbolName
             )
         }
     }
@@ -60,7 +60,7 @@ extension AppModel {
             deliverPendingReview(to: id)
         }
         let endedWork = switch new {
-        case .finished: old == .working || old.isAttention
+        case .finished: old == .working || old.needsUser
         case .exited: true
         default: false
         }
@@ -123,9 +123,3 @@ extension AppModel {
     }
 }
 
-private extension SessionStatus {
-    var isAttention: Bool {
-        if case .needsAttention = self { return true }
-        return false
-    }
-}

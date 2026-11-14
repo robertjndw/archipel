@@ -51,15 +51,6 @@ enum FileActions {
 }
 
 extension View {
-    /// Agents edit files while the user is elsewhere, so coming back to the app is the moment to catch up.
-    func onAppActivation(perform action: @escaping @MainActor () -> Void) -> some View {
-        onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            action()
-        }
-    }
-}
-
-extension View {
     /// The sidebar list style sizes its rows from the system "Sidebar icon size"
     /// setting, whose default is too roomy for a file tree. Pin it to the small
     /// size, which is what Xcode's navigators use.

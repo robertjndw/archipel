@@ -29,10 +29,6 @@ extension AppModel {
         projectSettingsID = id
     }
 
-    func saveScripts(_ scripts: ProjectScripts, of id: Project.ID) {
-        mutate { $0.updateProject(id: id) { $0.scripts = scripts } }
-    }
-
     /// The Run command: restarts this run's Run session if the worktree has one, otherwise starts a
     /// new one. Without a run script there is nothing to start, so the settings open instead.
     func runProject(in worktreeID: Worktree.ID) {

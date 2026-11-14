@@ -156,7 +156,7 @@ struct SidebarMetadataLine: View {
         case .agents(let agents):
             HStack(spacing: 2) {
                 ForEach(agents, id: \.self) { agent in
-                    Image(systemName: Self.symbol(for: agent))
+                    Image(systemName: agent.definition.symbolName)
                         .imageScale(.small)
                         .foregroundStyle(.tertiary)
                 }
@@ -185,10 +185,6 @@ struct SidebarMetadataLine: View {
         }
         .fixedSize()
     }
-
-    static func symbol(for agent: AgentKind) -> String {
-        AgentDefinition.builtIn(id: agent.rawValue)?.symbolName ?? AgentDefinition.shell.symbolName
-    }
 }
 
 /// A session inside its worktree's row, shown when the worktree has more than one. A click picks the
@@ -204,7 +200,7 @@ struct SidebarSessionRow: View {
             model.select(session: content.id)
         } label: {
             HStack(spacing: 7) {
-                Image(systemName: SidebarMetadataLine.symbol(for: content.agent))
+                Image(systemName: content.agent.definition.symbolName)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)

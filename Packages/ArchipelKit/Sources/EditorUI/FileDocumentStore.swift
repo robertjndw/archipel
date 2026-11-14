@@ -91,8 +91,6 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
     var saveError: String?
     /// Bumped on every change on disk, for views that reload themselves (Quick Look).
     private(set) var revision = 0
-    /// Bumped whenever the text is replaced from disk rather than typed.
-    private(set) var reloadCount = 0
 
     @ObservationIgnored let textStorage = NSTextStorage()
     @ObservationIgnored let undoManager = UndoManager()
@@ -217,7 +215,6 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
         }
         // Undo steps recorded against the old text would corrupt the new one.
         undoManager.removeAllActions()
-        reloadCount += 1
         updateDirty()
     }
 

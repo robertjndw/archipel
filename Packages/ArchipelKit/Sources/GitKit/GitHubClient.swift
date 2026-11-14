@@ -48,7 +48,7 @@ public struct GitHubClient: Sendable {
         guard result.status == 0 else {
             // gh has no dedicated exit code for this case, so the message is the only signal.
             if result.stderr.localizedCaseInsensitiveContains("no pull requests found") { return nil }
-            throw Self.failure(result, command: "pr view")
+            throw GitError(command: "gh pr view", output: result)
         }
         return try GitHubParser.pullRequest(Data(result.stdout.utf8))
     }
@@ -57,7 +57,7 @@ public struct GitHubClient: Sendable {
     /// so the repo's PR template and the user's edits apply.
     public func createPullRequestInBrowser(in folder: URL) async throws {
         let result = try await run(["pr", "create", "--web"], in: folder)
-        guard result.status == 0 else { throw Self.failure(result, command: "pr create") }
+        guard result.status == 0 else { throw GitError(command: "gh pr create", output: result) }
     }
 
     private func run(_ arguments: [String], in folder: URL) async throws -> GitProcess.Output {
@@ -68,11 +68,6 @@ public struct GitHubClient: Sendable {
             "NO_COLOR": "1",
             "GIT_TERMINAL_PROMPT": "0",
         ])
-    }
-
-    private static func failure(_ result: GitProcess.Output, command: String) -> GitError {
-        let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        return GitError(message: stderr.isEmpty ? "gh \(command) failed with exit code \(result.status)" : stderr)
     }
 }
 

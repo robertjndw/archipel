@@ -286,25 +286,20 @@ struct ProjectSettingsSheet: View {
     }
 
     private func refreshPreview() async {
-        let image: NSImage? = switch icon {
-        case .symbol: nil
-        case .image(let url): await ProjectIconFinder.load(url)
-        case .automatic: await ProjectIconFinder.findIcon(in: project.folderURL)
-        }
+        let image = await ProjectIconFinder.image(for: icon, in: project.folderURL)
         // A slower load for an earlier choice must not replace the current one.
         if !Task.isCancelled { previewImage = image }
     }
 
     private func save() {
-        let scripts = ProjectScripts(setup: setup, run: run)
         model.updateProject(project.id) {
             $0.name = trimmedName
             $0.icon = icon
             $0.tint = tint
             $0.worktreesDirectory = worktreesDirectory
             $0.baseBranch = baseBranch
+            $0.scripts = ProjectScripts(setup: setup, run: run)
         }
-        model.saveScripts(scripts, of: project.id)
         dismiss()
     }
 }

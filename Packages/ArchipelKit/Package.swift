@@ -20,10 +20,12 @@ let package = Package(
         .target(name: "ArchipelCore"),
         .target(name: "AgentKit", dependencies: ["ArchipelCore"]),
         .target(name: "GitKit"),
-        .target(name: "InspectorUI", dependencies: ["GitKit"]),
+        // SwiftUI helpers shared by the inspector and the editor; not a product of its own.
+        .target(name: "UISupport"),
+        .target(name: "InspectorUI", dependencies: ["GitKit", "UISupport"]),
         .target(
             name: "EditorUI",
-            dependencies: ["GitKit", .product(name: "Highlighter", package: "HighlighterSwift")]
+            dependencies: ["GitKit", "UISupport", .product(name: "Highlighter", package: "HighlighterSwift")]
         ),
         // Manual verification harness; see Sources/editor-demo/main.swift for usage.
         .executableTarget(name: "editor-demo", dependencies: ["EditorUI"]),

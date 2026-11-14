@@ -113,7 +113,7 @@ final class AppModel {
     // MARK: Selection
 
     var selectedIsland: Island? {
-        workspace.selectedIslandID.flatMap { workspace.island(id: $0) } ?? workspace.islands.first
+        workspace.selectedIslandID.flatMap { workspace.island(id: $0) }
     }
 
     var selectedWorktree: Worktree? {
@@ -431,10 +431,6 @@ final class AppModel {
         changingSelection { $0.closeTab(id: tab.id) }
     }
 
-    func closeFocusedTab() {
-        if let focusedTab { close(tab: focusedTab.id) }
-    }
-
     func split(tab id: Tab.ID) {
         changingSelection { _ = $0.splitTab(id: id) }
     }
@@ -456,7 +452,6 @@ final class AppModel {
             }
         }
         ensureRunning(id)
-        if visibleSessionIDs.contains(id) { terminals[id]?.setOccluded(false) }
     }
 
     func activity(for id: Session.ID) -> SessionActivity {
@@ -483,7 +478,7 @@ final class AppModel {
         guard terminals[id] == nil, let session = workspace.session(id: id),
               let worktree = workspace.worktree(containing: id), let terminalApp
         else { return }
-        let definition = AgentDefinition.builtIn(id: session.agent.rawValue) ?? .shell
+        let definition = session.agent.definition
         let script = scriptSessions[id]
         let location = WorktreeEnvironment(
             worktreePath: worktree.path,

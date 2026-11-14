@@ -89,8 +89,10 @@ public struct GitClient: Sendable {
     /// worktree root, where the two coincide. Tracked files plus untracked ones that are not ignored,
     /// minus tracked files already deleted from the working tree.
     public func listFiles(in folder: URL) async throws -> [String] {
-        let all = GitParser.paths(try await run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], in: folder))
-        let deleted = Set(GitParser.paths(try await run(["ls-files", "-z", "--deleted"], in: folder)))
+        async let listed = run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], in: folder)
+        async let deletedListed = run(["ls-files", "-z", "--deleted"], in: folder)
+        let all = GitParser.paths(try await listed)
+        let deleted = Set(GitParser.paths(try await deletedListed))
         // A path can appear twice, e.g. while merge conflicts leave several index stages.
         var seen = Set<String>()
         return all.filter { !deleted.contains($0) && seen.insert($0).inserted }
@@ -167,13 +169,20 @@ public struct GitClient: Sendable {
     }
 
     @discardableResult
-    private func run(_ arguments: [String], in folder: URL, readOnly: Bool = true, acceptedExitCodes: Set<Int32> = [0]) async throws -> String {
+    func run(_ arguments: [String], in folder: URL, readOnly: Bool = true, acceptedExitCodes: Set<Int32> = [0]) async throws -> String {
         let result = try await GitProcess.run(arguments, in: folder, readOnly: readOnly)
         guard acceptedExitCodes.contains(result.status) else {
-            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw GitError(message: stderr.isEmpty ? "git \(arguments.first ?? "") failed with exit code \(result.status)" : stderr)
+            throw GitError(command: "git \(arguments.first ?? "")", output: result)
         }
         return result.stdout
+    }
+}
+
+extension GitError {
+    /// git and gh explain themselves on stderr; the exit code is all that is left when they don't.
+    init(command: String, output: GitProcess.Output) {
+        let stderr = output.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(message: stderr.isEmpty ? "\(command) failed with exit code \(output.status)" : stderr)
     }
 }
 

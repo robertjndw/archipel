@@ -1,5 +1,6 @@
 import GitKit
 import SwiftUI
+import UISupport
 
 struct ChangeID: Hashable {
     var path: String
@@ -145,8 +146,9 @@ final class ChangesModel {
     /// Network and process work that changes slowly: the remote list and the branch's pull request.
     /// Driven by tab appearance, app activation and branch or upstream changes, never the status poll.
     func refreshRemoteInfo() async {
+        async let pullRequest: Void = lookUpPullRequest()
         hasRemote = await git.hasRemote(in: root)
-        await lookUpPullRequest()
+        await pullRequest
     }
 
     private func resolveGitHub() async -> GitHubClient? {
@@ -252,20 +254,11 @@ struct ChangesTab: View {
                     CommitArea(model: model)
                 }
             }
-        .task {
-            // Lives only while this tab is on screen, so the polling stops when the user switches away.
-            while !Task.isCancelled {
-                await model.refresh()
-                try? await Task.sleep(for: .seconds(3))
-            }
-        }
+        .refreshing(every: .seconds(3)) { await model.refresh() }
         .task { await model.refreshRemoteInfo() }
         .onChange(of: model.status.branch) { refreshRemoteInfo() }
         .onChange(of: model.status.upstream) { refreshRemoteInfo() }
-        .onAppActivation {
-            refresh()
-            refreshRemoteInfo()
-        }
+        .onAppActivation(perform: refreshRemoteInfo)
     }
 
     @ViewBuilder

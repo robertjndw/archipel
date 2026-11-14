@@ -54,8 +54,7 @@ struct IslandSwitcher: View {
         }
         .confirmationDialog(
             "Delete the island \(deleting?.name ?? "")?",
-            isPresented: isDeleting,
-            presenting: deleting
+            item: $deleting
         ) { island in
             Button("Delete Island", role: .destructive) { model.removeIsland(island.id) }
         } message: { island in
@@ -95,10 +94,6 @@ struct IslandSwitcher: View {
             if island.projects.isEmpty { model.removeIsland(island.id) } else { deleting = island }
         }
         .disabled(model.workspace.islands.count < 2)
-    }
-
-    private var isDeleting: Binding<Bool> {
-        Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
     }
 }
 

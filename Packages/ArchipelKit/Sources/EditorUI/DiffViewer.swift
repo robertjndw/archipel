@@ -1,6 +1,7 @@
 import AppKit
 import GitKit
 import SwiftUI
+import UISupport
 
 /// Side-by-side comparison of one changed file in a git checkout.
 /// staged true: HEAD vs index. staged false: index vs working tree (an untracked file is all-added).
@@ -65,16 +66,7 @@ private struct DiffViewerContent: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .task {
-            // Lives only while the tab is on screen, so a background tab costs nothing.
-            while !Task.isCancelled {
-                await model.refresh()
-                try? await Task.sleep(for: .seconds(3))
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await model.refresh() }
-        }
+        .refreshing(every: .seconds(3)) { await model.refresh() }
     }
 
     @ViewBuilder

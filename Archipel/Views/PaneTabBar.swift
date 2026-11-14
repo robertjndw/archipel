@@ -115,7 +115,7 @@ struct PaneTabBar: View {
             let session = worktree.sessions.first { $0.id == id }
             return TabLabel(
                 title: session?.displayTitle ?? "Session",
-                symbol: session.flatMap { AgentDefinition.builtIn(id: $0.agent.rawValue)?.symbolName } ?? "terminal",
+                symbol: (session?.agent.definition ?? .shell).symbolName,
                 detail: nil,
                 activity: model.activity(for: id)
             )

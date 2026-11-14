@@ -1,3 +1,4 @@
+import ArchipelCore
 import Foundation
 
 /// Everything an agent definition needs to build the command line for one session.
@@ -228,4 +229,11 @@ func hookEnvironment(_ context: LaunchContext) -> [String: String] {
         "ARCHIPEL_SESSION_ID": context.archipelSessionID.uuidString,
         "ARCHIPEL_SOCKET": context.socketURL.path,
     ]
+}
+
+extension AgentKind {
+    /// The built-in definition for this kind; anything unknown runs as a plain shell.
+    public var definition: AgentDefinition {
+        .builtIn(id: rawValue) ?? .shell
+    }
 }

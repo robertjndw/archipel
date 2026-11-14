@@ -1,4 +1,5 @@
 import SwiftUI
+import UISupport
 
 struct FileNode: Identifiable, Hashable, Sendable {
     let url: URL

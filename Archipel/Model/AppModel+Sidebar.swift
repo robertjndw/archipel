@@ -8,6 +8,12 @@ extension AppModel {
         AgentDefinition.builtIn(id: settings.defaultAgentID) ?? .claude
     }
 
+    /// The order of the File menu and the palette: the default agent gets ⌘T, the others follow.
+    var agentsInMenuOrder: [AgentDefinition] {
+        let defaultAgent = defaultAgent
+        return [defaultAgent] + AgentDefinition.builtIns.filter { $0.id != defaultAgent.id }
+    }
+
     /// True while at least one project of the selected island shows its worktrees.
     var hasExpandedProjects: Bool {
         selectedIsland?.projects.contains(where: \.isExpanded) ?? false

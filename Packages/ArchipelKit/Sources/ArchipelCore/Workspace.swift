@@ -31,8 +31,13 @@ public struct Workspace: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
-        islands = try c.decode([Island].self, forKey: .islands)
-        selectedIslandID = try c.decodeIfPresent(Island.ID.self, forKey: .selectedIslandID)
+        let islands = try c.decode([Island].self, forKey: .islands)
+        self.islands = islands
+        // A missing or stale selection falls back to the first island, as in a fresh workspace, so
+        // nothing above the model has to guess which island is meant.
+        let selectedIslandID = try c.decodeIfPresent(Island.ID.self, forKey: .selectedIslandID)
+        self.selectedIslandID = selectedIslandID.flatMap { id in islands.contains { $0.id == id } ? id : nil }
+            ?? islands.first?.id
         selectedWorktreeIDByIsland = try c.decode([Island.ID: Worktree.ID].self, forKey: .selectedWorktreeIDByIsland)
 
         // Version 2 remembered one selected session per worktree; it becomes the synthesized pane's selected tab.

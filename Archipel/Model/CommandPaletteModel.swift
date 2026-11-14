@@ -10,26 +10,10 @@ struct PaletteCommand: Identifiable {
     let title: String
     let symbol: String
     /// Display only. The real shortcut lives on the menu item.
-    let shortcutHint: String?
+    var shortcutHint: String? = nil
     /// Evaluated when the palette opens, so unavailable commands are left out instead of shown disabled.
-    let isAvailable: Bool
+    var isAvailable = true
     let perform: @MainActor () -> Void
-
-    init(
-        id: String,
-        title: String,
-        symbol: String,
-        shortcutHint: String? = nil,
-        isAvailable: Bool = true,
-        perform: @escaping @MainActor () -> Void
-    ) {
-        self.id = id
-        self.title = title
-        self.symbol = symbol
-        self.shortcutHint = shortcutHint
-        self.isAvailable = isAvailable
-        self.perform = perform
-    }
 
     /// The palette shows these in this order when the query is empty.
     static func standard(
@@ -40,10 +24,7 @@ struct PaletteCommand: Identifiable {
         let worktreeID = model.selectedWorktree?.id
         let hasSelection = worktreeID != nil
 
-        // Same order as the File menu: the default agent has ⌘T, the others follow.
-        let defaultAgent = AgentDefinition.builtIn(id: model.settings.defaultAgentID) ?? .claude
-        let agents = [defaultAgent] + AgentDefinition.builtIns.filter { $0.id != defaultAgent.id }
-        let newSessions = zip(agents, ["⌘T", "⌥⌘T", "⇧⌘T"]).map { agent, hint in
+        let newSessions = zip(model.agentsInMenuOrder, ["⌘T", "⌥⌘T", "⇧⌘T"]).map { agent, hint in
             PaletteCommand(
                 id: "new-\(agent.id)",
                 title: "New \(agent.displayName) Session",
@@ -322,8 +303,7 @@ final class CommandPaletteModel {
             perform = { app.select(worktree: worktreeID) }
         case .session(let sessionID):
             id = "session:\(sessionID)"
-            let agent = app.workspace.session(id: sessionID).flatMap { AgentDefinition.builtIn(id: $0.agent.rawValue) }
-            symbol = agent?.symbolName ?? "terminal"
+            symbol = (app.workspace.session(id: sessionID)?.agent.definition ?? .shell).symbolName
             activity = app.activity(for: sessionID)
             perform = { app.select(session: sessionID) }
         }

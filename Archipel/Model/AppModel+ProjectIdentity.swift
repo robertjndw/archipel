@@ -33,10 +33,7 @@ extension AppModel {
             return
         }
         Task { [weak self] in
-            let image: NSImage? = switch icon {
-            case .image(let url): await ProjectIconFinder.load(url)
-            default: await ProjectIconFinder.findIcon(in: project.folderURL)
-            }
+            let image = await ProjectIconFinder.image(for: icon, in: project.folderURL)
             // The repository scan is slow; by now the user may have chosen another icon.
             guard let self, self.workspace.project(id: id)?.icon == icon else { return }
             self.projectIcons[id] = image
@@ -88,8 +85,13 @@ nonisolated enum ProjectIconFinder {
     }
 
     @concurrent
-    static func load(_ url: URL) async -> NSImage? {
-        thumbnail(of: url)
+    /// The image to draw for `icon`, or nil when it is a symbol or nothing was found.
+    static func image(for icon: ProjectIcon, in root: URL) async -> NSImage? {
+        switch icon {
+        case .symbol: nil
+        case .image(let url): thumbnail(of: url)
+        case .automatic: await findIcon(in: root)
+        }
     }
 
     /// The largest image of the first `AppIcon.appiconset` within a few levels of the root. The depth

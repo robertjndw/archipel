@@ -19,6 +19,11 @@ public enum SessionStatus: Equatable, Sendable {
     /// The agent completed its turn and is waiting at its prompt.
     case finished
     case exited(code: Int32)
+
+    public var needsUser: Bool {
+        if case .needsAttention = self { return true }
+        return false
+    }
 }
 
 /// Everything the app learns about a running session, from either channel:

@@ -9,6 +9,7 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
 
     private let center = UNUserNotificationCenter.current()
     private nonisolated static let sessionKey = "sessionID"
+    private var dockBadgeCount = 0
 
     func start() {
         center.delegate = self
@@ -32,7 +33,10 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         center.removeDeliveredNotifications(withIdentifiers: [sessionID.uuidString])
     }
 
+    /// Called on every hook event, and each badge update is a round trip to the Dock.
     func setDockBadge(_ count: Int) {
+        guard count != dockBadgeCount else { return }
+        dockBadgeCount = count
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
     }
 

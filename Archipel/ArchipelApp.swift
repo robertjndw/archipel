@@ -27,14 +27,9 @@ struct ArchipelApp: App {
             SidebarCommands()
             CommandGroup(replacing: .newItem) {
                 if let worktree = model.selectedWorktree {
-                    let defaultAgent = AgentDefinition.builtIn(id: model.settings.defaultAgentID) ?? .claude
-                    let others = AgentDefinition.builtIns.filter { $0.id != defaultAgent.id }
-                    newSessionButton(defaultAgent, in: worktree.id).keyboardShortcut("t")
-                    if let first = others.first {
-                        newSessionButton(first, in: worktree.id).keyboardShortcut("t", modifiers: [.command, .option])
-                    }
-                    if others.count > 1 {
-                        newSessionButton(others[1], in: worktree.id).keyboardShortcut("t", modifiers: [.command, .shift])
+                    let modifiers: [EventModifiers] = [.command, [.command, .option], [.command, .shift]]
+                    ForEach(Array(zip(model.agentsInMenuOrder, modifiers)), id: \.0.id) { agent, modifiers in
+                        newSessionButton(agent, in: worktree.id).keyboardShortcut("t", modifiers: modifiers)
                     }
                     Divider()
                 }

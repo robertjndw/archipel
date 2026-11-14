@@ -18,16 +18,11 @@ extension GitClient {
     /// Throws on an unborn branch, where there is no HEAD to compare with.
     public func diffStat(in folder: URL) async throws -> GitDiffStat {
         // --numstat rather than --shortstat: the short form is a translated sentence, the numbers are not.
-        let output = try await GitProcess.run(
+        let output = try await run(
             ["diff", "--numstat", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD"],
-            in: folder,
-            readOnly: true
+            in: folder
         )
-        guard output.status == 0 else {
-            let stderr = output.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw GitError(message: stderr.isEmpty ? "git diff failed with exit code \(output.status)" : stderr)
-        }
-        return GitParser.numstat(output.stdout)
+        return GitParser.numstat(output)
     }
 }
 

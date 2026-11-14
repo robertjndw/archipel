@@ -17,8 +17,6 @@ final class FileWatcher {
         self.onChange = onChange
     }
 
-    var isArmed: Bool { source != nil }
-
     func rearm() {
         guard source == nil else { return }
         let descriptor = open(url.path, O_EVTONLY)
