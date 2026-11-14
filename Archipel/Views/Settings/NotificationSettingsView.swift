@@ -16,7 +16,7 @@ struct NotificationSettingsView: View {
             } header: {
                 Text("Notify")
             } footer: {
-                Text("Only sessions you are not looking at notify you. Clicking a notification opens its session.")
+                Text("Only sessions you are not looking at notify you. Clicking a notification opens its session. Claude Code and Codex can also be answered from the notification: Allow or Deny a permission request, or Reply when they wait for you.")
             }
 
             Section {
@@ -25,6 +25,12 @@ struct NotificationSettingsView: View {
                 Toggle("Not while Archipel is the active app", isOn: $settings.suppressesNotificationsWhileActive)
             } footer: {
                 Text("The Dock count is the number of sessions waiting for you. With the last option on, you still see the island markers and the Dock count, but no banners.")
+            }
+
+            Section {
+                Toggle("Hold back while sharing your screen", isOn: $settings.holdsNotificationsWhileSharingScreen)
+            } footer: {
+                Text("While a display is mirrored, someone is connected through Screen Sharing or you share in Zoom, banners and sounds wait. When that ends you get one summary instead. Sharing from a browser is not detected. Focus modes are handled by macOS itself.")
             }
 
             Section {

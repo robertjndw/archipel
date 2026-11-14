@@ -31,6 +31,11 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
     /// survives the round trip; synthetic events have 0 and are skipped.
     private var lastPerformKeyEvent: TimeInterval?
 
+    /// Consulted before pasting plain text dropped on the view; see `TerminalApp.acceptsDroppedText`.
+    var acceptsDroppedText: (String) -> Bool = { _ in true }
+    /// Drawn over the terminal while a drop is hovering; created on first use.
+    var dropHighlightLayer: CALayer?
+
     override var acceptsFirstResponder: Bool { true }
 
     isolated deinit {
@@ -48,10 +53,12 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
         updateDisplayID()
         syncOcclusion()
         syncFocus()
+        registerForDraggedTypes(Self.droppedTypes)
     }
 
     func detach() {
         surface = nil
+        unregisterDraggedTypes()
     }
 
     func setHostOccluded(_ occluded: Bool) {

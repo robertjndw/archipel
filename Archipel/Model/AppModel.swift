@@ -12,6 +12,9 @@ final class AppModel {
     private(set) var activities: [Session.ID: SessionActivity] = [:]
     private(set) var terminals: [Session.ID: TerminalSession] = [:]
     private(set) var launchFailures: [Session.ID: String] = [:]
+    /// Counts the turns a session finished while nobody was looking. Not persisted, so nothing
+    /// glows after a launch.
+    private(set) var finishPulses: [Session.ID: Int] = [:]
     /// Shown as an alert.
     var problem: String?
 
@@ -28,6 +31,7 @@ final class AppModel {
     /// Set when the sheet is opened to configure a script, so it starts on that page.
     var projectSettingsShowsScripts = false
     let settings = AppSettings()
+    let devServers = DevServerMonitor()
     /// Images for projects whose icon is a file or was found in the repository. See `loadIcon(of:)`.
     var projectIcons: [Project.ID: NSImage] = [:]
 
@@ -51,7 +55,7 @@ final class AppModel {
     private let store: WorkspaceStore
     private let terminalApp: TerminalApp?
     private let hookServer: HookServer
-    private let notifier = AttentionNotifier()
+    let notifier = AttentionNotifier()
     private let hookExecutableURL: URL
     private var loginPATH: Task<String, Never>
     private var eventTasks: [Session.ID: Task<Void, Never>] = [:]
@@ -97,6 +101,7 @@ final class AppModel {
         problem = problems.isEmpty ? nil : problems.joined(separator: "\n\n")
 
         notifier.onOpenSession = { [weak self] id in self?.select(session: id) }
+        notifier.onResponse = { [weak self] response in self?.answer(response) }
         notifier.start()
         Task { [weak self, messages = hookServer.messages] in
             for await message in messages {
@@ -109,6 +114,8 @@ final class AppModel {
         refreshGitStatus(lookingUpPullRequests: true)
         loadProjectIcons()
         watchPaneClicks()
+        devServers.start { [weak self] in self?.terminals ?? [:] }
+        terminalApp?.acceptsDroppedText = { [weak self] in !(self?.isInternalDragPayload($0) ?? false) }
     }
 
     /// The login shell's PATH, for finding tools such as `gh` that launchd's
@@ -726,8 +733,14 @@ final class AppModel {
         guard let session = workspace.session(id: id) else { return }
         var activity = activities[id] ?? SessionActivity()
         let before = activity
-        activity.apply(event, isBeingViewed: isBeingViewed(id))
+        let viewed = isBeingViewed(id)
+        activity.apply(event, isBeingViewed: viewed)
         activities[id] = activity
+        if FinishPulse.shouldPlay(from: before.status, to: activity.status, isBeingViewed: viewed) {
+            finishPulses[id, default: 0] += 1
+        }
+        // Before posting: buttons on an older notification of this session must not answer whatever comes next.
+        if activity.status != before.status { notifier.invalidate(sessionID: id) }
 
         if activity.unread, activity.status != before.status {
             notify(session: session, activity: activity)
@@ -759,13 +772,25 @@ final class AppModel {
             workspace.project(containing: session.id)?.name,
             workspace.worktree(containing: session.id)?.branch,
         ]
-        notifier.post(
-            sessionID: session.id,
+        deliverNotification(
+            session: session,
+            activity: activity,
             title: "\(session.displayTitle): \(headline)",
-            subtitle: location.compactMap(\.self).joined(separator: " / "),
-            body: activity.lastMessage,
-            playsSound: settings.playsNotificationSound
+            subtitle: location.compactMap(\.self).joined(separator: " / ")
         )
+    }
+
+    /// For a state the app brings about itself, such as answering a prompt from a notification. No
+    /// hook reports it back, or not reliably: Claude sends nothing when a request is denied.
+    func resolveAttention(of id: Session.ID, to status: SessionStatus) {
+        guard var activity = activities[id] else { return }
+        let before = activity.status
+        activity.status = status
+        activity.markViewed()
+        activities[id] = activity
+        notifier.clear(sessionID: id)
+        refreshDockBadge()
+        if status != before { sessionStatusChanged(id, from: before, to: status) }
     }
 
     func refreshDockBadge() {

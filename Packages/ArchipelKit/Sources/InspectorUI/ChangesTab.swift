@@ -373,6 +373,7 @@ private struct ChangeRow: View {
                 .accessibilityLabel(change.kind.description)
         }
         .onHover { isHovering = $0 }
+        .modifier(FileDragModifier(url: change.kind == .deleted ? nil : model.url(for: change)))
         .help(change.originalPath.map { "\(change.path), renamed from \($0)" } ?? change.path)
         .accessibilityElement(children: .combine)
         .accessibilityAction(named: staged ? "Unstage" : "Stage", toggleStage)
@@ -380,6 +381,20 @@ private struct ChangeRow: View {
 
     private func toggleStage() {
         staged ? model.unstage(change) : model.stage(change)
+    }
+}
+
+/// A deleted file has nothing on disk to hand over.
+private struct FileDragModifier: ViewModifier {
+    let url: URL?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let url {
+            content.draggable(url)
+        } else {
+            content
+        }
     }
 }
 

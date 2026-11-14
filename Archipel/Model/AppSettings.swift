@@ -35,9 +35,14 @@ final class AppSettings {
     var notifiesWhenExited: Bool { didSet { defaults.set(notifiesWhenExited, forKey: Key.notifiesWhenExited) } }
     var playsNotificationSound: Bool { didSet { defaults.set(playsNotificationSound, forKey: Key.playsNotificationSound) } }
     var showsDockBadge: Bool { didSet { defaults.set(showsDockBadge, forKey: Key.showsDockBadge) } }
+    var showsMenuBarExtra: Bool { didSet { defaults.set(showsMenuBarExtra, forKey: Key.showsMenuBarExtra) } }
     /// Banners for a session you are not looking at are redundant while Archipel itself is frontmost.
     var suppressesNotificationsWhileActive: Bool {
         didSet { defaults.set(suppressesNotificationsWhileActive, forKey: Key.suppressesNotificationsWhileActive) }
+    }
+    /// Banners and sounds wait while the screen is shared, then arrive as one summary.
+    var holdsNotificationsWhileSharingScreen: Bool {
+        didSet { defaults.set(holdsNotificationsWhileSharingScreen, forKey: Key.holdsNotificationsWhileSharingScreen) }
     }
 
     // MARK: Agents
@@ -73,7 +78,9 @@ final class AppSettings {
         notifiesWhenExited = bool(Key.notifiesWhenExited, true)
         playsNotificationSound = bool(Key.playsNotificationSound, true)
         showsDockBadge = bool(Key.showsDockBadge, true)
+        showsMenuBarExtra = bool(Key.showsMenuBarExtra, true)
         suppressesNotificationsWhileActive = bool(Key.suppressesNotificationsWhileActive, false)
+        holdsNotificationsWhileSharingScreen = bool(Key.holdsNotificationsWhileSharingScreen, true)
         agentArguments = defaults.dictionary(forKey: Key.agentArguments) as? [String: String] ?? [:]
     }
 
@@ -91,7 +98,9 @@ final class AppSettings {
         static let notifiesWhenExited = "settings.notifiesWhenExited"
         static let playsNotificationSound = "settings.playsNotificationSound"
         static let showsDockBadge = "settings.showsDockBadge"
+        static let showsMenuBarExtra = "settings.showsMenuBarExtra"
         static let suppressesNotificationsWhileActive = "settings.suppressesNotificationsWhileActive"
+        static let holdsNotificationsWhileSharingScreen = "settings.holdsNotificationsWhileSharingScreen"
         static let agentArguments = "settings.agentArguments"
     }
 }

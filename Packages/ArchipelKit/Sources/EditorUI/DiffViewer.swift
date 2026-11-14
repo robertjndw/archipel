@@ -82,7 +82,8 @@ private struct DiffViewerContent: View {
                     presentation: presentation,
                     showsAllLines: showsAllLines,
                     highlights: model.highlights,
-                    commenting: commenting
+                    commenting: commenting,
+                    path: model.path
                 )
             }
         case .noDifferences:

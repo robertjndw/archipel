@@ -46,6 +46,12 @@ struct GeneralSettingsView: View {
             }
 
             Section {
+                Toggle("Show in menu bar", isOn: $settings.showsMenuBarExtra)
+            } footer: {
+                Text("A small icon that shows when agents are working or waiting for you, and jumps to them.")
+            }
+
+            Section {
                 Toggle("Confirm before quitting while agents are working", isOn: $settings.confirmsQuitWhileWorking)
             } footer: {
                 Text("Quitting stops running agents. Their conversations are kept and resume the next time you open the session.")

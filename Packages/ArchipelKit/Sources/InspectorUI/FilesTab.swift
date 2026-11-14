@@ -176,10 +176,12 @@ private struct FileTreeRows: View {
                         FileTreeRows(directory: node.url, model: model)
                     } label: {
                         FileRow(node: node)
+                            .draggable(node.url)
                     }
                     .tag(node.url)
                 } else {
                     FileRow(node: node)
+                        .draggable(node.url)
                         .tag(node.url)
                 }
             }

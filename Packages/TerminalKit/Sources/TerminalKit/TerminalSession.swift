@@ -65,6 +65,7 @@ public final class TerminalSession: Identifiable {
         self.surfaceView = SurfaceView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         self.view = surfaceView
         (events, continuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
+        surfaceView.acceptsDroppedText = { [weak app] text in app?.acceptsDroppedText?(text) ?? true }
     }
 
     isolated deinit {
@@ -179,16 +180,43 @@ public final class TerminalSession: Identifiable {
         }
     }
 
-    /// The text currently in the viewport (not the scrollback).
+    /// Pastes `text` as if it came from the clipboard. Unlike `sendText`,
+    /// Ghostty's paste protection applies, so text that would run commands in
+    /// a shell is confirmed first.
+    public func paste(_ text: String) {
+        surfaceView.paste(text)
+    }
+
+    /// Pastes the paths shell-escaped and space-separated, exactly what
+    /// dropping the same files on the terminal produces.
+    public func pasteFileURLs(_ urls: [URL]) {
+        surfaceView.paste(SurfaceView.droppedText(forFiles: urls))
+    }
+
+    /// The text currently in the viewport (not the scrollback). If the user scrolled back, this is
+    /// the older text they are looking at, not what the program last drew.
     public func readVisibleText() -> String {
-        guard let surface else { return "" }
+        readText(GHOSTTY_POINT_VIEWPORT) ?? ""
+    }
+
+    /// The bottom of the live grid, the rows the program is drawing into right now, wherever the
+    /// user has scrolled. Anything deciding which key to press has to look here: the viewport can
+    /// show an old, already answered prompt. Nil when the surface is gone or the read fails, so
+    /// callers can tell "nothing there" from "could not look".
+    public func readActiveScreenText() -> String? {
+        readText(GHOSTTY_POINT_ACTIVE)
+    }
+
+    private func readText(_ area: ghostty_point_tag_e) -> String? {
+        guard let surface else { return nil }
         let selection = ghostty_selection_s(
-            top_left: ghostty_point_s(tag: GHOSTTY_POINT_VIEWPORT, coord: GHOSTTY_POINT_COORD_TOP_LEFT, x: 0, y: 0),
-            bottom_right: ghostty_point_s(tag: GHOSTTY_POINT_VIEWPORT, coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT, x: 0, y: 0),
+            top_left: ghostty_point_s(tag: area, coord: GHOSTTY_POINT_COORD_TOP_LEFT, x: 0, y: 0),
+            bottom_right: ghostty_point_s(tag: area, coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT, x: 0, y: 0),
             rectangle: false)
         var text = ghostty_text_s()
-        guard ghostty_surface_read_text(surface, selection, &text) else { return "" }
+        guard ghostty_surface_read_text(surface, selection, &text) else { return nil }
         defer { ghostty_surface_free_text(surface, &text) }
+        // An empty grid reads back as no buffer; that is a successful read of nothing.
         guard let ptr = text.text else { return "" }
         return String(decoding: UnsafeRawBufferPointer(start: ptr, count: Int(text.text_len)), as: UTF8.self)
     }

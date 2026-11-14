@@ -49,6 +49,7 @@ struct IslandSwitcher: View {
         }
         .padding(.vertical, 8)
         .animation(.snappy(duration: 0.3), value: selectedID)
+        .onChange(of: selectedID) { Haptics.levelChange() }
         .sheet(item: $editor) { mode in
             IslandEditor(mode: mode)
         }

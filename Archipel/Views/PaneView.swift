@@ -23,6 +23,7 @@ struct WorktreeContentView: View {
                     )
                     .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(.container, edges: .top)
+                    .snapsSplitDividerToCenter(enabled: pane.id == worktree.panes.first?.id)
                 }
             }
             .ignoresSafeArea(.container, edges: .top)

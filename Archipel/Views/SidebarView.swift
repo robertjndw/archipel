@@ -10,6 +10,8 @@ struct SidebarView: View {
     @State private var addingWorktreeTo: Project?
     @State private var removing: Worktree?
     @State private var islandEditor: IslandEditor.Mode?
+    @State private var swipe = IslandSwipeState()
+    @State private var peek = SidebarPeekModel()
 
     var body: some View {
         let island = model.selectedIsland
@@ -29,6 +31,7 @@ struct SidebarView: View {
                         )
                         .tag(worktree.id)
                         .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
+                        .sidebarPeek(peek, worktree: worktree.id)
                     }
                     let suggested = model.suggestedWorktrees(for: project)
                     if !suggested.isEmpty {
@@ -39,6 +42,10 @@ struct SidebarView: View {
                 }
             }
         }
+        .background(SidebarPeekKeyMonitor(peek: peek, model: model))
+        .environment(peek)
+        .onChange(of: model.selectedIsland?.id) { peek.close() }
+        .islandSwipeContent(swipe)
         // For the empty part of the list. Rows and project headers bring their own menus, which a
         // list-wide selection menu would replace on the headers.
         .contextMenu {
@@ -66,6 +73,8 @@ struct SidebarView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             IslandSwitcher()
         }
+        .islandSwipe(swipe)
+        .folderDropsAddProjects(to: model)
         .renameAlert($renaming)
         .sheet(item: $addingWorktreeTo) { project in
             WorktreeSheet(project: project)

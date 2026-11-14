@@ -51,6 +51,7 @@ struct SidebarWorktreeRow: View {
         .opacity(isMissing ? 0.6 : 1)
         .onHover { isHovered = $0 }
         .animation(.snappy(duration: 0.2), value: content.trailing)
+        .finishGlow(pulse: model.finishPulse(for: worktree), tint: tint)
     }
 
     private var isMissing: Bool { model.missingWorktrees.contains(worktree.id) }
@@ -205,6 +206,7 @@ struct SidebarMetadataLine: View {
 /// session; the list itself only ever selects worktrees.
 struct SidebarSessionRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(SidebarPeekModel.self) private var peek: SidebarPeekModel?
     let content: SessionRowContent
     let isInSelectedWorktree: Bool
     @Binding var renaming: RenameTarget?
@@ -237,6 +239,7 @@ struct SidebarSessionRow: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .onHover { peek?.hover(session: content.id, $0) }
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
         .contextMenu {
             Button("Show Session", systemImage: "terminal") { model.select(session: content.id) }

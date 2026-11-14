@@ -18,6 +18,7 @@ struct PaneTabBar: View {
     let showsSidebarToggle: Bool
     let toggleSidebar: () -> Void
     @State private var renaming: RenameTarget?
+    @State private var dropSlot: Int?
 
     static let height: CGFloat = 36
 
@@ -56,9 +57,18 @@ struct PaneTabBar: View {
                             )
                             .contextMenu { tabMenu(tab) }
                             .draggable(tab.id.uuidString)
-                            .dropDestination(for: String.self) { items, _ in
-                                return drop(items, at: index)
-                            }
+                            .modifier(TabDropTarget(tab: tab) { targeted in
+                                // One tick per slot the drag moves into, not one per drag event.
+                                if targeted, dropSlot != index {
+                                    dropSlot = index
+                                    Haptics.levelChange()
+                                } else if !targeted, dropSlot == index {
+                                    dropSlot = nil
+                                }
+                            } moveTab: {
+                                dropSlot = nil
+                                _ = drop([$0.uuidString], at: index)
+                            })
                         }
                     }
                     // The scroll view clips, so the glass shadow needs room inside it.
@@ -117,7 +127,8 @@ struct PaneTabBar: View {
                 title: session?.displayTitle ?? "Session",
                 symbol: (session?.agent.definition ?? .shell).symbolName,
                 detail: nil,
-                activity: model.activity(for: id)
+                activity: model.activity(for: id),
+                devServers: model.devServers.links[id] ?? []
             )
         case .file(let url):
             return TabLabel(
@@ -176,6 +187,7 @@ struct TabLabel {
     var detail: String?
     var activity: SessionActivity?
     var hasUnsavedChanges = false
+    var devServers: [DevServerLink] = []
 }
 
 private struct TabButton: View {
@@ -199,6 +211,10 @@ private struct TabButton: View {
                 .italic(tab.isPreview)
                 .fontWeight(label.activity?.unread == true ? .semibold : .regular)
                 .foregroundStyle(isSelected && isActive ? .primary : .secondary)
+            if !label.devServers.isEmpty {
+                DevServerPill(links: label.devServers)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
             // The close button takes the status glyph's place on hover, so
             // tabs do not change width under the pointer.
             ZStack {
@@ -222,6 +238,7 @@ private struct TabButton: View {
             }
             .frame(width: 18)
         }
+        .animation(.snappy(duration: 0.25), value: label.devServers)
         .padding(.leading, 12)
         .padding(.trailing, 6)
         .frame(minWidth: 96, maxWidth: 220, minHeight: Chrome.controlHeight)

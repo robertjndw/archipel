@@ -105,6 +105,14 @@ struct ArchipelApp: App {
                     .keyboardShortcut("u", modifiers: [.command, .shift])
             }
         }
+        MenuBarExtra(isInserted: Binding(get: { model.settings.showsMenuBarExtra }, set: { model.settings.showsMenuBarExtra = $0 })) {
+            MenuBarExtraContent()
+                .environment(model)
+        } label: {
+            MenuBarExtraLabel()
+                .environment(model)
+        }
+        .menuBarExtraStyle(.window)
         Settings {
             SettingsView()
                 .environment(model)

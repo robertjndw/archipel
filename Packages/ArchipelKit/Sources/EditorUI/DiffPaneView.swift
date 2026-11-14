@@ -18,6 +18,9 @@ final class DiffLayout {
     let newOffsets: [Int]
     let oldWidth: CGFloat
     let newWidth: CGFloat
+    let hunks: [DiffHunk]
+    /// Row index to hunk index, for the row that carries a hunk's drag handle.
+    let hunkLeadRows: [Int: Int]
 
     init(document: DiffDocument, unified: Bool, showsAllLines: Bool) {
         self.document = document
@@ -27,6 +30,8 @@ final class DiffLayout {
         newOffsets = document.new.lineOffsets()
         oldWidth = DiffLineRenderer.width(of: document.old.lines)
         newWidth = DiffLineRenderer.width(of: document.new.lines)
+        hunks = DiffHunks.hunks(in: document)
+        hunkLeadRows = DiffHunks.leadRows(of: hunks, in: rows)
     }
 
     func side(_ isOld: Bool) -> (side: DiffSide, offsets: [Int], runs: [HighlightRun]) {
@@ -356,6 +361,14 @@ final class DiffGutterView: NSView {
     }
     var onHover: ((Int?) -> Void)?
     var onComment: ((Int) -> Void)?
+    /// Shows a grip on the first row of each hunk that can be dragged out as text. Only the pane
+    /// that shows the new side gets one, because the text points at new line numbers.
+    var hunkHandlesEnabled = false {
+        didSet { if hunkHandlesEnabled != oldValue { needsDisplay = true } }
+    }
+    /// The text and a short label for the hunk whose handle sits on a display item.
+    var hunkDragPayload: ((Int) -> (text: String, label: String)?)?
+    private var pendingHunkDrag: Int?
     /// What VoiceOver calls the comment button of a display item; nil when the item takes no comment.
     var commentAccessibilityLabel: ((Int) -> String?)?
     private var accessibilityButtons: [Int: DiffCommentAccessibilityButton] = [:]
@@ -383,10 +396,13 @@ final class DiffGutterView: NSView {
         commentsEnabled ? Self.commentLaneWidth : 0
     }
 
+    private static let handleWidth: CGFloat = 12
+    private var handleLaneWidth: CGFloat { hunkHandlesEnabled ? Self.handleWidth : 0 }
+
     /// Returns whether the width changed, so the container knows to lay out again.
     @discardableResult
     func updateThickness() -> Bool {
-        let width = (laneWidth + columnWidth * (role == .unified ? 2 : 1) + 6).rounded(.up)
+        let width = (laneWidth + columnWidth * (role == .unified ? 2 : 1) + 6 + handleLaneWidth).rounded(.up)
         guard width != thickness else { return false }
         thickness = width
         return true
@@ -426,11 +442,48 @@ final class DiffGutterView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard commentsEnabled, let item = item(at: convert(event.locationInWindow, from: nil)) else {
+        let point = convert(event.locationInWindow, from: nil)
+        let item = item(at: point)
+        pendingHunkDrag = nil
+        if hunkHandlesEnabled, let item, point.x >= bounds.width - Self.handleWidth, hunkDragPayload?(item) != nil {
+            // The handle sits inside the comment click area; it only drags.
+            pendingHunkDrag = item
+            return
+        }
+        guard commentsEnabled, let item else {
             super.mouseDown(with: event)
             return
         }
         onComment?(item)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let item = pendingHunkDrag, let payload = hunkDragPayload?(item) else { return }
+        pendingHunkDrag = nil
+        let dragItem = NSDraggingItem(pasteboardWriter: payload.text as NSString)
+        let image = Self.dragImage(label: payload.label)
+        let origin = convert(event.locationInWindow, from: nil)
+        dragItem.setDraggingFrame(NSRect(x: origin.x - 8, y: origin.y - image.size.height / 2, width: image.size.width, height: image.size.height), contents: image)
+        beginDraggingSession(with: [dragItem], event: event, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        pendingHunkDrag = nil
+    }
+
+    private static func dragImage(label: String) -> NSImage {
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor.labelColor]
+        let text = label as NSString
+        let textSize = text.size(withAttributes: attributes)
+        let size = NSSize(width: ceil(textSize.width) + 16, height: ceil(textSize.height) + 8)
+        return NSImage(size: size, flipped: false) { rect in
+            NSColor.windowBackgroundColor.withAlphaComponent(0.95).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+            NSColor.separatorColor.setStroke()
+            NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6).stroke()
+            text.draw(at: NSPoint(x: 8, y: 4), withAttributes: attributes)
+            return true
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -478,6 +531,9 @@ final class DiffGutterView: NSView {
                 if let old = row.old { draw(layout.document.old.numbers[old], rightEdge: lane + column, in: rect, attributes: attributes) }
                 if let new = row.new { draw(layout.document.new.numbers[new], rightEdge: lane + column * 2, in: rect, attributes: attributes) }
             }
+            if hunkHandlesEnabled, case .row(let rowIndex) = layout.items[index], layout.hunkLeadRows[rowIndex] != nil {
+                drawGrip(in: NSRect(x: bounds.width - Self.handleWidth, y: rect.minY, width: Self.handleWidth, height: height))
+            }
             if commentsEnabled {
                 let laneRect = NSRect(x: 0, y: rect.minY, width: lane, height: height)
                 if markedItems.contains(index) {
@@ -493,6 +549,17 @@ final class DiffGutterView: NSView {
         let label = String(number) as NSString
         let size = label.size(withAttributes: attributes)
         label.draw(at: NSPoint(x: rightEdge - 6 - size.width, y: rect.midY - size.height / 2), withAttributes: attributes)
+    }
+
+    private func drawGrip(in rect: NSRect) {
+        NSColor.tertiaryLabelColor.setFill()
+        for column in 0..<2 {
+            for row in 0..<3 {
+                let x = rect.midX - 3.5 + CGFloat(column) * 4
+                let y = rect.midY - 5 + CGFloat(row) * 4
+                NSBezierPath(ovalIn: NSRect(x: x, y: y, width: 2.5, height: 2.5)).fill()
+            }
+        }
     }
 
     /// Drawn as shapes in the accent colour rather than from a symbol image, so it follows the
@@ -564,6 +631,12 @@ final class DiffGutterView: NSView {
             children.append(button)
         }
         return children
+    }
+}
+
+extension DiffGutterView: NSDraggingSource {
+    nonisolated func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .copy
     }
 }
 

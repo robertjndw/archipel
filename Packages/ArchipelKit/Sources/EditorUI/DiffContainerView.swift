@@ -18,6 +18,8 @@ struct DiffTextView: NSViewRepresentable {
     let showsAllLines: Bool
     let highlights: DiffHighlights?
     var commenting: DiffCommentContext?
+    /// Repo-relative path the dragged hunk text refers to.
+    var path: String?
 
     func makeNSView(context: Context) -> DiffContainerView {
         DiffContainerView()
@@ -26,6 +28,7 @@ struct DiffTextView: NSViewRepresentable {
     func updateNSView(_ view: DiffContainerView, context: Context) {
         view.configure(document: document, version: version, presentation: presentation, showsAllLines: showsAllLines, highlights: highlights)
         view.configureComments(commenting)
+        view.configureHunkDrag(path: path)
     }
 }
 
@@ -57,6 +60,7 @@ final class DiffContainerView: NSView {
     private var isSyncing = false
     private var commenting: DiffCommentContext?
     private var commentEditor: DiffCommentEditorSession?
+    private var dragPath: String?
 
     override var isFlipped: Bool { true }
 
@@ -101,6 +105,15 @@ final class DiffContainerView: NSView {
             }
         }
         if changed { updateCommentMarkers() }
+    }
+
+    func configureHunkDrag(path: String?) {
+        guard path != dragPath else { return }
+        dragPath = path
+        for pane in panes {
+            pane.gutter.hunkHandlesEnabled = path != nil && pane.view.role != .old
+            if pane.gutter.updateThickness() { needsLayout = true }
+        }
     }
 
     private func updateCommentMarkers() {
@@ -155,11 +168,22 @@ final class DiffContainerView: NSView {
                 self?.commentAccessibilityLabel(at: item, role: role)
             }
             gutter.commentsEnabled = commenting != nil
+            gutter.hunkHandlesEnabled = dragPath != nil && role != .old
+            gutter.hunkDragPayload = { [weak self] item in self?.hunkPayload(at: item) }
             addSubview(scrollView)
             addSubview(gutter)
             return Pane(scrollView: scrollView, view: view, gutter: gutter)
         }
         needsLayout = true
+    }
+
+    private func hunkPayload(at item: Int) -> (text: String, label: String)? {
+        guard let dragPath, let layoutState, layoutState.items.indices.contains(item),
+              case .row(let rowIndex) = layoutState.items[item], let hunkIndex = layoutState.hunkLeadRows[rowIndex]
+        else { return nil }
+        let text = DiffHunks.text(path: dragPath, hunk: layoutState.hunks[hunkIndex], in: layoutState.document)
+        let label = text.prefix { $0 != "\n" }
+        return (text, String(label))
     }
 
     private func expandFold(at index: Int) {

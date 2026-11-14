@@ -30,6 +30,11 @@ public final class TerminalApp {
     private var appearanceObservation: NSKeyValueObservation?
     private var keyboardObserver: (any NSObjectProtocol)?
 
+    /// Asked before plain text dragged onto a terminal is pasted. The host
+    /// uses it to turn away its own drags that only carry an identifier,
+    /// such as a tab being moved, which would otherwise land in the shell.
+    public var acceptsDroppedText: ((String) -> Bool)?
+
     /// Loads the user's Ghostty config files if present so Ghostty users keep
     /// their theme, font and keybindings.
     public init() throws {
@@ -616,7 +621,7 @@ extension NSPasteboard {
         return result
     }
 
-    private static func shellEscape(_ string: String) -> String {
+    static func shellEscape(_ string: String) -> String {
         var result = ""
         for char in string {
             if "\\ ()[]{}<>\"'`!#$&;|*?\t".contains(char) { result.append("\\") }
