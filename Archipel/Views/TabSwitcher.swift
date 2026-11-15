@@ -267,11 +267,20 @@ private struct SwitcherCard: View {
         .animation(.smooth(duration: 0.3), value: content == nil)
     }
 
+    /// `.ts` and `.mts` are video to UTType, which would put a movie icon on TypeScript. Sniffing the
+    /// bytes like the editor does is no option while drawing, and a video in a repo is the rare case.
+    private static func iconType(for file: URL) -> UTType {
+        switch file.pathExtension.lowercased() {
+        case "ts", "mts", "cts": UTType("com.microsoft.typescript") ?? .sourceCode
+        default: UTType(filenameExtension: file.pathExtension) ?? .data
+        }
+    }
+
     /// Sessions show their project, files the icon Finder gives them, with a diff badge on diffs.
     @ViewBuilder
     private func placeholderIcon(_ label: Label) -> some View {
         if let file = label.file {
-            Image(nsImage: NSWorkspace.shared.icon(for: UTType(filenameExtension: file.pathExtension) ?? .data))
+            Image(nsImage: NSWorkspace.shared.icon(for: Self.iconType(for: file)))
                 .resizable()
                 .frame(width: 46, height: 46)
                 .overlay(alignment: .bottomTrailing) {

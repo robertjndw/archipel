@@ -30,7 +30,8 @@ struct IslandSwitcher: View {
                 ScrollView(.horizontal) {
                     row(islands, selectedID: selectedID, summaries: summaries)
                 }
-                .scrollIndicators(.hidden)
+                // .hidden still shows a scroller when the system is set to always show them.
+                .scrollIndicators(.never)
                 .onChange(of: selectedID, initial: true) {
                     guard let selectedID else { return }
                     withAnimation(.smooth) { proxy.scrollTo(selectedID, anchor: .center) }

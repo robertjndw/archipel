@@ -19,7 +19,7 @@ public enum FileIcon {
         case "json", "jsonc", "json5": return "curlybraces"
         case "yml", "yaml", "toml", "ini", "cfg", "conf", "plist", "xcconfig", "env", "entitlements", "editorconfig": return "gearshape"
         case "sh", "bash", "zsh", "fish", "command", "ps1": return "terminal"
-        case "c", "h", "m", "mm", "cc", "cpp", "hpp", "rs", "go", "py", "rb", "js", "mjs", "cjs", "ts", "tsx", "jsx",
+        case "c", "h", "m", "mm", "cc", "cpp", "hpp", "rs", "go", "py", "rb", "js", "mjs", "cjs", "ts", "mts", "cts", "tsx", "jsx",
              "java", "kt", "cs", "php", "lua", "zig", "dart", "ex", "exs", "scala", "sql", "vue", "svelte":
             return "chevron.left.forwardslash.chevron.right"
         case "html", "htm", "xml", "css", "scss", "less": return "chevron.left.slash.chevron.right"

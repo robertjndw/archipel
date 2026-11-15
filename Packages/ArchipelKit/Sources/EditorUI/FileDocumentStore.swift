@@ -273,7 +273,7 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
         }
         if fingerprint == previous { return nil }
         if fingerprint.isDirectory { return (.other(.unreadable(String(localized: "This is a folder."))), fingerprint) }
-        if isPreviewable(url) { return (.other(.preview), fingerprint) }
+        if isPreviewable(url), !isTextInMediaClothing(url) { return (.other(.preview), fingerprint) }
         if fingerprint.size > maximumTextSize { return (.other(.tooLarge(fingerprint.size)), fingerprint) }
 
         let data: Data
@@ -293,6 +293,17 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
         let previewable: [UTType] = [.image, .pdf, .audiovisualContent, .font, .threeDContent, .presentation, .spreadsheet, .rtf, .rtfd]
         let documents = ["org.openxmlformats.wordprocessingml.document", "com.microsoft.word.doc", "com.apple.iwork.pages.sffpages"]
         return previewable.contains { type.conforms(to: $0) } || documents.contains(type.identifier)
+    }
+
+    /// Some source extensions collide with video formats: `.ts` and `.mts` are MPEG transport streams
+    /// to UTType, but in a repo they are almost always TypeScript. The extension cannot tell them
+    /// apart, so look at the bytes; real transport streams are full of NULs and sniff as binary.
+    nonisolated static func isTextInMediaClothing(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension), type.conforms(to: .audiovisualContent),
+              let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: TextSniffer.sniffLength) else { return false }
+        return !TextSniffer.isBinary(head)
     }
 }
 

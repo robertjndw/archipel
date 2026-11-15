@@ -162,4 +162,14 @@ final class FileDocumentStoreTests {
         #expect(image.state == .preview)
         try store.save(image.url)
     }
+
+    @Test func typeScriptIsNotMistakenForVideo() async throws {
+        let source = await open(try file("index.ts", Data("export const a = 1\n".utf8)))
+        #expect(source.state == .text)
+        let module = await open(try file("index.mts", Data("export {}\n".utf8)))
+        #expect(module.state == .text)
+        // An actual transport stream: 188-byte packets starting with the 0x47 sync byte.
+        let stream = await open(try file("clip.ts", Data([0x47, 0x40, 0x00, 0x10]) + Data(count: 184)))
+        #expect(stream.state == .preview)
+    }
 }
