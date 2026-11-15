@@ -108,7 +108,7 @@ private struct UsageItem: View {
 
 /// A capsule filled to what is used, or to what is left. The color always follows what is used, so a
 /// nearly empty "remaining" bar turns red just like a nearly full "used" one.
-private struct UsageBar: View {
+struct UsageBar: View {
     let usedPercent: Double
     let fill: AppSettings.UsageBarFill
     let height: CGFloat

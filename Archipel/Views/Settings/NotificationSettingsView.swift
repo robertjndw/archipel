@@ -8,42 +8,64 @@ struct NotificationSettingsView: View {
 
     var body: some View {
         @Bindable var settings = model.settings
+        let notifiesAtAll = settings.notifiesWhenAttentionNeeded || settings.notifiesWhenFinished || settings.notifiesWhenExited
         Form {
+            if let note = authorizationNote {
+                Section {
+                    LabeledContent {
+                        Button("Open System Settings…", action: openSystemSettings)
+                    } label: {
+                        Label {
+                            Text(note.title)
+                            Text(note.detail)
+                        } icon: {
+                            Image(systemName: "bell.slash.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
+
             Section {
-                Toggle("When an agent needs you", isOn: $settings.notifiesWhenAttentionNeeded)
-                Toggle("When an agent finishes a turn", isOn: $settings.notifiesWhenFinished)
-                Toggle("When a session exits", isOn: $settings.notifiesWhenExited)
+                Toggle(isOn: $settings.notifiesWhenAttentionNeeded) {
+                    Text("An agent needs you")
+                    Text("Allow, Deny or Reply right from the notification.")
+                }
+                Toggle("An agent finishes a turn", isOn: $settings.notifiesWhenFinished)
+                Toggle("A session exits", isOn: $settings.notifiesWhenExited)
             } header: {
-                Text("Notify")
+                Text("Notify Me When")
             } footer: {
-                Text("Only sessions you are not looking at notify you. Clicking a notification opens its session. Claude Code and Codex can also be answered from the notification: Allow or Deny a permission request, or Reply when they wait for you.")
+                Text("Only for sessions you are not looking at. Click a notification to open its session.")
             }
 
             Section {
                 Toggle("Play sound", isOn: $settings.playsNotificationSound)
-                Toggle("Show count on Dock icon", isOn: $settings.showsDockBadge)
-                Toggle("Not while Archipel is the active app", isOn: $settings.suppressesNotificationsWhileActive)
-            } footer: {
-                Text("The Dock count is the number of sessions waiting for you. With the last option on, you still see the island markers and the Dock count, but no banners.")
-            }
-
-            Section {
-                Toggle("Hold back while sharing your screen", isOn: $settings.holdsNotificationsWhileSharingScreen)
-            } footer: {
-                Text("While a display is mirrored, someone is connected through Screen Sharing or you share in Zoom, banners and sounds wait. When that ends you get one summary instead. Sharing from a browser is not detected. Focus modes are handled by macOS itself.")
-            }
-
-            Section {
-                if let note = authorizationNote {
-                    Text(note).foregroundStyle(.secondary)
+                Toggle(isOn: $settings.suppressesNotificationsWhileActive) {
+                    Text("Hold back while Archipel is in front")
+                    Text("You still see island markers and the Dock count.")
                 }
-                Button("Open Notification Settings…") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
-                        NSWorkspace.shared.open(url)
+                Toggle(isOn: $settings.holdsNotificationsWhileSharingScreen) {
+                    Text("Hold back while sharing your screen")
+                    Text("Delivered as one summary afterwards. Covers mirroring, Screen Sharing and Zoom, not browser sharing.")
+                }
+            }
+            .disabled(!notifiesAtAll)
+
+            Section {
+                Toggle(isOn: $settings.showsDockBadge) {
+                    Text("Show count on Dock icon")
+                    Text("The number of sessions waiting for you.")
+                }
+            }
+
+            if authorizationNote == nil {
+                Section {
+                    LabeledContent("Banner style, Focus and more are set in System Settings.") {
+                        Button("Open System Settings…", action: openSystemSettings)
                     }
+                    .foregroundStyle(.secondary)
                 }
-            } footer: {
-                Text("Banners, alerts and sounds can also be turned off for all of Archipel in System Settings.")
             }
         }
         .formStyle(.grouped)
@@ -53,11 +75,17 @@ struct NotificationSettingsView: View {
         }
     }
 
-    private var authorizationNote: String? {
+    private var authorizationNote: (title: String, detail: String)? {
         switch authorization {
-        case .denied: "Notifications are turned off for Archipel in System Settings, so none of the options above will show a banner."
-        case .notDetermined: "macOS has not asked yet whether Archipel may send notifications."
+        case .denied: ("Notifications are off", "Turned off for Archipel in System Settings, so nothing below shows a banner.")
+        case .notDetermined: ("Not allowed yet", "macOS has not asked yet whether Archipel may send notifications.")
         default: nil
+        }
+    }
+
+    private func openSystemSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+            NSWorkspace.shared.open(url)
         }
     }
 

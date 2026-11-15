@@ -7,44 +7,81 @@ struct AppearanceSettingsView: View {
         @Bindable var settings = model.settings
         Form {
             Section {
-                Picker("Appearance", selection: $settings.appearance) {
-                    Text("System").tag(AppSettings.Appearance.system)
-                    Text("Light").tag(AppSettings.Appearance.light)
-                    Text("Dark").tag(AppSettings.Appearance.dark)
+                LabeledContent("Appearance") {
+                    TilePicker(
+                        selection: $settings.appearance,
+                        options: AppSettings.Appearance.allCases,
+                        title: \.title
+                    ) { appearance in
+                        AppearancePreview(appearance: appearance)
+                    }
+                    .padding(.vertical, 4)
                 }
-                .pickerStyle(.inline)
-            } footer: {
-                Text("System follows the appearance chosen in System Settings.")
+            }
+
+            Section("Sidebar") {
+                Toggle(isOn: $settings.showsGitStatusInSidebar) {
+                    Text("Git status")
+                    Text("Changed files and ahead or behind counts next to each worktree.")
+                }
+                Toggle(isOn: $settings.showsPullRequests) {
+                    Text("Pull requests")
+                    Text("Looked up with the gh command line tool, which must be installed and signed in.")
+                }
+                Toggle(isOn: $settings.showsAgentMessagesInSidebar) {
+                    Text("Agent messages")
+                    Text("The latest thing each session said.")
+                }
             }
 
             Section {
-                Toggle("Show git status", isOn: $settings.showsGitStatusInSidebar)
-                Toggle("Show pull requests", isOn: $settings.showsPullRequests)
-                Toggle("Show agent messages", isOn: $settings.showsAgentMessagesInSidebar)
-            } header: {
-                Text("Sidebar")
-            } footer: {
-                Text("Git status shows changed files and ahead or behind counts next to each worktree. Pull requests are looked up with the gh command line tool, which must be installed and signed in. Agent messages show the latest thing each session said.")
-            }
-
-            Section {
-                Picker("Show usage as", selection: $settings.usageDisplay) {
-                    ForEach(AppSettings.UsageDisplay.allCases) { display in
-                        Text(display.title).tag(display)
+                LabeledContent {
+                    TilePicker(
+                        selection: $settings.usageDisplay,
+                        options: AppSettings.UsageDisplay.allCases,
+                        title: \.title
+                    ) { display in
+                        UsageDisplayPreview(display: display, fill: settings.usageBarFill)
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    Text("Usage limits")
+                    Text("Claude and Codex subscription limits. Click them in the status bar for details.")
+                }
+                if settings.usageDisplay == .bars {
+                    // fixedSize only on the control. On the whole picker the form can't stretch the
+                    // row and the control ends short of the trailing edge.
+                    LabeledContent {
+                        Picker("Bars show", selection: $settings.usageBarFill) {
+                            ForEach(AppSettings.UsageBarFill.allCases) { fill in
+                                Text(fill.title).tag(fill)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .fixedSize()
+                    } label: {
+                        Text("Bars show")
+                        Text(settings.usageBarFill == .used
+                            ? "Bars fill up as you work."
+                            : "Bars empty like a battery as you work.")
                     }
                 }
-                Picker("Bars show", selection: $settings.usageBarFill) {
-                    ForEach(AppSettings.UsageBarFill.allCases) { fill in
-                        Text(fill.title).tag(fill)
-                    }
-                }
-                .disabled(settings.usageDisplay != .bars)
             } header: {
                 Text("Status Bar")
-            } footer: {
-                Text("How the Claude and Codex subscription limits appear at the bottom of the window. Used bars fill up as you work; remaining bars empty like a battery. Click the usage for details.")
             }
         }
         .formStyle(.grouped)
+        .animation(.default, value: settings.usageDisplay)
+    }
+}
+
+extension AppSettings.Appearance {
+    var title: String {
+        switch self {
+        case .system: "Auto"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
     }
 }
