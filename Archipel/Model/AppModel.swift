@@ -84,11 +84,18 @@ final class AppModel {
     private var canSave = true
 
     init() {
-        // The override lets a development build run next to the installed app
-        // without the two sharing a workspace file and hook socket.
+        // Debug builds use their own folder so they can run next to the installed
+        // app. Sharing it would mean sharing the workspace file, and the hook server
+        // unlinks any socket already at its path, so the installed app would stop
+        // getting agent status. ARCHIPEL_SUPPORT_DIR is for throwaway runs.
+        #if DEBUG
+        let supportFolder = "Archipel Dev"
+        #else
+        let supportFolder = "Archipel"
+        #endif
         let support = ProcessInfo.processInfo.environment["ARCHIPEL_SUPPORT_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? URL.applicationSupportDirectory.appending(path: "Archipel", directoryHint: .isDirectory)
+            ?? URL.applicationSupportDirectory.appending(path: supportFolder, directoryHint: .isDirectory)
         store = WorkspaceStore(fileURL: support.appending(path: "workspace.json"))
         hookServer = HookServer(socketURL: support.appending(path: "hook.sock"))
         hookExecutableURL = Bundle.main.bundleURL.appending(path: "Contents/Helpers/archipel-hook")

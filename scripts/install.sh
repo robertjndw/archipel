@@ -7,8 +7,6 @@
 # For a clean install, run this from a worktree checked out at main or a tag.
 set -euo pipefail
 
-BUNDLE_ID="de.jandow.Archipel"
-
 root="$(cd "$(dirname "$0")/.." && pwd)"
 dest="/Applications/Archipel.app"
 # Separate from Xcode's own DerivedData so installing never invalidates the
@@ -35,9 +33,13 @@ xcodebuild \
   -quiet \
   build
 
-# Dev builds share the bundle id, so match on the bundle path to make sure we
-# only quit the installed copy. terminate() goes through the normal quit path,
-# so unsaved-file and running-agent prompts still get a chance to show.
+# Read rather than hardcoded, since Configs/Local.xcconfig can change it.
+BUNDLE_ID="$(defaults read "$built/Contents/Info" CFBundleIdentifier)"
+
+# Other Release copies (a mounted DMG, a second checkout) share the bundle id,
+# so match on the bundle path to make sure we only quit the installed copy.
+# terminate() goes through the normal quit path, so unsaved-file and
+# running-agent prompts still get a chance to show.
 quit_installed() {
   osascript -l JavaScript - "$BUNDLE_ID" "$dest" <<'JS'
 ObjC.import('AppKit');

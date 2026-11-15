@@ -8,3 +8,6 @@ xcuserdata/
 Vendor/ghostty/
 Vendor/ghostty-resources/
 Packages/TerminalKit/Frameworks/
+
+# Per-developer signing, see Configs/Local.xcconfig.example
+Configs/Local.xcconfig

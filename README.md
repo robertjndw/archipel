@@ -94,7 +94,11 @@ you and which one has finished.
 
 ## Installation
 
-Archipel is built from source for now.
+Download `Archipel-<version>.dmg` from the
+[releases](https://github.com/robertjndw/archipel/releases) and drag Archipel into
+Applications.
+
+### From source
 
 **Requirements:** macOS 27, Xcode 27 and Zig 0.17 (`brew install zig`). You only need
 the agents you want to use: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or
@@ -109,7 +113,8 @@ cd archipel
 ```
 
 Run `./scripts/install.sh` again to update. It quits and relaunches an installed
-copy that is running, and leaves it untouched if the build fails.
+copy that is running, and leaves it untouched if the build fails. It replaces a
+copy installed from a DMG too.
 
 ## How agent status works
 
@@ -129,8 +134,23 @@ open Archipel.xcodeproj      # then build and run the Archipel scheme
 The script clones Ghostty into `Vendor/ghostty` and builds
 `GhosttyKit.xcframework` plus Ghostty's runtime resources. Both are ignored by git.
 
-Set `ARCHIPEL_SUPPORT_DIR` to run a build against its own workspace file and hook
-socket, next to an installed copy. Keep the path short, because Unix socket paths
+### Signing
+
+The project builds without an Apple Developer account: by default everything is
+signed ad-hoc ("Sign to Run Locally"). macOS then treats each rebuild as a new app
+and asks again for privacy permissions such as access to `~/Documents`. To sign
+with your own team, copy `Configs/Local.xcconfig.example` to `Configs/Local.xcconfig`
+(ignored by git) and fill in your team ID and a bundle id prefix of your own.
+
+### Debug builds next to an installed copy
+
+Debug builds are a separate app, "Archipel Dev" with the bundle id
+`<bundle id>.debug`. They keep their own settings and their own workspace and hook
+socket in `~/Library/Application Support/Archipel Dev`, so they can run next to an
+installed release without touching its data.
+
+Set `ARCHIPEL_SUPPORT_DIR` to run a build against a throwaway workspace file and
+hook socket instead. Keep the path short, because Unix socket paths
 are limited to about 100 bytes and agent status stops working beyond that.
 
 ```sh
@@ -150,7 +170,9 @@ open -n --env ARCHIPEL_SUPPORT_DIR=/tmp/archipel-dev path/to/Archipel.app
   in a window of its own.
 - `Packages/TerminalKit` - the only code that talks to Ghostty. Includes
   `terminal-demo`, a one-window harness for testing a surface in isolation.
-- `scripts/` - `build-ghostty.sh` and `install.sh`.
+- `scripts/` - `build-ghostty.sh`, `install.sh` and `build-dmg.sh`, which the
+  release workflow uses. See [docs/releasing.md](docs/releasing.md).
+- `Configs/` - shared build settings and the optional `Local.xcconfig`.
 
 ## Acknowledgements
 
