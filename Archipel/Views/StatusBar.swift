@@ -1,3 +1,4 @@
+import AgentKit
 import ArchipelCore
 import SwiftUI
 
@@ -75,8 +76,7 @@ private struct UsageItem: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(reading.provider.displayName)
-                .foregroundStyle(.secondary)
+            Image(symbol: reading.provider.symbolName)
             switch display {
             case .numbers:
                 ForEach(reading.windows, id: \.windowMinutes) { window in
@@ -102,8 +102,19 @@ private struct UsageItem: View {
         .lineLimit(1)
         .fixedSize()
         .accessibilityElement(children: .ignore)
+        .help("\(reading.provider.displayName) usage")
         .accessibilityLabel("\(reading.provider.displayName) usage")
         .accessibilityValue(reading.windows.map { "\($0.longLabel) \(Int($0.usedPercent(at: now).rounded())) percent" }.joined(separator: ", "))
+    }
+}
+
+private extension UsageProvider {
+    /// The agent logo the sidebar uses.
+    var symbolName: String {
+        switch self {
+        case .claude: AgentDefinition.claude.symbolName
+        case .codex: AgentDefinition.codex.symbolName
+        }
     }
 }
 
@@ -184,7 +195,8 @@ private struct ProviderDetails: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                Text(reading.provider.displayName)
+                // The status bar only shows the logo, so spell out the name here.
+                Label(reading.provider.displayName, symbol: reading.provider.symbolName)
                     .font(.headline)
                 Spacer()
                 Text("Updated \(reading.updatedAt.formatted(.relative(presentation: .named)))")
