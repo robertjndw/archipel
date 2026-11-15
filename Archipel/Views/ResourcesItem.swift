@@ -133,10 +133,7 @@ private struct ResourcesPopover: View {
         return HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text("\(ResourceFormat.cpu(cpu)) CPU")
                 .fontWeight(.medium)
-            Text("\(ResourceFormat.memory(memory)) ")
-                .fontWeight(.medium)
-                + Text("of \(ResourceFormat.memory(ProcessInfo.processInfo.physicalMemory))")
-                .foregroundStyle(.secondary)
+            Text("\(Text(ResourceFormat.memory(memory)).fontWeight(.medium)) \(Text("of \(ResourceFormat.memory(ProcessInfo.processInfo.physicalMemory))").foregroundStyle(.secondary))")
             Spacer()
         }
         .padding(.horizontal, 12)
