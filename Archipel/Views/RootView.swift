@@ -20,11 +20,15 @@ struct RootView: View {
                 .toolbar(removing: .sidebarToggle)
                 .ignoresSafeArea(.container, edges: .top)
         } detail: {
-            WorktreeContentView(isSidebarCollapsed: columns == .detailOnly, toggleSidebar: toggleSidebar)
-                // The tab row replaces the title bar, so the content has to
-                // reach the top edge of the window.
-                .ignoresSafeArea(edges: .top)
-                .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
+            // Not a bottom safeAreaInset: the panes sit in an NSSplitView that ignores it,
+            // so the terminal would extend under the status bar and hide its last row.
+            VStack(spacing: 0) {
+                WorktreeContentView(isSidebarCollapsed: columns == .detailOnly, toggleSidebar: toggleSidebar)
+                    // The tab row replaces the title bar, so the content has to
+                    // reach the top edge of the window.
+                    .ignoresSafeArea(edges: .top)
+                StatusBar()
+            }
         }
         .inspector(isPresented: $showInspector) {
             InspectorView(
