@@ -29,6 +29,8 @@ final class ChangesModel {
     /// Kept here rather than in the view so switching inspector tabs does not lose a half-written message.
     var message = ""
     private(set) var activity: Activity?
+    /// Bumped when a push lands, so the arrow can fly off while the remote info is still refreshing.
+    private(set) var completedPushes = 0
     private(set) var hasRemote = false
     private(set) var pullRequestLookup: PullRequestLookup?
     private let searchPATH: @MainActor () async -> String
@@ -146,6 +148,7 @@ final class ChangesModel {
     func push() {
         guard syncState.canPush else { return }
         run(.push) { [git, root] in try await git.push(in: root) } onSuccess: { [self] in
+            completedPushes += 1
             await refreshRemoteInfo()
         }
     }
@@ -220,8 +223,10 @@ final class ChangesModel {
             } catch {
                 actionError = error.localizedDescription
             }
-            self.activity = nil
+            // Refresh before going idle: the other order briefly offers the action that just ran again,
+            // which after a push would also bring the sent-off arrow back for a moment.
             await refresh()
+            self.activity = nil
         }
     }
 

@@ -194,9 +194,14 @@ struct CommitArea: View {
             Button(action: model.performPrimaryAction) {
                 HStack(spacing: 6) {
                     if let symbol = action.symbol {
-                        Image(systemName: symbol)
-                            .symbolEffect(action.wiggle, options: .repeat(.continuous), isActive: model.activity == action.activity)
-                            .contentTransition(.symbolEffect(.replace))
+                        SyncArrow(
+                            systemName: symbol,
+                            wiggle: action.wiggle,
+                            isBusy: model.activity == action.activity,
+                            completedPushes: model.completedPushes,
+                            canSendOff: action.activity == .push
+                        )
+                        .contentTransition(.symbolEffect(.replace))
                     } else if model.activity == action.activity {
                         ProgressView().controlSize(.small)
                     }
@@ -281,7 +286,7 @@ struct SyncMenu: View {
     private func label(_ sync: SyncState) -> some View {
         // Commit progress already shows on the bottom button.
         if let activity = model.activity, activity != .commit {
-            ActivitySymbol(activity: activity)
+            ActivitySymbol(activity: activity, completedPushes: model.completedPushes)
         } else if sync.ahead > 0 || sync.behind > 0 {
             HStack(spacing: 4) {
                 if sync.behind > 0 { Label(String(sync.behind), systemImage: "arrow.down") }
@@ -300,6 +305,7 @@ struct SyncMenu: View {
 /// Shown instead of a spinner while a remote action runs.
 private struct ActivitySymbol: View {
     let activity: ChangesModel.Activity
+    let completedPushes: Int
 
     var body: some View {
         switch activity {
@@ -310,8 +316,59 @@ private struct ActivitySymbol: View {
             Image(systemName: "arrow.down")
                 .symbolEffect(.wiggle.down, options: .repeat(.continuous))
         case .push, .commit:
-            Image(systemName: "arrow.up")
-                .symbolEffect(.wiggle.up, options: .repeat(.continuous))
+            SyncArrow(systemName: "arrow.up", wiggle: .wiggle.up, isBusy: true, completedPushes: completedPushes, canSendOff: true)
+        }
+    }
+}
+
+/// Wiggles while its action runs and flies off upward when a push succeeds. By the time the model is
+/// idle the label has usually dropped the arrow; if it hasn't, the arrow comes back.
+struct SyncArrow: View {
+    let systemName: String
+    let wiggle: WiggleSymbolEffect
+    let isBusy: Bool
+    let completedPushes: Int
+    /// False for the pull arrow, which shares the primary button's slot but must not fly up.
+    let canSendOff: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var phase = Phase.resting
+
+    private enum Phase { case resting, crouched, sent }
+
+    var body: some View {
+        Image(systemName: systemName)
+            .symbolEffect(wiggle, options: .repeat(.continuous), isActive: isBusy && phase == .resting)
+            .offset(y: offset)
+            .scaleEffect(phase == .sent ? 0.7 : 1, anchor: .bottom)
+            .blur(radius: phase == .sent ? 1 : 0)
+            .opacity(phase == .sent ? 0 : 1)
+            .onChange(of: completedPushes) { sendOff() }
+            .onChange(of: isBusy) {
+                guard !isBusy, phase != .resting else { return }
+                withAnimation(.smooth(duration: 0.3)) { phase = .resting }
+            }
+    }
+
+    private var offset: CGFloat {
+        switch phase {
+        case .resting: 0
+        case .crouched: 1.5
+        case .sent: reduceMotion ? 0 : -14
+        }
+    }
+
+    private func sendOff() {
+        guard canSendOff else { return }
+        if reduceMotion {
+            withAnimation(.easeOut(duration: 0.25)) { phase = .sent }
+            return
+        }
+        withAnimation(.easeOut(duration: 0.12)) {
+            phase = .crouched
+        } completion: {
+            // Ease in, so it speeds up as it leaves.
+            withAnimation(.timingCurve(0.5, 0, 0.75, 0.4, duration: 0.32)) { phase = .sent }
         }
     }
 }
@@ -383,6 +440,34 @@ private func previewCommitArea(_ title: String, _ model: ChangesModel) -> some V
     .frame(width: 300)
     .background(Color.inspectorBackground)
     .preferredColorScheme(.dark)
+}
+
+// Runs on a loop since the canvas doesn't take clicks for this preview.
+#Preview("Push Send-Off") {
+    @Previewable @State var pushes = 0
+    @Previewable @State var isBusy = false
+
+    Button {} label: {
+        HStack(spacing: 6) {
+            SyncArrow(systemName: "arrow.up", wiggle: .wiggle.up, isBusy: isBusy, completedPushes: pushes, canSendOff: true)
+            Text("Push 2 Commits")
+        }
+        .frame(maxWidth: .infinity)
+    }
+    .buttonStyle(.glassProminent)
+    .controlSize(.large)
+    .padding()
+    .frame(width: 300)
+    .task {
+        while !Task.isCancelled {
+            isBusy = true
+            try? await Task.sleep(for: .seconds(1.5))
+            pushes += 1
+            try? await Task.sleep(for: .seconds(1))
+            isBusy = false
+            try? await Task.sleep(for: .seconds(1.5))
+        }
+    }
 }
 
 #Preview("Sync Menu") {
