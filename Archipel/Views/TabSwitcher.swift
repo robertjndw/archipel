@@ -122,7 +122,7 @@ private struct SwitcherCard: View {
             preview(label)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Image(systemName: label.symbol)
+                    Image(symbol: label.symbol)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(width: 14)

@@ -107,7 +107,7 @@ extension AgentDefinition {
     public static let claude = AgentDefinition(
         id: "claude",
         displayName: "Claude Code",
-        symbolName: "sparkle",
+        symbolName: "claude.logo",
         executableName: "claude",
         presetsAgentSessionID: true,
         launch: { context in
@@ -134,7 +134,7 @@ extension AgentDefinition {
     public static let codex = AgentDefinition(
         id: "codex",
         displayName: "Codex",
-        symbolName: "chevron.left.forwardslash.chevron.right",
+        symbolName: "openai.logo",
         executableName: "codex",
         presetsAgentSessionID: false,
         launch: { context in

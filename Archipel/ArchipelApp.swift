@@ -174,7 +174,7 @@ extension ArchipelApp {
     }
 
     private func newSessionButton(_ agent: AgentDefinition, in worktree: Worktree.ID) -> some View {
-        Button("New \(agent.displayName) Session", systemImage: agent.symbolName) {
+        Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
             model.newSession(in: worktree, agent: agent)
         }
     }

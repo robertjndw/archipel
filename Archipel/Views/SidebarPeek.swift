@@ -149,7 +149,7 @@ struct SessionPeekView: View {
     private func header(_ session: Session?) -> some View {
         let activity = session.map { model.activity(for: $0.id) }
         return HStack(spacing: 10) {
-            Image(systemName: (session?.agent.definition ?? .shell).symbolName)
+            Image(symbol: (session?.agent.definition ?? .shell).symbolName)
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .frame(width: 24)

@@ -13,7 +13,7 @@ struct GeneralSettingsView: View {
             Section {
                 Picker(selection: $settings.defaultAgentID) {
                     ForEach(AgentDefinition.builtIns) { agent in
-                        Label(agent.displayName, systemImage: agent.symbolName).tag(agent.id)
+                        Label(agent.displayName, symbol: agent.symbolName).tag(agent.id)
                     }
                 } label: {
                     Text("Default agent")

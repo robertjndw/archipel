@@ -124,9 +124,13 @@ private struct SidebarHeader: View {
     @Binding var isAddingProject: Bool
     let toggleSidebar: () -> Void
 
+    /// Fixed slots, like toolbar items. Sized to their glyphs, the narrow collapse arrows and the
+    /// wide badged folder end up with visibly uneven gaps.
+    private static let slotWidth: CGFloat = 22
+
     var body: some View {
         let waiting = attentionSummary(of: model.workspace, activities: model.activities).needsAttention
-        HStack(spacing: 10) {
+        HStack(spacing: 4) {
             // No title: the switcher at the bottom already names the island.
             Spacer(minLength: 0)
             if waiting > 0 {
@@ -141,14 +145,21 @@ private struct SidebarHeader: View {
                 }
                 .help(waiting == 1 ? "1 session is waiting for you (⇧⌘U)" : "\(waiting) sessions are waiting for you (⇧⌘U)")
                 .accessibilityValue("\(waiting) waiting")
+                .frame(width: Self.slotWidth)
                 .transition(.scale.combined(with: .opacity))
             }
             ProjectsDisclosureButton()
                 .labelStyle(.iconOnly)
+                .frame(width: Self.slotWidth)
             Button("Add Project", systemImage: "folder.badge.plus") { isAddingProject = true }
                 .help("Add a folder to this island (⇧⌘O)")
+                // The badge shifts the drawn folder about 1.3pt right of and 0.3pt below the symbol's
+                // center, which puts it close to the sidebar icon and below its neighbours.
+                .offset(x: -1.5, y: -0.5)
+                .frame(width: Self.slotWidth)
             Button("Hide Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
                 .help("Hide Sidebar")
+                .frame(width: Self.slotWidth)
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.borderless)
@@ -157,7 +168,8 @@ private struct SidebarHeader: View {
         .animation(.snappy, value: waiting > 0)
         // Leaves the window buttons their corner.
         .padding(.leading, 78)
-        .padding(.trailing, 10)
+        // Keeps the sidebar glyph 10pt from the edge; its slot is wider than the glyph.
+        .padding(.trailing, 6.5)
         .frame(height: PaneTabBar.height)
     }
 }
@@ -169,7 +181,7 @@ struct NewSessionButtons: View {
 
     var body: some View {
         ForEach(AgentDefinition.builtIns) { agent in
-            Button("New \(agent.displayName) Session", systemImage: agent.symbolName) {
+            Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
                 model.newSession(in: worktree, agent: agent, pane: pane)
             }
         }

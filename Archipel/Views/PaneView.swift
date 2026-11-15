@@ -91,7 +91,7 @@ private struct PaneView: View {
                 GlassEffectContainer {
                     HStack(spacing: 8) {
                         ForEach(AgentDefinition.builtIns) { agent in
-                            Button(agent.displayName, systemImage: agent.symbolName) {
+                            Button(agent.displayName, symbol: agent.symbolName) {
                                 model.newSession(in: worktree.id, agent: agent, pane: pane.id)
                             }
                         }

@@ -222,7 +222,7 @@ private struct TabButton: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: label.symbol)
+            Image(symbol: label.symbol)
                 .foregroundStyle(isSelected && isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
             Text(label.title)
                 .lineLimit(1)

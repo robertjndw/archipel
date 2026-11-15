@@ -151,7 +151,7 @@ private struct MenuBarRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: entry.symbol)
+                Image(symbol: entry.symbol)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(entry.agentName)

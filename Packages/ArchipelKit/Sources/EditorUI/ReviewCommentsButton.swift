@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// What a DiffViewer needs to take comments, given by the app through its commenting initializer.
@@ -142,7 +143,7 @@ private struct ReviewCommentsList: View {
             Button {
                 send(to: target)
             } label: {
-                Label("Send to \(target.title)", systemImage: target.symbolName)
+                Label { Text("Send to \(target.title)") } icon: { target.icon }
             }
             .buttonStyle(.glassProminent)
         default:
@@ -151,7 +152,7 @@ private struct ReviewCommentsList: View {
                     Button {
                         send(to: target)
                     } label: {
-                        Label(target.title, systemImage: target.symbolName)
+                        Label { Text(target.title) } icon: { target.icon }
                     }
                 }
             }
@@ -174,5 +175,17 @@ private struct ReviewCommentsList: View {
             }
         }
         return groups
+    }
+}
+
+extension ReviewTarget {
+    /// Same lookup as `Image(symbol:)` in the app. The agent logos live in the app's asset catalog,
+    /// which `Image(_:)` finds through the main bundle, and multicolor keeps their brand colour.
+    var icon: Image {
+        if NSImage(symbolName: symbolName, bundle: .main, variableValue: 0) != nil {
+            Image(symbolName).symbolRenderingMode(.multicolor)
+        } else {
+            Image(systemName: symbolName)
+        }
     }
 }

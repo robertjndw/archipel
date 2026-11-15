@@ -120,7 +120,7 @@ private struct PaletteRowView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: row.symbol)
+            Image(symbol: row.symbol)
                 .frame(width: 20)
                 .foregroundStyle(isSelected ? .primary : .secondary)
             highlighted(row.title, row.titleMatches)
