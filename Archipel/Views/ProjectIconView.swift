@@ -55,3 +55,65 @@ struct ProjectIconTile: View {
             .overlay { content().foregroundStyle(.white) }
     }
 }
+
+#if DEBUG
+private struct ProjectIconGallery: View {
+    private static let sizes: [CGFloat] = [14, 18, 24, 48]
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+            row("Symbol") { size in
+                ProjectIconTile(icon: .symbol("globe.europe.africa.fill"), image: nil, name: "Orbit", color: .blue, size: size)
+            }
+            row("Initial") { size in
+                ProjectIconTile(icon: .automatic, image: nil, name: "blog", color: .orange, size: size)
+            }
+            row("Image") { size in
+                ProjectIconTile(icon: .automatic, image: NSImage(named: NSImage.applicationIconName), name: "App", color: .gray, size: size)
+            }
+            row("Empty name") { size in
+                ProjectIconTile(icon: .automatic, image: nil, name: "", color: .purple, size: size)
+            }
+            GridRow {
+                Text("Tints").foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    ForEach(Tint.allCases, id: \.self) { tint in
+                        ProjectIconTile(icon: .automatic, image: nil, name: tint.displayName, color: tint.color)
+                    }
+                }
+                .gridCellColumns(Self.sizes.count)
+            }
+        }
+        .padding()
+    }
+
+    private func row(_ label: String, @ViewBuilder tile: @escaping (CGFloat) -> some View) -> some View {
+        GridRow(alignment: .center) {
+            Text(label).foregroundStyle(.secondary)
+            ForEach(Self.sizes, id: \.self) { size in tile(size) }
+        }
+    }
+}
+
+#Preview("Tiles, light") {
+    ProjectIconGallery()
+        .preferredColorScheme(.light)
+}
+
+#Preview("Tiles, dark") {
+    ProjectIconGallery()
+        .preferredColorScheme(.dark)
+}
+
+#Preview("From the model") {
+    let model = AppModel.preview()
+    HStack(spacing: 12) {
+        ProjectIconView(project: PreviewFixtures.appProject)
+        ProjectIconView(project: PreviewFixtures.blogProject)
+        ProjectIconView(project: PreviewFixtures.appProject, size: 32)
+        ProjectIconView(project: PreviewFixtures.blogProject, size: 32)
+    }
+    .padding()
+    .environment(model)
+}
+#endif

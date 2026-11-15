@@ -207,3 +207,12 @@ final class DevServerMonitor {
         return error == 0
     }
 }
+
+#if DEBUG
+extension DevServerMonitor {
+    /// Pills to show without scanning any terminal.
+    func showForPreview(_ links: [Session.ID: [DevServerLink]]) {
+        self.links = links
+    }
+}
+#endif

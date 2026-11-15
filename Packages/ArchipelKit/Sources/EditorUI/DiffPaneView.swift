@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import SwiftUI
 
 enum DiffPaneRole {
     case old, new, unified
@@ -654,3 +655,29 @@ private final class DiffCommentAccessibilityButton: NSAccessibilityElement {
         return true
     }
 }
+
+#if DEBUG
+// The pane is only ever hosted by DiffContainerView, so these show it through DiffPreview with
+// content that exercises the drawing edge cases.
+
+#Preview("Very Long Lines") {
+    DiffPreview(PreviewSamples.longLines)
+        .frame(width: 900, height: 200)
+}
+
+#Preview("No Newline at End of File") {
+    DiffPreview(PreviewSamples.missingNewline)
+        .frame(width: 900, height: 200)
+}
+
+#Preview("No Grammar") {
+    DiffPreview(PreviewSamples.plainText, presentation: .inline)
+        .frame(width: 600, height: 200)
+}
+
+#Preview("Very Long Lines, Dark") {
+    DiffPreview(PreviewSamples.longLines, presentation: .inline)
+        .frame(width: 900, height: 220)
+        .preferredColorScheme(.dark)
+}
+#endif

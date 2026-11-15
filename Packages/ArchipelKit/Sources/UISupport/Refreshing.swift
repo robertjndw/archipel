@@ -47,3 +47,25 @@ private struct RefreshingModifier: ViewModifier {
             }
     }
 }
+
+#if DEBUG
+private struct RefreshingPreview: View {
+    @State private var refreshes = 0
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(verbatim: "Refreshed \(refreshes) times")
+                .font(.title3.monospacedDigit())
+            Text(verbatim: "Every second while the app is frontmost")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .refreshing(every: .seconds(1)) { refreshes += 1 }
+    }
+}
+
+#Preview {
+    RefreshingPreview()
+}
+#endif

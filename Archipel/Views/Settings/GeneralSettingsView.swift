@@ -118,3 +118,26 @@ private struct WorktreesFolderPicker: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("General") {
+    GeneralSettingsView()
+        .environment(AppModel.preview())
+        // The size the Settings window gives each pane.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 540)
+}
+
+#Preview("Custom folder and branch prefix") {
+    let model = AppModel.preview()
+    model.settings.defaultAgentID = "codex"
+    model.settings.worktreesRoot = PreviewFixtures.root.appending(path: "worktrees", directoryHint: .isDirectory)
+    model.settings.branchPrefix = "robert/"
+    model.settings.fetchesAutomatically = false
+    model.settings.showsMenuBarExtra = false
+    return GeneralSettingsView()
+        .environment(model)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 540)
+}
+#endif

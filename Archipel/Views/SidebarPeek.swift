@@ -295,3 +295,21 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+// Previews never have a live terminal, so the peek shows its placeholder instead of output.
+#Preview("Session not running") {
+    SessionPeekView(target: SessionPeek.Target(worktreeID: PreviewFixtures.featureWorktreeID, sessionID: PreviewFixtures.codexSessionID))
+        .environment(AppModel.preview())
+}
+
+#Preview("Session could not start") {
+    SessionPeekView(target: SessionPeek.Target(worktreeID: PreviewFixtures.mainWorktreeID, sessionID: PreviewFixtures.claudeSessionID))
+        .environment(AppModel.launchFailurePreview())
+}
+
+#Preview("Worktree without sessions") {
+    SessionPeekView(target: SessionPeek.Target(worktreeID: PreviewFixtures.blogWorktreeID, sessionID: nil))
+        .environment(AppModel.preview())
+}
+#endif

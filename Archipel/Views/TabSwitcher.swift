@@ -378,3 +378,60 @@ private struct PreviewContent: View {
         }
     }
 }
+
+#if DEBUG
+private func previewSwitcher(withContent: Bool) -> some View {
+    let model = PanePreviews.model(selecting: PanePreviews.mixedTabs())
+    let tabs = model.selectedWorktree?.panes.first?.tabs ?? []
+    let claudeTab = model.workspace.tab(showing: PreviewFixtures.claudeSessionID)
+    // Codex, the file, the diff, a session in another worktree, the review session.
+    let candidates = [tabs[0], tabs[2], tabs[3], claudeTab, tabs[1]].compactMap(\.self).map(\.id)
+    var previews: [ArchipelCore.Tab.ID: TabPreview] = [:]
+    if withContent {
+        previews[candidates[0]] = .terminal([
+            "Running the cache tests", "", "  ✓ stores responses (12 ms)", "  ✓ evicts the oldest entry (3 ms)",
+            "  ✓ survives a relaunch (48 ms)", "", "Allow `rm -rf build`?", "  1. Yes", "  2. No, and tell Codex what to do",
+        ])
+        previews[candidates[1]] = .text([
+            "import Foundation", "", "/// Pulls remote changes and pushes local ones.", "actor SyncEngine {",
+            "    private var pending: [Change] = []", "    private let cache: ResponseCache", "",
+            "    func sync() async throws {", "        let remote = try await fetch()", "        try merge(remote)", "    }", "}",
+        ])
+        previews[candidates[2]] = .diff([
+            DiffPreviewLine(kind: .context, text: "final class ResponseCache {"),
+            DiffPreviewLine(kind: .removed, text: "    var entries: [URL: Data] = [:]"),
+            DiffPreviewLine(kind: .added, text: "    private var entries: [URL: Entry] = [:]"),
+            DiffPreviewLine(kind: .added, text: "    private let limit: Int"),
+            DiffPreviewLine(kind: .context, text: ""),
+            DiffPreviewLine(kind: .context, text: "    func response(for url: URL) -> Data? {"),
+            DiffPreviewLine(kind: .removed, text: "        entries[url]"),
+            DiffPreviewLine(kind: .added, text: "        entries[url]?.data"),
+            DiffPreviewLine(kind: .context, text: "    }"),
+        ])
+        previews[candidates[3]] = .terminal(["Refactoring SyncEngine", "", "⏺ Update(Sources/Sync/SyncEngine.swift)", "  ⎿  Updated with 14 additions"])
+    }
+    let switcher = TabSwitcherModel()
+    if var gesture = TabSwitch(candidates: candidates, current: candidates.first) {
+        gesture.advance(by: 1)
+        switcher.showForPreview(gesture, startedFrom: candidates.first, previews: previews)
+    }
+    return TabSwitcher()
+        .environment(model)
+        .environment(switcher)
+        .frame(width: 1200, height: 360)
+        .background(.windowBackground)
+}
+
+#Preview("With Content") {
+    previewSwitcher(withContent: true)
+}
+
+#Preview("With Content, Dark") {
+    previewSwitcher(withContent: true)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Placeholders") {
+    previewSwitcher(withContent: false)
+}
+#endif

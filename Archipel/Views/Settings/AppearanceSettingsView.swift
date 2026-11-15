@@ -108,3 +108,35 @@ extension AppSettings.Appearance {
         }
     }
 }
+
+#if DEBUG
+#Preview("Appearance") {
+    AppearanceSettingsView()
+        .environment(AppModel.preview())
+        // The size the Settings window gives each pane.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 540)
+}
+
+#Preview("Usage bars, remaining") {
+    let model = AppModel.preview()
+    model.settings.usageDisplay = .bars
+    model.settings.usageBarFill = .remaining
+    return AppearanceSettingsView()
+        .environment(model)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 540)
+}
+
+#Preview("Compact, sidebar extras off") {
+    let model = AppModel.preview()
+    model.settings.sidebarDensity = .compact
+    model.settings.showsGitStatusInSidebar = false
+    model.settings.showsPullRequests = false
+    model.settings.showsAgentMessagesInSidebar = false
+    return AppearanceSettingsView()
+        .environment(model)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 540)
+}
+#endif

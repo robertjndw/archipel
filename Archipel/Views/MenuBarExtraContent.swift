@@ -202,3 +202,35 @@ private struct MenuBarRowStyle: ButtonStyle {
             .onHover { isHovering = $0 }
     }
 }
+
+#if DEBUG
+private func previewMenuBarModel(_ activities: [Session.ID: SessionActivity]) -> AppModel {
+    AppModel(preview: PreviewFixtures.workspace, activities: activities)
+}
+
+#Preview("Panel") {
+    HStack(alignment: .top, spacing: 16) {
+        MenuBarExtraContent().environment(AppModel.preview())
+        MenuBarExtraContent().environment(AppModel.emptyPreview())
+    }
+    .padding()
+}
+
+#Preview("Panel, Dark") {
+    MenuBarExtraContent()
+        .environment(AppModel.preview())
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Label") {
+    let working = SessionActivity(status: .working)
+    let unread = SessionActivity(status: .finished, unread: true)
+    Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+        GridRow { MenuBarExtraLabel().environment(AppModel.preview()); Text("Needs you") }
+        GridRow { MenuBarExtraLabel().environment(previewMenuBarModel([PreviewFixtures.claudeSessionID: working])); Text("Working") }
+        GridRow { MenuBarExtraLabel().environment(previewMenuBarModel([PreviewFixtures.reviewSessionID: unread])); Text("Finished, unread") }
+        GridRow { MenuBarExtraLabel().environment(AppModel.emptyPreview()); Text("Nothing going on") }
+    }
+    .padding()
+}
+#endif

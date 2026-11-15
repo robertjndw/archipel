@@ -1,5 +1,6 @@
 import AgentKit
 import ArchipelCore
+import GitKit
 import SwiftUI
 
 struct SidebarView: View {
@@ -189,3 +190,60 @@ struct NewSessionButtons: View {
         }
     }
 }
+
+#if DEBUG
+private struct SidebarPreview: View {
+    @State var model: AppModel
+    @State private var isAddingProject = false
+
+    var body: some View {
+        SidebarView(isAddingProject: $isAddingProject, toggleSidebar: {})
+            .listStyle(.sidebar)
+            .environment(model)
+            .frame(width: 260, height: 640)
+    }
+}
+
+#Preview("Populated") {
+    SidebarPreview(model: .preview())
+}
+
+#Preview("Compact") {
+    let model = AppModel.preview()
+    model.settings.sidebarDensity = .compact
+    return SidebarPreview(model: model)
+}
+
+#Preview("Spacious") {
+    let model = AppModel.preview()
+    model.settings.sidebarDensity = .spacious
+    return SidebarPreview(model: model)
+}
+
+#Preview("Empty") {
+    SidebarPreview(model: .emptyPreview())
+}
+
+#Preview("Collapsed projects") {
+    var workspace = PreviewFixtures.workspace
+    workspace.updateProject(id: PreviewFixtures.appProjectID) { $0.isExpanded = false }
+    let model = AppModel(preview: workspace, activities: PreviewFixtures.activities)
+    return SidebarPreview(model: model)
+}
+
+#Preview("Detected and missing worktrees") {
+    let model = AppModel.preview()
+    let worktrees = PreviewFixtures.root.appending(path: "orbit-worktrees", directoryHint: .isDirectory)
+    model.gitWorktrees[PreviewFixtures.appProjectID] = [
+        GitWorktreeEntry(path: worktrees.appending(path: "spike-graphql", directoryHint: .isDirectory), branch: "spike/graphql", isMain: false),
+        GitWorktreeEntry(path: worktrees.appending(path: "detached", directoryHint: .isDirectory), branch: nil, isMain: false),
+    ]
+    model.missingWorktrees = [PreviewFixtures.fixWorktreeID]
+    return SidebarPreview(model: model)
+}
+
+#Preview("Dark") {
+    SidebarPreview(model: .preview())
+        .preferredColorScheme(.dark)
+}
+#endif

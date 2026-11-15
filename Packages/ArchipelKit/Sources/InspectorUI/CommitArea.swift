@@ -329,3 +329,70 @@ private struct CompactLabelStyle: LabelStyle {
 private extension LabelStyle where Self == CompactLabelStyle {
     static var compact: CompactLabelStyle { .init() }
 }
+
+#if DEBUG
+@MainActor
+private func previewCommitArea(_ title: String, _ model: ChangesModel) -> some View {
+    PreviewVariant(title) {
+        CommitArea(model: model, focusRequest: .constant(false))
+    }
+}
+
+#Preview("Commit") {
+    ScrollView {
+        VStack(alignment: .leading, spacing: 8) {
+            previewCommitArea("Staged changes, no message", .previewSample(PreviewSamples.stagedOnly))
+            previewCommitArea("Staged changes, message", .previewSample(PreviewSamples.stagedOnly, message: "Fix the session switcher"))
+            previewCommitArea("Nothing staged: commits everything", .previewSample(PreviewSamples.unstagedOnly, message: "Fix the session switcher"))
+            previewCommitArea("Long message", .previewSample(
+                PreviewSamples.stagedOnly,
+                message: "Fix the session switcher\n\nThe list kept sessions that had already closed, so picking one opened an empty pane. Forget a session as soon as its process exits."
+            ))
+            previewCommitArea("Committing", .previewSample(PreviewSamples.stagedOnly, message: "Fix the session switcher", activity: .commit))
+        }
+        .padding(.vertical)
+    }
+    .frame(width: 300, height: 640)
+    .background(Color.inspectorBackground)
+}
+
+#Preview("Sync and Pull Request") {
+    ScrollView {
+        VStack(alignment: .leading, spacing: 8) {
+            previewCommitArea("Clean, up to date", .previewSample(PreviewSamples.synced()))
+            previewCommitArea("Behind", .previewSample(PreviewSamples.synced(ahead: 2, behind: 3)))
+            previewCommitArea("Ahead, open pull request", .previewSample(PreviewSamples.synced(ahead: 1), pullRequest: PreviewSamples.pullRequest(.open)))
+            previewCommitArea("Pushing, draft pull request", .previewSample(
+                PreviewSamples.synced(ahead: 2), activity: .push, pullRequest: PreviewSamples.pullRequest(.open, isDraft: true)
+            ))
+            previewCommitArea("Not published", .previewSample(PreviewSamples.synced(upstream: nil)))
+            previewCommitArea("Merged pull request", .previewSample(PreviewSamples.synced(), pullRequest: PreviewSamples.pullRequest(.merged)))
+        }
+        .padding(.vertical)
+    }
+    .frame(width: 300, height: 760)
+    .background(Color.inspectorBackground)
+}
+
+#Preview("Sync and Pull Request, Dark") {
+    VStack(alignment: .leading, spacing: 8) {
+        previewCommitArea("Ahead, open pull request", .previewSample(PreviewSamples.synced(ahead: 1), pullRequest: PreviewSamples.pullRequest(.open)))
+        previewCommitArea("Staged changes, message", .previewSample(PreviewSamples.stagedOnly, message: "Fix the session switcher"))
+    }
+    .padding(.vertical)
+    .frame(width: 300)
+    .background(Color.inspectorBackground)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Sync Menu") {
+    VStack(alignment: .leading, spacing: 12) {
+        PreviewVariant("Up to date") { SyncMenu(model: .previewSample(PreviewSamples.synced())) }
+        PreviewVariant("2 ahead, 3 behind") { SyncMenu(model: .previewSample(PreviewSamples.synced(ahead: 2, behind: 3))) }
+        PreviewVariant("Fetching") { SyncMenu(model: .previewSample(PreviewSamples.synced(), activity: .fetch)) }
+        PreviewVariant("Pulling") { SyncMenu(model: .previewSample(PreviewSamples.synced(behind: 3), activity: .pull)) }
+        PreviewVariant("Detached, no remote") { SyncMenu(model: .previewSample(PreviewSamples.synced(upstream: nil, branch: nil), hasRemote: false)) }
+    }
+    .padding()
+}
+#endif

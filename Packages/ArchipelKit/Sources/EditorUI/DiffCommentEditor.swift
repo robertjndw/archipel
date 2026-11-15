@@ -233,3 +233,38 @@ private final class CommentTextView: NSTextView {
         onCancel?()
     }
 }
+
+#if DEBUG
+#Preview("Comment Editor") {
+    let code = "    private var items: [Session.ID] = []"
+    VStack(alignment: .leading, spacing: 16) {
+        PreviewVariant("New, empty") {
+            ReviewCommentEditor(draft: ReviewCommentDraft(text: ""), title: "Comment on line 5", code: code, isEditing: false) { _ in }
+        }
+        PreviewVariant("New, drafting") {
+            ReviewCommentEditor(
+                draft: ReviewCommentDraft(text: "Will sessions saved by the old build still decode after this change?"),
+                title: "Comment on line 5", code: code, isEditing: false
+            ) { _ in }
+        }
+        PreviewVariant("Editing an existing comment") {
+            ReviewCommentEditor(
+                draft: ReviewCommentDraft(text: "This only ever removed one item."),
+                title: "Comment on removed line 27", code: "        if items.count > limit { items.removeLast() }", isEditing: true
+            ) { _ in }
+        }
+        PreviewVariant("Blank line") {
+            ReviewCommentEditor(draft: ReviewCommentDraft(text: ""), title: "Comment on line 2", code: "", isEditing: false) { _ in }
+        }
+    }
+    .padding()
+}
+
+#Preview("Comment Editor, Dark") {
+    ReviewCommentEditor(
+        draft: ReviewCommentDraft(text: "Will sessions saved by the old build still decode after this change?"),
+        title: "Comment on line 5", code: "    private var items: [Session.ID] = []", isEditing: true
+    ) { _ in }
+    .preferredColorScheme(.dark)
+}
+#endif

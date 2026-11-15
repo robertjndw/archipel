@@ -248,3 +248,65 @@ struct SidebarDensityPreview: View {
         }
     }
 }
+
+#if DEBUG
+private struct ComponentGallery: View {
+    @State private var appearance = AppSettings.Appearance.system
+    @State private var density = AppSettings.SidebarDensity.comfortable
+    @State private var usage = AppSettings.UsageDisplay.bars
+    @State private var fill = AppSettings.UsageBarFill.used
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 32) {
+            column(isEnabled: true)
+            column(isEnabled: false)
+        }
+        .padding(24)
+        .background(.background)
+    }
+
+    private func column(isEnabled: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(isEnabled ? "Enabled" : "Disabled").font(.headline)
+            labeled("TilePicker with AppearancePreview") {
+                TilePicker(selection: $appearance, options: AppSettings.Appearance.allCases, title: \.title) {
+                    AppearancePreview(appearance: $0)
+                }
+            }
+            labeled("TilePicker with SidebarDensityPreview") {
+                TilePicker(selection: $density, options: AppSettings.SidebarDensity.allCases, title: \.title) {
+                    SidebarDensityPreview(density: $0)
+                }
+            }
+            labeled("TilePicker with UsageDisplayPreview, \(fill.title.lowercased())") {
+                TilePicker(selection: $usage, options: AppSettings.UsageDisplay.allCases, title: \.title) {
+                    UsageDisplayPreview(display: $0, fill: fill)
+                }
+            }
+            Picker("Bars show", selection: $fill) {
+                ForEach(AppSettings.UsageBarFill.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+        }
+        .disabled(!isEnabled)
+    }
+
+    private func labeled(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            content()
+        }
+    }
+}
+
+#Preview("Components, light") {
+    ComponentGallery()
+        .preferredColorScheme(.light)
+}
+
+#Preview("Components, dark") {
+    ComponentGallery()
+        .preferredColorScheme(.dark)
+}
+#endif

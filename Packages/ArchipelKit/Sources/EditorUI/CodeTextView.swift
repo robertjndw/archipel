@@ -342,3 +342,37 @@ extension NSRulerView {
         scrollView.reflectScrolledClipView(clip)
     }
 }
+
+#if DEBUG
+#Preview("Swift") {
+    CodeTextView(buffer: .previewSample(url: PreviewSamples.url("Sources/ActivityBadge.swift"), text: PreviewSamples.swiftSource))
+        .frame(width: 640, height: 420)
+}
+
+#Preview("Swift, Dark") {
+    CodeTextView(buffer: .previewSample(url: PreviewSamples.url("Sources/ActivityBadge.swift"), text: PreviewSamples.swiftSource))
+        .frame(width: 640, height: 420)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("JSON") {
+    CodeTextView(buffer: .previewSample(url: PreviewSamples.url("package.json"), text: PreviewSamples.jsonSource))
+        .frame(width: 640, height: 360)
+}
+
+#Preview("JSON, Dark") {
+    CodeTextView(buffer: .previewSample(url: PreviewSamples.url("package.json"), text: PreviewSamples.jsonSource))
+        .frame(width: 640, height: 360)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Markdown") {
+    CodeTextView(buffer: .previewSample(url: PreviewSamples.url("README.md"), text: PreviewSamples.markdownSource))
+        .frame(width: 640, height: 360)
+}
+
+#Preview("Plain Text") {
+    CodeTextView(buffer: .previewSample(url: PreviewSamples.url("CHECKLIST"), text: PreviewSamples.plainSource))
+        .frame(width: 640, height: 240)
+}
+#endif

@@ -21,6 +21,9 @@ final class StayAwake {
 
     var mode: Mode {
         didSet {
+            #if DEBUG
+            if isPreview { return }
+            #endif
             defaults.set(mode.rawValue, forKey: Self.modeKey)
             update()
         }
@@ -36,6 +39,9 @@ final class StayAwake {
     @ObservationIgnored private var assertionID: IOPMAssertionID = 0
     @ObservationIgnored private let defaults: UserDefaults
     private static let modeKey = "settings.stayAwakeMode"
+    #if DEBUG
+    @ObservationIgnored private var isPreview = false
+    #endif
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -47,6 +53,9 @@ final class StayAwake {
     // assertions when it exits, crashes included.
 
     private func update() {
+        #if DEBUG
+        if isPreview { return }
+        #endif
         let shouldHold = switch mode {
         case .off: false
         case .whileWorking: agentsWorking
@@ -74,3 +83,14 @@ final class StayAwake {
         isHolding = false
     }
 }
+
+#if DEBUG
+extension StayAwake {
+    /// Shows a state without writing the setting or taking a real power assertion.
+    func showForPreview(mode: Mode, isHolding: Bool) {
+        isPreview = true
+        self.mode = mode
+        self.isHolding = isHolding
+    }
+}
+#endif

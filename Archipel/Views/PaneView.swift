@@ -162,3 +162,47 @@ private struct ExitedBar: View {
         .overlay(alignment: .top) { Divider() }
     }
 }
+
+#if DEBUG
+// Previews have no terminal engine, so a session tab shows the spinner it shows while starting.
+
+#Preview("Session Starting") {
+    WorktreeContentView(isSidebarCollapsed: false, toggleSidebar: {})
+        .environment(AppModel.preview())
+        .frame(width: 900, height: 500)
+}
+
+#Preview("Could Not Start") {
+    WorktreeContentView(isSidebarCollapsed: false, toggleSidebar: {})
+        .environment(AppModel.launchFailurePreview())
+        .frame(width: 900, height: 500)
+}
+
+#Preview("Split Panes") {
+    WorktreeContentView(isSidebarCollapsed: false, toggleSidebar: {})
+        .environment(PanePreviews.model(selecting: PanePreviews.split()))
+        .frame(width: 1000, height: 500)
+}
+
+#Preview("No Tabs") {
+    WorktreeContentView(isSidebarCollapsed: true, toggleSidebar: {})
+        .environment(PanePreviews.model(selecting: PreviewFixtures.blogWorktree))
+        .frame(width: 900, height: 500)
+}
+
+#Preview("Nothing Selected") {
+    WorktreeContentView(isSidebarCollapsed: false, toggleSidebar: {})
+        .environment(AppModel.emptyPreview())
+        .frame(width: 700, height: 400)
+}
+
+#Preview("Exited Bar") {
+    VStack(spacing: 0) {
+        ExitedBar(code: 0) {}
+        ExitedBar(code: 1) {}
+        ExitedBar(code: 1) {}
+            .environment(\.colorScheme, .dark)
+    }
+    .frame(width: 600)
+}
+#endif

@@ -1,5 +1,6 @@
 import AgentKit
 import ArchipelCore
+import GitKit
 import SwiftUI
 
 /// One worktree in the sidebar. Everything it shows comes from `WorktreeRowContent`; this only lays it
@@ -365,3 +366,108 @@ extension PullRequestBadge.State {
         }
     }
 }
+
+#if DEBUG
+private enum WorktreeRowSamples {
+    static let root = PreviewFixtures.root
+
+    static let questionSession = Session(title: "Claude Code", agentTitle: "Rewrite onboarding copy", agent: .claude)
+    static let doneSession = Session(title: "Codex", agentTitle: "Bump dependencies", agent: .codex)
+
+    static let question = Worktree(
+        path: root.appending(path: "orbit-worktrees/onboarding", directoryHint: .isDirectory),
+        branch: "feat/onboarding-copy",
+        sessions: [questionSession]
+    )
+    static let done = Worktree(
+        path: root.appending(path: "orbit-worktrees/bump-deps", directoryHint: .isDirectory),
+        branch: "chore/bump-deps",
+        sessions: [doneSession]
+    )
+    static let plainFolder = Worktree(path: root.appending(path: "scratch", directoryHint: .isDirectory))
+    static let missing = Worktree(
+        path: root.appending(path: "orbit-worktrees/old-experiment", directoryHint: .isDirectory),
+        branch: "feat/old-experiment"
+    )
+
+    static let worktrees = [
+        PreviewFixtures.mainWorktree, PreviewFixtures.featureWorktree, PreviewFixtures.fixWorktree,
+        question, done, plainFolder, missing,
+    ]
+
+    static func model() -> AppModel {
+        let project = Project(name: "Orbit", folderURL: PreviewFixtures.mainWorktree.path, worktrees: worktrees)
+        var activities = PreviewFixtures.activities
+        activities[questionSession.id] = SessionActivity(
+            status: .needsAttention(.question), unread: true, lastMessage: "Should the welcome screen mention pricing?"
+        )
+        activities[doneSession.id] = SessionActivity(status: .finished, lastMessage: "Updated 12 packages, tests pass", completedTurn: true)
+        let model = AppModel(preview: Workspace(islands: [Island(name: "Work", projects: [project])]), activities: activities)
+        model.gitSummaries = PreviewFixtures.gitSummaries
+        model.gitSummaries[done.id] = GitSummary(branch: "chore/bump-deps", upstream: "origin/chore/bump-deps", ahead: 0, behind: 0, changedFiles: 0)
+        model.pullRequests = PreviewFixtures.pullRequests
+        model.pullRequests[done.id] = PullRequestLookup(
+            branch: "chore/bump-deps",
+            pullRequest: GitPullRequest(
+                number: 117, url: URL(string: "https://github.com/example/orbit/pull/117")!,
+                title: "Bump dependencies", state: .merged, isDraft: false
+            ),
+            checkedAt: .now
+        )
+        model.missingWorktrees = [missing.id]
+        return model
+    }
+}
+
+private struct WorktreeRowsPreview: View {
+    @State private var model = WorktreeRowSamples.model()
+    @State private var selection: Worktree.ID? = PreviewFixtures.mainWorktreeID
+
+    var body: some View {
+        List(selection: $selection) {
+            ForEach(WorktreeRowSamples.worktrees) { worktree in
+                SidebarWorktreeRow(
+                    worktree: worktree,
+                    content: model.rowContent(for: worktree),
+                    sessions: model.sessionRows(for: worktree),
+                    isSelected: worktree.id == selection,
+                    tint: .blue,
+                    removing: .constant(nil),
+                    renaming: .constant(nil)
+                )
+                .tag(worktree.id)
+            }
+        }
+        .listStyle(.sidebar)
+        .environment(model)
+    }
+}
+
+#Preview("Comfortable") {
+    WorktreeRowsPreview()
+        .frame(width: 260, height: 560)
+}
+
+#Preview("Compact") {
+    WorktreeRowsPreview()
+        .environment(\.sidebarDensity, .compact)
+        .frame(width: 260, height: 460)
+}
+
+#Preview("Spacious") {
+    WorktreeRowsPreview()
+        .environment(\.sidebarDensity, .spacious)
+        .frame(width: 260, height: 640)
+}
+
+#Preview("Narrow") {
+    WorktreeRowsPreview()
+        .frame(width: 190, height: 560)
+}
+
+#Preview("Dark") {
+    WorktreeRowsPreview()
+        .frame(width: 260, height: 560)
+        .preferredColorScheme(.dark)
+}
+#endif

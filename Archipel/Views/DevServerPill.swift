@@ -46,3 +46,26 @@ struct DevServerPill: View {
         }
     }
 }
+
+#if DEBUG
+private func previewPills() -> some View {
+    let vite = DevServerLink(url: URL(string: "http://localhost:5173/")!)!
+    let api = DevServerLink(url: URL(string: "http://0.0.0.0:8080")!)!
+    return HStack(spacing: 12) {
+        DevServerPill(links: [vite])
+        // Several servers: the newest is shown, the rest are in the context menu.
+        DevServerPill(links: [vite, api])
+    }
+    .padding()
+    .environment(AppModel.preview())
+}
+
+#Preview {
+    VStack(spacing: 0) {
+        previewPills()
+        previewPills()
+            .background(.background)
+            .environment(\.colorScheme, .dark)
+    }
+}
+#endif

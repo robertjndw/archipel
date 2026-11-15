@@ -189,3 +189,34 @@ extension ReviewTarget {
         }
     }
 }
+
+#if DEBUG
+#Preview("Button") {
+    VStack(alignment: .leading, spacing: 16) {
+        PreviewVariant("One comment") {
+            ReviewCommentsButton(root: PreviewSamples.root, review: PreviewSamples.review(comments: 1))
+        }
+        PreviewVariant("Several comments") {
+            ReviewCommentsButton(root: PreviewSamples.root, review: PreviewSamples.review(comments: 4))
+        }
+    }
+    .padding()
+}
+
+#Preview("List, No Agent Session") {
+    ReviewCommentsList(root: PreviewSamples.root, review: PreviewSamples.review(comments: 1, targets: 0)) {}
+}
+
+#Preview("List, One Session") {
+    ReviewCommentsList(root: PreviewSamples.root, review: PreviewSamples.review(comments: 4, targets: 1)) {}
+}
+
+#Preview("List, Several Sessions") {
+    ReviewCommentsList(root: PreviewSamples.root, review: PreviewSamples.review(comments: 4, targets: 2)) {}
+}
+
+#Preview("List, Dark") {
+    ReviewCommentsList(root: PreviewSamples.root, review: PreviewSamples.review(comments: 4, targets: 1)) {}
+        .preferredColorScheme(.dark)
+}
+#endif

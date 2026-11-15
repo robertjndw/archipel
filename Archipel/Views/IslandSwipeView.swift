@@ -229,3 +229,27 @@ private struct IslandSwipeMonitor: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+// The gesture itself comes from a scroll wheel monitor and cannot run here; this shows the list at
+// rest and partway through a swipe.
+private func previewSwipeList(offset: Double) -> some View {
+    let state = IslandSwipeState()
+    state.offset = offset
+    return List {
+        ForEach(["main", "feat/offline-mode", "fix/login-crash"], id: \.self) { branch in
+            Label(branch, systemImage: "arrow.triangle.branch")
+        }
+    }
+    .islandSwipeContent(state)
+    .frame(width: state.width, height: 140)
+}
+
+#Preview {
+    HStack(spacing: 12) {
+        previewSwipeList(offset: 0)
+        previewSwipeList(offset: -110)
+    }
+    .padding()
+}
+#endif

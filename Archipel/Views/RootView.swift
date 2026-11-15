@@ -108,3 +108,28 @@ struct RootView: View {
         )
     }
 }
+
+#if DEBUG
+// The inspector and the activation handler reach for git, but the fixture paths do not exist, so
+// no git process can start in them.
+private func previewRoot(_ model: AppModel) -> some View {
+    RootView(isAddingProject: .constant(false))
+        .environment(model)
+        .environment(CommandPaletteModel())
+        .environment(TabSwitcherModel())
+        .frame(width: 1280, height: 800)
+}
+
+#Preview("Populated") {
+    previewRoot(AppModel.preview())
+}
+
+#Preview("Populated, Dark") {
+    previewRoot(AppModel.preview())
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Fresh Install") {
+    previewRoot(AppModel.emptyPreview())
+}
+#endif

@@ -39,3 +39,34 @@ extension View {
             .fixedSize()
     }
 }
+
+#if DEBUG
+private func previewToolbarGroups() -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+        GlassToolbarGroup {
+            Button("Show Sidebar", systemImage: "sidebar.left") {}
+        }
+        GlassToolbarGroup {
+            Menu {
+                Button("Claude Code") {}
+                Button("Shell") {}
+            } label: {
+                Image(systemName: "plus")
+            }
+            .toolbarGroupMenu()
+            Button("Run", systemImage: "play") {}
+            Button("Toggle Inspector", systemImage: "sidebar.trailing") {}
+        }
+    }
+    .padding(20)
+    .background(.windowBackground)
+}
+
+#Preview {
+    HStack(spacing: 0) {
+        previewToolbarGroups()
+        previewToolbarGroups()
+            .environment(\.colorScheme, .dark)
+    }
+}
+#endif

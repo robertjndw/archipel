@@ -26,3 +26,20 @@ struct SubagentBadge: View {
         count == 1 ? "1 subagent running" : "\(count) subagents running"
     }
 }
+
+#if DEBUG
+#Preview {
+    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+        ForEach([0, 1, 3, 12, 128], id: \.self) { count in
+            GridRow {
+                Text(count == 0 ? "0 (hidden)" : "\(count)").foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    SubagentBadge(count: count)
+                    ProgressView().controlSize(.mini)
+                }
+            }
+        }
+    }
+    .padding()
+}
+#endif

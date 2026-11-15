@@ -28,6 +28,8 @@ struct WorktreeSheet: View {
     @State private var isRepository = true
     @State private var isWorking = false
     @State private var failure: String?
+    /// Off only for previews, which fill the form themselves and have no repository to ask.
+    private var asksGit = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,7 +59,7 @@ struct WorktreeSheet: View {
                     .disabled(!canAdd || isWorking)
             }
         }
-        .task { await load() }
+        .task { if asksGit { await load() } }
     }
 
     private var form: some View {
@@ -73,7 +75,7 @@ struct WorktreeSheet: View {
                     } footer: {
                         Text(newBranchFooter)
                     }
-                    .task(id: trimmedBranch) { await checkNewBranch() }
+                    .task(id: trimmedBranch) { if asksGit { await checkNewBranch() } }
                     // A git error from the last attempt is about the old name.
                     .onChange(of: trimmedBranch) { failure = nil }
                 case .existingBranch:
@@ -236,3 +238,96 @@ struct WorktreeSheet: View {
         }
     }
 }
+
+#if DEBUG
+extension WorktreeSheet {
+    fileprivate init(
+        previewing project: Project,
+        mode: Mode = .newBranch,
+        newBranch: String = "",
+        nameProblem: NameProblem? = nil,
+        branches: [String] = [],
+        worktrees: [GitWorktreeEntry] = [],
+        isRepository: Bool = true,
+        failure: String? = nil
+    ) {
+        self.project = project
+        asksGit = false
+        _mode = State(initialValue: mode)
+        _newBranch = State(initialValue: newBranch)
+        _nameProblem = State(initialValue: nameProblem)
+        _branches = State(initialValue: branches)
+        _allBranches = State(initialValue: Set(branches))
+        _existingBranch = State(initialValue: branches.first ?? "")
+        _worktrees = State(initialValue: worktrees)
+        _existingWorktree = State(initialValue: worktrees.first?.path)
+        _isRepository = State(initialValue: isRepository)
+        _failure = State(initialValue: failure)
+    }
+}
+
+#Preview("New branch, empty") {
+    WorktreeSheet(previewing: PreviewFixtures.appProject)
+        .environment(AppModel.preview())
+}
+
+#Preview("New branch, filled") {
+    WorktreeSheet(previewing: PreviewFixtures.appProject, newBranch: "feat/sync-status")
+        .environment(AppModel.preview())
+}
+
+#Preview("New branch, already exists") {
+    WorktreeSheet(
+        previewing: PreviewFixtures.appProject,
+        newBranch: "release/2.0",
+        nameProblem: .exists(available: true),
+        branches: ["release/2.0"]
+    )
+    .environment(AppModel.preview())
+}
+
+#Preview("New branch, invalid name") {
+    WorktreeSheet(previewing: PreviewFixtures.appProject, newBranch: "my new branch", nameProblem: .invalid)
+        .environment(AppModel.preview())
+}
+
+#Preview("New branch, git failed") {
+    WorktreeSheet(
+        previewing: PreviewFixtures.appProject,
+        newBranch: "feat/sync-status",
+        failure: "fatal: '/tmp/archipel-preview/orbit-worktrees/feat-sync-status' already exists"
+    )
+    .environment(AppModel.preview())
+}
+
+#Preview("Existing branch") {
+    WorktreeSheet(
+        previewing: PreviewFixtures.appProject,
+        mode: .existingBranch,
+        branches: ["develop", "release/2.0", "spike/metal-renderer"]
+    )
+    .environment(AppModel.preview())
+}
+
+#Preview("Existing branch, none left") {
+    WorktreeSheet(previewing: PreviewFixtures.appProject, mode: .existingBranch)
+        .environment(AppModel.preview())
+}
+
+#Preview("Existing worktree") {
+    WorktreeSheet(
+        previewing: PreviewFixtures.appProject,
+        mode: .existingWorktree,
+        worktrees: [
+            GitWorktreeEntry(path: PreviewFixtures.root.appending(path: "orbit-hotfix"), branch: "hotfix/2.0.1", isMain: false),
+            GitWorktreeEntry(path: PreviewFixtures.root.appending(path: "orbit-bisect"), branch: nil, isMain: false),
+        ]
+    )
+    .environment(AppModel.preview())
+}
+
+#Preview("Not a repository") {
+    WorktreeSheet(previewing: PreviewFixtures.blogProject, isRepository: false)
+        .environment(AppModel.preview())
+}
+#endif

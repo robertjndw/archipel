@@ -64,3 +64,28 @@ struct DetectedWorktreesRow: View {
         .frame(width: 340)
     }
 }
+
+#if DEBUG
+#Preview {
+    let worktrees = PreviewFixtures.root.appending(path: "orbit-worktrees", directoryHint: .isDirectory)
+    let one = [GitWorktreeEntry(path: worktrees.appending(path: "spike-graphql", directoryHint: .isDirectory), branch: "spike/graphql", isMain: false)]
+    let several = one + [
+        GitWorktreeEntry(
+            path: worktrees.appending(path: "refactor-sync", directoryHint: .isDirectory),
+            branch: "refactor/sync-engine-conflict-resolution-for-offline-edits", isMain: false
+        ),
+        GitWorktreeEntry(path: worktrees.appending(path: "detached", directoryHint: .isDirectory), branch: nil, isMain: false),
+    ]
+    List {
+        Section("One") {
+            DetectedWorktreesRow(project: PreviewFixtures.appProject, entries: one)
+        }
+        Section("Several (click for the list)") {
+            DetectedWorktreesRow(project: PreviewFixtures.appProject, entries: several)
+        }
+    }
+    .listStyle(.sidebar)
+    .frame(width: 260, height: 200)
+    .environment(AppModel.preview())
+}
+#endif

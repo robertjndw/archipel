@@ -14,3 +14,15 @@ struct FolderActions: View {
         Button("Copy Path", systemImage: "document.on.document") { model.copyToPasteboard(folder.path) }
     }
 }
+
+#if DEBUG
+#Preview {
+    VStack(alignment: .leading, spacing: 6) {
+        FolderActions(folder: PreviewFixtures.mainWorktree.path)
+    }
+    .buttonStyle(.borderless)
+    .labelStyle(.titleAndIcon)
+    .padding()
+    .environment(AppModel.preview())
+}
+#endif

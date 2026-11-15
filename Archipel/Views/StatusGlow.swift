@@ -251,3 +251,32 @@ private struct Backlight: View {
         return outline.trimmedPath(from: 0, to: max(wrapped, 0.0001)).currentPoint ?? .zero
     }
 }
+
+#if DEBUG
+// The glow only plays when the count goes up, so this preview needs the live canvas and a click.
+#Preview {
+    @Previewable @State var pulses: [Int: StatusPulseCount] = [:]
+    @Previewable @State var selection: Int? = 0
+    VStack(spacing: 0) {
+        List(selection: $selection) {
+            ForEach(0..<4, id: \.self) { row in
+                Label(row == 0 ? "Selected row" : "Row \(row)", systemImage: "arrow.triangle.branch")
+                    .padding(.vertical, 6)
+                    .statusGlow(pulses[row])
+                    .tag(row)
+            }
+        }
+        .listStyle(.sidebar)
+        HStack {
+            ForEach([(StatusPulse.finished, "Finished"), (.needsInput, "Needs Input"), (.failed, "Failed")], id: \.0) { kind, title in
+                Button(title) {
+                    for row in 0..<4 { pulses[row, default: StatusPulseCount()].play(kind) }
+                }
+                .tint(kind.color)
+            }
+        }
+        .padding()
+    }
+    .frame(width: 260, height: 300)
+}
+#endif

@@ -79,3 +79,25 @@ private struct AgentSection: View {
         agent.id == AgentDefinition.claude.id ? "--model opus" : "--model gpt-5"
     }
 }
+
+#if DEBUG
+#Preview("Agents") {
+    AgentSettingsView()
+        .environment(AppModel.preview())
+        // The size the Settings window gives each pane.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 540)
+}
+
+#Preview("Extra arguments") {
+    let model = AppModel.preview()
+    model.settings.agentArguments = [
+        AgentDefinition.claude.id: "--model opus --permission-mode plan",
+        AgentDefinition.codex.id: "--model gpt-5",
+    ]
+    return AgentSettingsView()
+        .environment(model)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 540)
+}
+#endif

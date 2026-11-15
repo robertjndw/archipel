@@ -311,3 +311,47 @@ final class DiffContainerView: NSView {
         editor.show(relativeTo: gutter.rowRect(for: item), of: gutter)
     }
 }
+
+#if DEBUG
+#Preview("Side by Side") {
+    DiffPreview(PreviewSamples.mixed)
+        .frame(width: 900, height: 480)
+}
+
+#Preview("Inline") {
+    DiffPreview(PreviewSamples.mixed, presentation: .inline)
+        .frame(width: 700, height: 560)
+}
+
+#Preview("Unchanged Lines Shown") {
+    DiffPreview(PreviewSamples.mixed, showsAllLines: true)
+        .frame(width: 900, height: 560)
+}
+
+#Preview("Review Comments") {
+    DiffPreview(PreviewSamples.mixed, commenting: PreviewSamples.commenting(PreviewSamples.comments(3)))
+        .frame(width: 900, height: 480)
+}
+
+#Preview("Additions Only") {
+    DiffPreview(PreviewSamples.additionsOnly)
+        .frame(width: 900, height: 300)
+}
+
+#Preview("Deletions Only") {
+    DiffPreview(PreviewSamples.deletionsOnly)
+        .frame(width: 900, height: 280)
+}
+
+#Preview("Dark") {
+    DiffPreview(PreviewSamples.mixed, commenting: PreviewSamples.commenting(PreviewSamples.comments(3)))
+        .frame(width: 900, height: 480)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Inline, Dark") {
+    DiffPreview(PreviewSamples.mixed, presentation: .inline)
+        .frame(width: 700, height: 560)
+        .preferredColorScheme(.dark)
+}
+#endif

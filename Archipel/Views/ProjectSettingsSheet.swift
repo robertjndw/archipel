@@ -389,3 +389,51 @@ private struct ScriptTextView: NSViewRepresentable {
         }
     }
 }
+
+#if DEBUG
+extension ProjectSettingsSheet {
+    /// `load()` only ever switches to Scripts, so Worktrees has to start there to be previewed.
+    fileprivate static func onWorktreesPage(_ project: Project) -> Self {
+        var sheet = Self(project: project)
+        sheet._page = State(initialValue: .worktrees)
+        return sheet
+    }
+}
+
+#Preview("General, symbol icon") {
+    ProjectSettingsSheet(project: PreviewFixtures.appProject)
+        .environment(AppModel.preview())
+}
+
+#Preview("General, automatic icon and tint") {
+    ProjectSettingsSheet(project: PreviewFixtures.blogProject)
+        .environment(AppModel.preview())
+}
+
+#Preview("Worktrees, default folder") {
+    ProjectSettingsSheet.onWorktreesPage(PreviewFixtures.appProject)
+        .environment(AppModel.preview())
+}
+
+#Preview("Worktrees, custom folder and base branch") {
+    var project = PreviewFixtures.appProject
+    project.worktreesDirectory = PreviewFixtures.root.appending(path: "orbit-worktrees", directoryHint: .isDirectory)
+    project.baseBranch = "develop"
+    return ProjectSettingsSheet.onWorktreesPage(project)
+        .environment(AppModel.preview())
+}
+
+#Preview("Scripts, filled") {
+    let model = AppModel.preview()
+    model.projectSettingsShowsScripts = true
+    return ProjectSettingsSheet(project: PreviewFixtures.appProject)
+        .environment(model)
+}
+
+#Preview("Scripts, empty") {
+    let model = AppModel.preview()
+    model.projectSettingsShowsScripts = true
+    return ProjectSettingsSheet(project: PreviewFixtures.blogProject)
+        .environment(model)
+}
+#endif

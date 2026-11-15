@@ -14,9 +14,12 @@ final class FileTreeModel {
     private(set) var children: [URL: [FileNode]] = [:]
     private(set) var rootError: String?
     private var expanded: Set<URL> = []
+    private let listDirectory: @Sendable (URL) async throws -> [FileNode]
 
-    init(root: URL) {
+    /// `listDirectory` is only replaced by previews, which must not read the disk.
+    init(root: URL, listDirectory: @escaping @Sendable (URL) async throws -> [FileNode] = { try await FileTreeModel.contents(of: $0) }) {
         self.root = root
+        self.listDirectory = listDirectory
     }
 
     /// Whether a listed URL is a folder, from the listings already loaded rather than another stat.
@@ -56,7 +59,7 @@ final class FileTreeModel {
 
     func load(_ directory: URL) async {
         do {
-            children[directory] = try await Self.contents(of: directory)
+            children[directory] = try await listDirectory(directory)
             if directory == root { rootError = nil }
         } catch {
             if directory == root {
@@ -223,3 +226,33 @@ private struct FileRow: View {
         .help(node.url.path)
     }
 }
+
+#if DEBUG
+#Preview("Expanded") {
+    FilesTab(model: PreviewSamples.fileTree(expanding: ["Sources", "Sources/App"]), actions: PreviewSamples.actions)
+        .frame(width: 300, height: 480)
+        .background(Color.inspectorBackground)
+}
+
+#Preview("Expanded, Dark") {
+    FilesTab(model: PreviewSamples.fileTree(expanding: ["Sources", "Sources/App", "Sources/Resources"]), actions: PreviewSamples.actions)
+        .frame(width: 300, height: 480)
+        .background(Color.inspectorBackground)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Collapsed") {
+    FilesTab(model: PreviewSamples.fileTree(), actions: PreviewSamples.actions)
+        .frame(width: 300, height: 320)
+        .background(Color.inspectorBackground)
+}
+
+#Preview("Can't Read Folder") {
+    let model = FileTreeModel(root: PreviewSamples.root) { _ in
+        throw CocoaError(.fileReadNoPermission)
+    }
+    FilesTab(model: model, actions: PreviewSamples.actions)
+        .frame(width: 300, height: 320)
+        .background(Color.inspectorBackground)
+}
+#endif

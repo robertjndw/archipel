@@ -107,6 +107,10 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
     @ObservationIgnored private var watcher: FileWatcher?
     @ObservationIgnored private var watchCount = 0
     @ObservationIgnored private let onDirtyChange: (Bool) -> Void
+#if DEBUG
+    /// Preview samples have no file behind them, so a reload would only turn them into "missing".
+    @ObservationIgnored fileprivate var isPreviewSample = false
+#endif
 
     init(url: URL, onDirtyChange: @escaping (Bool) -> Void) {
         self.url = url
@@ -149,6 +153,9 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
     /// Reads the file if it changed since the last look. A clean buffer takes the new contents; a
     /// dirty one keeps the user's edits and raises a conflict instead.
     func reload() async {
+#if DEBUG
+        if isPreviewSample { return }
+#endif
         generation += 1
         let current = generation
         watcher?.rearm()
@@ -310,6 +317,32 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
         return !TextSniffer.isBinary(head)
     }
 }
+
+#if DEBUG
+extension TextBuffer {
+    /// A buffer in the given state without touching the disk. `edit` is appended after loading, so
+    /// the buffer is dirty, which is what the conflict bar needs to show.
+    static func previewSample(
+        url: URL,
+        text: String = "",
+        state: State = .text,
+        edit: String? = nil,
+        conflict: Conflict? = nil,
+        saveError: String? = nil
+    ) -> TextBuffer {
+        let buffer = TextBuffer(url: url) { _ in }
+        buffer.isPreviewSample = true
+        buffer.replaceFromDisk(text, format: TextFileFormat())
+        buffer.state = state
+        if let edit {
+            buffer.textStorage.append(NSAttributedString(string: edit, attributes: EditorTheme.textAttributes))
+        }
+        buffer.conflict = conflict
+        buffer.saveError = saveError
+        return buffer
+    }
+}
+#endif
 
 /// Enough of `stat` to tell whether a file changed, including being replaced by a rename.
 struct FileFingerprint: Equatable, Sendable {

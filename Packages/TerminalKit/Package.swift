@@ -7,7 +7,9 @@ let package = Package(
     name: "TerminalKit",
     platforms: [.macOS("27.0")],
     products: [
-        .library(name: "TerminalKit", targets: ["TerminalKit"]),
+        // Dynamic so Xcode previews load Ghostty with dyld instead of JIT-linking it into the app,
+        // which takes longer than the preview launch timeout.
+        .library(name: "TerminalKit", type: .dynamic, targets: ["TerminalKit"]),
         .executable(name: "terminal-demo", targets: ["terminal-demo"]),
     ],
     targets: [

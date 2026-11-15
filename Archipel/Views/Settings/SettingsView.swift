@@ -21,3 +21,16 @@ struct SettingsView: View {
         .frame(width: 540)
     }
 }
+
+#if DEBUG
+#Preview("Window") {
+    SettingsView()
+        .environment(AppModel.preview())
+}
+
+#Preview("Window, dark") {
+    SettingsView()
+        .environment(AppModel.preview())
+        .preferredColorScheme(.dark)
+}
+#endif

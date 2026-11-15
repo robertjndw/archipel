@@ -93,3 +93,24 @@ struct NotificationSettingsView: View {
         authorization = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 }
+
+#if DEBUG
+#Preview("Notifications") {
+    NotificationSettingsView()
+        .environment(AppModel.preview())
+        // The size the Settings window gives each pane.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 540)
+}
+
+#Preview("All notifications off") {
+    let model = AppModel.preview()
+    model.settings.notifiesWhenAttentionNeeded = false
+    model.settings.notifiesWhenFinished = false
+    model.settings.notifiesWhenExited = false
+    return NotificationSettingsView()
+        .environment(model)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 540)
+}
+#endif

@@ -70,3 +70,31 @@ private final class ModeMenuTarget: NSObject {
         onChoose(mode)
     }
 }
+
+#if DEBUG
+private func previewStayAwake(_ mode: StayAwake.Mode, holding: Bool) -> some View {
+    let model = AppModel.emptyPreview()
+    model.stayAwake.showForPreview(mode: mode, isHolding: holding)
+    return StayAwakeButton().environment(model)
+}
+
+private func previewStayAwakeVariants() -> some View {
+    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+        GridRow { previewStayAwake(.off, holding: false); Text("Off") }
+        GridRow { previewStayAwake(.whileWorking, holding: false); Text("While working, idle") }
+        GridRow { previewStayAwake(.whileWorking, holding: true); Text("While working, holding") }
+        GridRow { previewStayAwake(.always, holding: true); Text("Always") }
+    }
+    .font(.system(size: 11))
+    .padding()
+    .background(.bar)
+}
+
+#Preview {
+    HStack(spacing: 0) {
+        previewStayAwakeVariants()
+        previewStayAwakeVariants()
+            .environment(\.colorScheme, .dark)
+    }
+}
+#endif

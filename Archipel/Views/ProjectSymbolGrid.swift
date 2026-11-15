@@ -40,3 +40,12 @@ struct ProjectSymbolGrid: View {
         .padding(.vertical, 4)
     }
 }
+
+#if DEBUG
+#Preview {
+    @Previewable @State var selection = "swift"
+    ProjectSymbolGrid(selection: selection) { selection = $0 }
+        .frame(width: 340)
+        .padding()
+}
+#endif

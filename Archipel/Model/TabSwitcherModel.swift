@@ -201,6 +201,18 @@ final class TabSwitcherModel {
     }
 }
 
+#if DEBUG
+extension TabSwitcherModel {
+    /// Puts the panel up without a key press or reading any tab.
+    func showForPreview(_ gesture: TabSwitch, startedFrom: ArchipelCore.Tab.ID?, previews: [ArchipelCore.Tab.ID: TabPreview] = [:]) {
+        self.gesture = gesture
+        self.startedFrom = startedFrom
+        self.previews = previews
+        showsPanel = true
+    }
+}
+#endif
+
 /// Takes Ctrl-Tab before the terminal does and watches for Control being let go. Lives in the main
 /// window's background so it only acts on that window's keys.
 struct TabSwitcherKeyMonitor: NSViewRepresentable {

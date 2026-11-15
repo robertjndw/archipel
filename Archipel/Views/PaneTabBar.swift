@@ -327,3 +327,126 @@ private struct TabTransition: Transition {
 private extension AnyTransition {
     static var tab: AnyTransition { AnyTransition(TabTransition()) }
 }
+
+#if DEBUG
+/// Worktrees with hand-made panes for the tab bar and pane previews.
+enum PanePreviews {
+    static let serverSessionID = UUID(uuidString: "00000000-0000-0000-0000-0000000005E7")!
+
+    /// The feature worktree with every kind of tab: sessions in several states, a file, a diff,
+    /// a preview tab and a session running a dev server.
+    static func mixedTabs() -> Worktree {
+        var worktree = PreviewFixtures.featureWorktree
+        worktree.sessions.append(Session(id: serverSessionID, title: "Dev Server", hasCustomTitle: true, agent: .shell))
+        let tabs = [
+            ArchipelCore.Tab(content: .session(PreviewFixtures.codexSessionID)),
+            ArchipelCore.Tab(content: .session(PreviewFixtures.reviewSessionID)),
+            ArchipelCore.Tab(content: .file(worktree.path.appending(path: "Sources/Sync/SyncEngine.swift"))),
+            ArchipelCore.Tab(content: .diff(path: "Sources/Cache/ResponseCache.swift", staged: false)),
+            ArchipelCore.Tab(content: .session(serverSessionID)),
+            ArchipelCore.Tab(content: .file(worktree.path.appending(path: "README.md")), isPreview: true),
+        ]
+        worktree.panes = [Pane(tabs: tabs, selectedTabID: tabs[0].id)]
+        worktree.focusedPaneID = worktree.panes[0].id
+        return worktree
+    }
+
+    /// The feature worktree split in two, the left pane focused.
+    static func split() -> Worktree {
+        var worktree = PreviewFixtures.featureWorktree
+        let left = ArchipelCore.Tab(content: .session(PreviewFixtures.codexSessionID))
+        let right = ArchipelCore.Tab(content: .session(PreviewFixtures.reviewSessionID))
+        worktree.panes = [Pane(tabs: [left], selectedTabID: left.id), Pane(tabs: [right], selectedTabID: right.id)]
+        worktree.focusedPaneID = worktree.panes[0].id
+        return worktree
+    }
+
+    /// The fixture workspace with `worktree` swapped in and selected.
+    static func model(selecting worktree: Worktree) -> AppModel {
+        var workspace = PreviewFixtures.workspace
+        workspace.updateWorktree(id: worktree.id) { $0 = worktree }
+        if let island = workspace.island(containingWorktree: worktree.id) {
+            workspace.selectedIslandID = island.id
+            workspace.selectedWorktreeIDByIsland[island.id] = worktree.id
+        }
+        var activities = PreviewFixtures.activities
+        activities[serverSessionID] = SessionActivity(status: .working)
+        let model = AppModel(preview: workspace, activities: activities)
+        model.gitSummaries = PreviewFixtures.gitSummaries
+        model.pullRequests = PreviewFixtures.pullRequests
+        model.usage = PreviewFixtures.usage
+        model.devServers.showForPreview([serverSessionID: [
+            DevServerLink(url: URL(string: "http://localhost:8080")!)!,
+            DevServerLink(url: URL(string: "http://localhost:5173/")!)!,
+        ]])
+        return model
+    }
+}
+
+private struct PaneTabBarPreview: View {
+    let model: AppModel
+    var paneIndex = 0
+    var showsSidebarToggle = false
+
+    var body: some View {
+        if let worktree = model.selectedWorktree {
+            let pane = worktree.panes[paneIndex]
+            PaneTabBar(
+                worktree: worktree,
+                pane: pane,
+                isFocused: pane.id == worktree.focusedPane?.id,
+                showsSidebarToggle: showsSidebarToggle,
+                toggleSidebar: {}
+            )
+            .environment(model)
+        }
+    }
+}
+
+private func previewTabBars() -> some View {
+    VStack(spacing: 12) {
+        PaneTabBarPreview(model: PanePreviews.model(selecting: PanePreviews.mixedTabs()))
+        PaneTabBarPreview(model: AppModel.preview())
+        PaneTabBarPreview(model: PanePreviews.model(selecting: PreviewFixtures.fixWorktree))
+        PaneTabBarPreview(model: AppModel.preview(), showsSidebarToggle: true)
+    }
+    .frame(width: 1100)
+    .padding(.vertical)
+}
+
+#Preview("Tab Bars") {
+    previewTabBars()
+}
+
+#Preview("Tab Bars, Dark") {
+    previewTabBars()
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Overflowing") {
+    PaneTabBarPreview(model: PanePreviews.model(selecting: PanePreviews.mixedTabs()))
+        .frame(width: 520)
+}
+
+#Preview("Split, Focused and Not") {
+    let model = PanePreviews.model(selecting: PanePreviews.split())
+    HStack(spacing: 1) {
+        PaneTabBarPreview(model: model, paneIndex: 0)
+        PaneTabBarPreview(model: model, paneIndex: 1)
+    }
+    .frame(width: 900)
+}
+
+#Preview("Unsaved File") {
+    let url = PreviewFixtures.mainWorktree.path.appending(path: "Package.swift")
+    let tab = ArchipelCore.Tab(content: .file(url))
+    let label = TabLabel(title: "Package.swift", symbol: FileIcon.symbol(for: "Package.swift"), detail: url.path)
+    var unsaved = label
+    unsaved.hasUnsavedChanges = true
+    return HStack(spacing: 4) {
+        TabButton(tab: tab, label: label, isSelected: false, isActive: true, select: {}, pin: {}, close: {})
+        TabButton(tab: tab, label: unsaved, isSelected: false, isActive: true, select: {}, pin: {}, close: {})
+    }
+    .padding()
+}
+#endif

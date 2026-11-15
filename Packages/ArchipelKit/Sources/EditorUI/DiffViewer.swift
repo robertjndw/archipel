@@ -58,6 +58,13 @@ private struct DiffViewerContent: View {
         self.review = review
     }
 
+#if DEBUG
+    init(model: DiffViewerModel, review: DiffReview?) {
+        _model = State(initialValue: model)
+        self.review = review
+    }
+#endif
+
     var body: some View {
         VStack(spacing: 0) {
             DiffHeader(model: model, review: review, presentation: $presentation, showsAllLines: $showsAllLines)
@@ -241,12 +248,21 @@ final class DiffViewerModel {
     @ObservationIgnored private var diff: GitFileDiff?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var highlightTask: Task<Void, Never>?
-    private let git = GitClient()
+    private let loadDiff: @Sendable (_ path: String, _ staged: Bool, _ root: URL) async throws -> GitFileDiff?
 
-    init(root: URL, path: String, staged: Bool) {
+    /// `loadDiff` is only replaced by previews, which have no repository to run git in.
+    init(
+        root: URL,
+        path: String,
+        staged: Bool,
+        loadDiff: @escaping @Sendable (_ path: String, _ staged: Bool, _ root: URL) async throws -> GitFileDiff? = { path, staged, root in
+            try await GitClient().fileDiff(path: path, staged: staged, in: root)
+        }
+    ) {
         self.root = root
         self.path = path
         self.staged = staged
+        self.loadDiff = loadDiff
     }
 
     func refresh() async {
@@ -254,7 +270,7 @@ final class DiffViewerModel {
         generation += 1
         let current = generation
         do {
-            let diff = try await git.fileDiff(path: path, staged: staged, in: root)
+            let diff = try await loadDiff(path, staged, root)
             guard current == generation else { return }
             // Unchanged output leaves the view alone, so scroll position and expanded folds survive the poll.
             if phase.isSettled, diff == self.diff { return }
@@ -302,3 +318,58 @@ final class DiffViewerModel {
         DiffDocument(diff: diff)
     }
 }
+
+#if DEBUG
+@MainActor
+private func previewViewer(
+    _ result: Result<GitFileDiff?, GitError>,
+    path: String,
+    staged: Bool = false,
+    review: DiffReview? = nil
+) -> some View {
+    let model = DiffViewerModel(root: PreviewSamples.root, path: path, staged: staged) { _, _, _ in try result.get() }
+    return DiffViewerContent(model: model, review: review)
+        .frame(width: 900, height: 520)
+}
+
+#Preview("Modified") {
+    previewViewer(.success(PreviewSamples.mixed), path: PreviewSamples.mixedPath)
+}
+
+#Preview("Review Comments") {
+    previewViewer(.success(PreviewSamples.mixed), path: PreviewSamples.mixedPath, review: PreviewSamples.review(comments: 4, targets: 2))
+}
+
+#Preview("Review Comments, Dark") {
+    previewViewer(.success(PreviewSamples.mixed), path: PreviewSamples.mixedPath, review: PreviewSamples.review(comments: 4, targets: 2))
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Staged New File") {
+    previewViewer(.success(PreviewSamples.newFile), path: "Sources/Sessions/SessionBadge.swift", staged: true)
+}
+
+#Preview("Renamed") {
+    previewViewer(.success(PreviewSamples.renamed), path: "Sources/Util/StringHelpers.swift")
+}
+
+#Preview("Line Endings Changed") {
+    previewViewer(.success(PreviewSamples.lineEndings), path: ".editorconfig")
+}
+
+#Preview("Binary") {
+    previewViewer(.success(PreviewSamples.binary), path: "Assets/AppIcon.png")
+}
+
+#Preview("Renamed Without Changes") {
+    previewViewer(.success(PreviewSamples.renamedOnly), path: "Sources/Util/StringHelpers.swift", staged: true)
+}
+
+#Preview("No Changes") {
+    previewViewer(.success(nil), path: PreviewSamples.mixedPath, staged: true)
+}
+
+#Preview("Failed") {
+    previewViewer(.failure(GitError(message: "fatal: not a git repository (or any of the parent directories): .git")), path: PreviewSamples.mixedPath)
+}
+#endif

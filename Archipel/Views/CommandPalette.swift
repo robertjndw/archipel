@@ -274,3 +274,38 @@ final class FocusingTextField: NSTextField {
         }
     }
 }
+
+#if DEBUG
+private func previewPalette(_ query: String) -> some View {
+    let model = AppModel.preview()
+    let palette = CommandPaletteModel()
+    let commands = PaletteCommand.standard(model: model, addProject: {}, toggleInspector: {}, startCommit: {})
+    palette.present(.goTo, app: model, commands: commands)
+    palette.setQuery(query)
+    return CommandPalette()
+        .environment(palette)
+        .frame(width: 900, height: 600, alignment: .top)
+        .background(.windowBackground)
+}
+
+#Preview("Empty Query") {
+    previewPalette("")
+}
+
+#Preview("Results") {
+    previewPalette("off")
+}
+
+#Preview("Results, Dark") {
+    previewPalette("rev")
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Commands Only") {
+    previewPalette(">split")
+}
+
+#Preview("No Results") {
+    previewPalette("qwxz")
+}
+#endif

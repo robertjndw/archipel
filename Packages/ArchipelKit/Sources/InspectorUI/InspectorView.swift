@@ -191,3 +191,36 @@ extension InspectorHeader where Accessory == EmptyView {
         self.init(refresh: refresh, title: title, accessory: { EmptyView() })
     }
 }
+
+#if DEBUG
+#Preview("No Worktree") {
+    InspectorView(root: nil, searchPATH: { "" }, onOpenFile: { _, _ in }, onOpenDiff: { _, _, _ in })
+        .frame(width: 300, height: 560)
+}
+
+// InspectorView builds its models from a real worktree, so this assembles the same stack from
+// sample models instead.
+#Preview("Worktree") {
+    @Previewable @State var tab = InspectorView.Tab.changes
+    @Previewable @State var files = PreviewSamples.fileTree(expanding: ["Sources", "Sources/App"])
+    @Previewable @State var changes = ChangesModel.previewSample(message: "Add previews to the inspector")
+    VStack(spacing: 0) {
+        InspectorTabSwitcher(selection: $tab)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+        switch tab {
+        case .files: FilesTab(model: files, actions: PreviewSamples.actions)
+        case .changes: ChangesTab(model: changes, actions: PreviewSamples.actions, focusCommitMessage: .constant(false))
+        }
+    }
+    .frame(width: 300, height: 600)
+    .background(Color.inspectorBackground)
+}
+
+#Preview("No Worktree, Dark") {
+    InspectorView(root: nil, searchPATH: { "" }, onOpenFile: { _, _ in }, onOpenDiff: { _, _, _ in })
+        .frame(width: 300, height: 560)
+        .preferredColorScheme(.dark)
+}
+#endif

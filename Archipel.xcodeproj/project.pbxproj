@@ -10,6 +10,7 @@
 		AA0000000000000000000101 /* ArchipelCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000201 /* ArchipelCore */; };
 		AA0000000000000000000102 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000202 /* AgentKit */; };
 		AA0000000000000000000103 /* TerminalKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000203 /* TerminalKit */; };
+		AA000000000000000000010A /* TerminalKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000203 /* TerminalKit */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AA0000000000000000000104 /* archipel-hook in Embed Helpers */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000302 /* archipel-hook */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		AA0000000000000000000105 /* ghostty in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000303 /* ghostty */; };
 		AA0000000000000000000106 /* terminfo in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000304 /* terminfo */; };
@@ -38,6 +39,17 @@
 				AA0000000000000000000104 /* archipel-hook in Embed Helpers */,
 			);
 			name = "Embed Helpers";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000602 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				AA000000000000000000010A /* TerminalKit in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -128,6 +140,7 @@
 				AA0000000000000000000801 /* Frameworks */,
 				AA0000000000000000000C01 /* Resources */,
 				AA0000000000000000000601 /* Embed Helpers */,
+				AA0000000000000000000602 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);

@@ -6,11 +6,23 @@ import SwiftUI
 @main
 struct ArchipelApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
-    @State private var model = AppModel()
+    @State private var model = ArchipelApp.makeModel()
     @State private var palette = CommandPaletteModel()
     @State private var switcher = TabSwitcherModel()
     @State private var isAddingProject = false
     @AppStorage("showInspector") private var showInspector = true
+
+    /// Xcode's preview host launches the whole app before it shows a preview. The real model would
+    /// load the Debug workspace, start Ghostty and take over the Debug build's hook socket from a
+    /// running instance, so the host gets an inert one.
+    private static func makeModel() -> AppModel {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
+            return AppModel(preview: Workspace())
+        }
+        #endif
+        return AppModel()
+    }
 
     var body: some Scene {
         Window("Archipel", id: "main") {

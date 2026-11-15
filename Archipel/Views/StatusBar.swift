@@ -319,3 +319,81 @@ private struct AgentsItem: View {
         .accessibilityValue(summary.accessibilityDescription.isEmpty ? "None working" : summary.accessibilityDescription)
     }
 }
+
+#if DEBUG
+private extension AppModel {
+    static func previewNearLimit() -> AppModel {
+        let model = AppModel.preview()
+        model.usage = [
+            .claude: ProviderUsage(
+                provider: .claude,
+                windows: [
+                    UsageWindow(usedPercent: 96, windowMinutes: 300, resetsAt: .now.addingTimeInterval(40 * 60)),
+                    UsageWindow(usedPercent: 78, windowMinutes: 7 * 24 * 60, resetsAt: .now.addingTimeInterval(2 * 86400)),
+                ],
+                updatedAt: .now
+            ),
+            .codex: ProviderUsage(
+                provider: .codex,
+                windows: [UsageWindow(usedPercent: 100, windowMinutes: 300, resetsAt: .now.addingTimeInterval(90 * 60))],
+                updatedAt: .now.addingTimeInterval(-15 * 60)
+            ),
+        ]
+        return model
+    }
+}
+
+private func previewStatusBars() -> some View {
+    VStack(spacing: 16) {
+        StatusBar().environment(AppModel.preview())
+        StatusBar().environment(AppModel.previewNearLimit())
+        StatusBar().environment(AppModel.emptyPreview())
+    }
+    .frame(width: 760)
+    .padding(.vertical)
+}
+
+#Preview("Status Bar") {
+    previewStatusBars()
+}
+
+#Preview("Status Bar, Dark") {
+    previewStatusBars()
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Usage Items") {
+    let low = PreviewFixtures.usage[.claude]!
+    let high = AppModel.previewNearLimit().usage[.claude]!
+    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+        GridRow {
+            Text("Numbers").foregroundStyle(.secondary)
+            UsageItem(reading: low, now: .now, display: .numbers, fill: .used)
+            UsageItem(reading: high, now: .now, display: .numbers, fill: .used)
+        }
+        GridRow {
+            Text("Bars, used").foregroundStyle(.secondary)
+            UsageItem(reading: low, now: .now, display: .bars, fill: .used)
+            UsageItem(reading: high, now: .now, display: .bars, fill: .used)
+        }
+        GridRow {
+            Text("Bars, left").foregroundStyle(.secondary)
+            UsageItem(reading: low, now: .now, display: .bars, fill: .remaining)
+            UsageItem(reading: high, now: .now, display: .bars, fill: .remaining)
+        }
+    }
+    .font(.system(size: 11))
+    .padding()
+}
+
+#Preview("Usage Details") {
+    let model = AppModel.preview()
+    HStack(alignment: .top, spacing: 24) {
+        UsageDetails(readings: UsageProvider.allCases.compactMap { model.usage[$0] })
+        UsageDetails(readings: UsageProvider.allCases.compactMap { AppModel.previewNearLimit().usage[$0] })
+        UsageDetails(readings: [])
+    }
+    .environment(model)
+    .padding()
+}
+#endif

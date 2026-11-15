@@ -49,3 +49,21 @@ private struct RenameFields: View {
         Button("Cancel", role: .cancel) {}
     }
 }
+
+#if DEBUG
+#Preview("Project") {
+    @Previewable @State var target: RenameTarget? = RenameTarget(kind: .project(PreviewFixtures.appProjectID), name: "Orbit")
+    Color.clear
+        .frame(width: 400, height: 300)
+        .renameAlert($target)
+        .environment(AppModel.preview())
+}
+
+#Preview("Session") {
+    @Previewable @State var target: RenameTarget? = RenameTarget(kind: .session(PreviewFixtures.reviewSessionID), name: "Review")
+    Color.clear
+        .frame(width: 400, height: 300)
+        .renameAlert($target)
+        .environment(AppModel.preview())
+}
+#endif

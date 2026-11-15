@@ -35,6 +35,10 @@ final class ChangesModel {
     private var gitHubTask: Task<GitHubClient?, Never>?
     private var lookupGeneration = 0
     private var lookupBranch: String?
+#if DEBUG
+    /// Set on preview samples, which have no repository behind them and must never run git.
+    @ObservationIgnored fileprivate var isPreviewSample = false
+#endif
 
     enum Activity: Equatable {
         case commit, push, pull, fetch
@@ -65,6 +69,9 @@ final class ChangesModel {
     }
 
     func refresh() async {
+#if DEBUG
+        if isPreviewSample { return }
+#endif
         // Periodic, activation and post-action refreshes can overlap; only the newest may write.
         generation += 1
         let current = generation
@@ -156,6 +163,9 @@ final class ChangesModel {
     /// Network and process work that changes slowly: the remote list and the branch's pull request.
     /// Driven by tab appearance, app activation and branch or upstream changes, never the status poll.
     func refreshRemoteInfo() async {
+#if DEBUG
+        if isPreviewSample { return }
+#endif
         async let pullRequest: Void = lookUpPullRequest()
         hasRemote = await git.hasRemote(in: root)
         await pullRequest
@@ -198,6 +208,9 @@ final class ChangesModel {
         onSuccess: @escaping () async -> Void
     ) {
         guard self.activity == nil else { return }
+#if DEBUG
+        if isPreviewSample { return }
+#endif
         self.activity = activity
         actionError = nil
         Task {
@@ -221,6 +234,9 @@ final class ChangesModel {
     }
 
     private func perform(_ action: @escaping @Sendable (GitClient, URL) async throws -> Void) {
+#if DEBUG
+        if isPreviewSample { return }
+#endif
         let git = git
         let root = root
         Task {
@@ -491,3 +507,76 @@ extension GitChangeKind {
         }
     }
 }
+
+#if DEBUG
+extension ChangesModel {
+    /// A model frozen in the given state. It never runs git, so buttons that would do so do nothing.
+    static func previewSample(
+        _ status: GitStatus = PreviewSamples.mixed,
+        phase: Phase = .ready,
+        message: String = "",
+        activity: Activity? = nil,
+        hasRemote: Bool = true,
+        pullRequest: GitPullRequest? = nil,
+        refreshError: String? = nil,
+        actionError: String? = nil
+    ) -> ChangesModel {
+        let model = ChangesModel(root: PreviewSamples.root, searchPATH: { "" })
+        model.isPreviewSample = true
+        model.status = status
+        model.phase = phase
+        model.message = message
+        model.activity = activity
+        model.hasRemote = hasRemote
+        if let pullRequest, let branch = status.branch {
+            model.pullRequestLookup = PullRequestLookup(branch: branch, outcome: .found(pullRequest))
+        }
+        model.refreshError = refreshError
+        model.actionError = actionError
+        return model
+    }
+}
+
+@MainActor
+private func previewChanges(_ model: ChangesModel) -> some View {
+    ChangesTab(model: model, actions: PreviewSamples.actions, focusCommitMessage: .constant(false))
+        .frame(width: 300, height: 560)
+        .background(Color.inspectorBackground)
+}
+
+#Preview("Staged, Unstaged, Untracked and Conflicted") {
+    previewChanges(.previewSample(message: "Add previews to the inspector"))
+}
+
+#Preview("Staged, Unstaged, Untracked and Conflicted, Dark") {
+    previewChanges(.previewSample(message: "Add previews to the inspector"))
+        .preferredColorScheme(.dark)
+}
+
+#Preview("No Changes") {
+    previewChanges(.previewSample(PreviewSamples.clean))
+}
+
+#Preview("Action Failed") {
+    previewChanges(.previewSample(
+        PreviewSamples.stagedOnly,
+        message: "Fix the session switcher",
+        actionError: "All changes were staged, but the commit failed. They remain staged.\nhusky - pre-commit hook exited with code 1"
+    ))
+}
+
+#Preview("Refresh Failed, Detached HEAD") {
+    previewChanges(.previewSample(
+        GitStatus(branch: nil, staged: [], unstaged: PreviewSamples.unstagedOnly.unstaged),
+        refreshError: "fatal: Unable to create '.git/index.lock': File exists."
+    ))
+}
+
+#Preview("Not a Repository") {
+    previewChanges(.previewSample(.empty, phase: .notRepository))
+}
+
+#Preview("Loading") {
+    previewChanges(.previewSample(.empty, phase: .loading))
+}
+#endif

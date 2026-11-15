@@ -314,3 +314,22 @@ final class ResourceMonitor {
         )
     }
 }
+
+#if DEBUG
+extension ResourceMonitor {
+    /// Readings to show without sampling the process table.
+    func showForPreview(
+        sessions: [Session.ID: Usage] = [:],
+        leftovers: [Leftover] = [],
+        app: Usage = Usage(),
+        alerts: [Alert] = [],
+        memoryHistory: [Worktree.ID: [UInt64]] = [:]
+    ) {
+        self.sessions = sessions
+        self.leftovers = leftovers
+        self.app = app
+        self.alerts = alerts
+        self.memoryHistory = memoryHistory
+    }
+}
+#endif

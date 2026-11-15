@@ -92,3 +92,94 @@ struct SidebarProjectHeader: View {
         Button("Remove Project", systemImage: "trash", role: .destructive) { model.removeProject(project) }
     }
 }
+
+#if DEBUG
+private enum ProjectHeaderSamples {
+    static let root = PreviewFixtures.root
+
+    static let unreadSession = Session(title: "Claude Code", agent: .claude)
+    static let workingSession = Session(title: "Codex", agent: .codex)
+
+    static let waiting = {
+        var project = PreviewFixtures.appProject
+        project.isExpanded = false
+        return project
+    }()
+    static let unread = Project(
+        name: "Blog",
+        folderURL: root.appending(path: "blog", directoryHint: .isDirectory),
+        isExpanded: false,
+        worktrees: [Worktree(path: root.appending(path: "blog", directoryHint: .isDirectory), branch: "main", isMain: true, sessions: [unreadSession])],
+        tint: .orange
+    )
+    static let working = Project(
+        name: "Infra",
+        folderURL: root.appending(path: "infra", directoryHint: .isDirectory),
+        isExpanded: false,
+        worktrees: [Worktree(path: root.appending(path: "infra", directoryHint: .isDirectory), branch: "main", isMain: true, sessions: [workingSession])],
+        tint: .teal,
+        icon: .symbol("server.rack")
+    )
+    static let quiet = Project(
+        name: "Design System Tokens and Component Library",
+        folderURL: root.appending(path: "tokens", directoryHint: .isDirectory),
+        isExpanded: false,
+        worktrees: ["main", "feat/dark-mode", "fix/contrast"].map {
+            Worktree(path: root.appending(path: "tokens-\($0)", directoryHint: .isDirectory), branch: $0, isMain: $0 == "main")
+        },
+        tint: .purple
+    )
+    static let expanded = PreviewFixtures.blogProject
+
+    static let projects = [waiting, unread, working, quiet, expanded]
+
+    static func model() -> AppModel {
+        var activities = PreviewFixtures.activities
+        activities[unreadSession.id] = SessionActivity(status: .finished, unread: true, completedTurn: true)
+        activities[workingSession.id] = SessionActivity(status: .working)
+        return AppModel(preview: Workspace(islands: [Island(name: "Work", projects: projects)]), activities: activities)
+    }
+}
+
+private struct ProjectHeadersPreview: View {
+    @State private var model = ProjectHeaderSamples.model()
+
+    var body: some View {
+        List {
+            ForEach(ProjectHeaderSamples.projects) { project in
+                Section(isExpanded: .constant(project.isExpanded)) {
+                    Text("Worktree").padding(.leading, SidebarWorktreeRow.indent)
+                } header: {
+                    SidebarProjectHeader(project: project, renaming: .constant(nil))
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .environment(model)
+    }
+}
+
+// Collapsed headers show, in order: a waiting count, an unread dot, a spinner, a worktree count.
+#Preview("Comfortable") {
+    ProjectHeadersPreview()
+        .frame(width: 260, height: 300)
+}
+
+#Preview("Compact") {
+    ProjectHeadersPreview()
+        .environment(\.sidebarDensity, .compact)
+        .frame(width: 260, height: 260)
+}
+
+#Preview("Spacious") {
+    ProjectHeadersPreview()
+        .environment(\.sidebarDensity, .spacious)
+        .frame(width: 260, height: 340)
+}
+
+#Preview("Dark") {
+    ProjectHeadersPreview()
+        .frame(width: 260, height: 300)
+        .preferredColorScheme(.dark)
+}
+#endif

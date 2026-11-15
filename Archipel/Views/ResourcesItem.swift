@@ -495,3 +495,81 @@ private struct Sparkline: View {
         .accessibilityHidden(true)
     }
 }
+
+#if DEBUG
+private extension AppModel {
+    static func previewResources(alerts: Bool) -> AppModel {
+        let model = AppModel.preview()
+        let gb: UInt64 = 1 << 30
+        let mb: UInt64 = 1 << 20
+        func row(_ pid: Int32, _ label: String, cpu: Double?, memory: UInt64, foreground: Bool = false, hot: Bool = false) -> ResourceMonitor.ProcessRow {
+            ResourceMonitor.ProcessRow(
+                id: ProcessIdentity(pid: pid, startTime: UInt64(pid)), label: label,
+                cpu: cpu, memory: memory, isForeground: foreground, isHot: hot
+            )
+        }
+        func usage(_ rows: [ResourceMonitor.ProcessRow]) -> ResourceMonitor.Usage {
+            ResourceMonitor.Usage(processes: rows, cpu: rows.reduce(0) { $0 + ($1.cpu ?? 0) }, memory: rows.reduce(0) { $0 + $1.memory })
+        }
+        let claude = usage([
+            row(4101, "claude", cpu: 12, memory: 420 * mb, foreground: true),
+            row(4188, "node vite", cpu: alerts ? 96 : 4, memory: 310 * mb, hot: alerts),
+        ])
+        let codex = usage([
+            row(5120, "codex", cpu: 3, memory: alerts ? 3 * gb + 700 * mb : 380 * mb, foreground: true),
+            row(5133, "cargo build", cpu: nil, memory: 900 * mb),
+        ])
+        let review = usage([row(5240, "claude", cpu: 0.2, memory: 260 * mb, foreground: true)])
+        let shell = usage([row(4302, "zsh", cpu: 0, memory: 6 * mb, foreground: true)])
+        let leftovers = alerts
+            ? [ResourceMonitor.Leftover(
+                id: UUID(), origin: "fix/login-crash · Claude Code",
+                usage: usage([row(6001, "node server.js", cpu: 1, memory: 140 * mb), row(6002, "esbuild", cpu: 0, memory: 40 * mb)])
+            )]
+            : []
+        model.resources.showForPreview(
+            sessions: [
+                PreviewFixtures.claudeSessionID: claude,
+                PreviewFixtures.shellSessionID: shell,
+                PreviewFixtures.codexSessionID: codex,
+                PreviewFixtures.reviewSessionID: review,
+            ],
+            leftovers: leftovers,
+            app: ResourceMonitor.Usage(cpu: 6, memory: 640 * mb),
+            alerts: alerts
+                ? [.leftovers(count: 2), .memory(name: "feat/offline-mode", bytes: 4 * gb + 600 * mb), .cpu(label: "node vite", percent: 96)]
+                : [],
+            memoryHistory: [
+                PreviewFixtures.mainWorktreeID: [600, 620, 650, 640, 700, 720, 736].map { $0 * mb },
+                PreviewFixtures.featureWorktreeID: [1200, 1300, 1500, 1900, 2400, 3100, 4700].map { $0 * mb },
+            ]
+        )
+        return model
+    }
+}
+
+#Preview("Status Item") {
+    VStack(alignment: .leading, spacing: 12) {
+        ResourcesItem().environment(AppModel.previewResources(alerts: false))
+        ResourcesItem().environment(AppModel.previewResources(alerts: true))
+    }
+    .font(.system(size: 11))
+    .frame(height: 80)
+    .padding()
+}
+
+#Preview("Popover") {
+    ResourcesPopover()
+        .environment(AppModel.previewResources(alerts: false))
+}
+
+#Preview("Popover, Warnings") {
+    ResourcesPopover()
+        .environment(AppModel.previewResources(alerts: true))
+}
+
+#Preview("Popover, Nothing Running") {
+    ResourcesPopover()
+        .environment(AppModel.emptyPreview())
+}
+#endif

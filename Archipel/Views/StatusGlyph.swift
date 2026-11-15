@@ -74,3 +74,45 @@ struct StatusGlyph: View {
             .help(label)
     }
 }
+
+#if DEBUG
+private struct StatusGlyphGallery: View {
+    private static let variants: [(String, SessionActivity)] = [
+        ("Not started", SessionActivity(status: .notStarted)),
+        ("Starting", SessionActivity(status: .starting)),
+        ("Working", SessionActivity(status: .working)),
+        ("Needs approval", SessionActivity(status: .needsAttention(.permission))),
+        ("Question", SessionActivity(status: .needsAttention(.question))),
+        ("Finished, unread", SessionActivity(status: .finished, unread: true, completedTurn: true)),
+        ("Finished, read", SessionActivity(status: .finished, completedTurn: true)),
+        ("At first prompt", SessionActivity(status: .finished)),
+        ("Ended", SessionActivity(status: .exited(code: 0))),
+        ("Exited with error", SessionActivity(status: .exited(code: 1))),
+    ]
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+            ForEach(Self.variants, id: \.0) { label, activity in
+                GridRow {
+                    Text(label).foregroundStyle(.secondary)
+                    StatusGlyph(activity: activity)
+                    StatusGlyph(activity: activity)
+                        .controlSize(.mini)
+                        .scaleEffect(0.85)
+                }
+            }
+        }
+        .padding()
+    }
+}
+
+#Preview("Light") {
+    StatusGlyphGallery()
+        .preferredColorScheme(.light)
+}
+
+#Preview("Dark") {
+    StatusGlyphGallery()
+        .preferredColorScheme(.dark)
+}
+#endif

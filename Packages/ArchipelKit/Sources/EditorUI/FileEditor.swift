@@ -147,3 +147,55 @@ private struct InlineBar<Message: View, Actions: View>: View {
         .background(tint.opacity(0.1))
     }
 }
+
+#if DEBUG
+@MainActor
+private func previewEditor(_ buffer: TextBuffer) -> some View {
+    FileEditorContent(buffer: buffer, store: FileDocumentStore())
+        .frame(width: 640, height: 400)
+}
+
+@MainActor private let sampleURL = PreviewSamples.url("Sources/ActivityBadge.swift")
+
+#Preview("Text") {
+    previewEditor(.previewSample(url: sampleURL, text: PreviewSamples.swiftSource))
+}
+
+#Preview("Changed on Disk") {
+    previewEditor(.previewSample(url: sampleURL, text: PreviewSamples.swiftSource, edit: "// TODO: pause animation\n", conflict: .changed))
+}
+
+#Preview("Changed on Disk, Dark") {
+    previewEditor(.previewSample(url: sampleURL, text: PreviewSamples.swiftSource, edit: "// TODO: pause animation\n", conflict: .changed))
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Deleted on Disk") {
+    previewEditor(.previewSample(url: sampleURL, text: PreviewSamples.swiftSource, edit: "// TODO: pause animation\n", conflict: .deleted))
+}
+
+#Preview("Save Failed") {
+    previewEditor(.previewSample(
+        url: sampleURL,
+        text: PreviewSamples.swiftSource,
+        edit: "// TODO: pause animation\n",
+        saveError: "You don't have permission to save the file \u{201C}ActivityBadge.swift\u{201D} in the folder \u{201C}Sources\u{201D}."
+    ))
+}
+
+#Preview("Too Large") {
+    previewEditor(.previewSample(url: PreviewSamples.url("data/events.log"), state: .tooLarge(48_200_000)))
+}
+
+#Preview("Binary") {
+    previewEditor(.previewSample(url: PreviewSamples.url("build/archipel.o"), state: .binary))
+}
+
+#Preview("Deleted") {
+    previewEditor(.previewSample(url: sampleURL, state: .missing))
+}
+
+#Preview("Unreadable") {
+    previewEditor(.previewSample(url: PreviewSamples.url("Sources"), state: .unreadable("This is a folder.")))
+}
+#endif

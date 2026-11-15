@@ -39,7 +39,7 @@ final class AppModel {
     var addWorktreeProjectID: Project.ID?
     /// Set by Commit… to put the cursor in the inspector's commit message field; the inspector clears it.
     var focusCommitMessageRequest = false
-    let settings = AppSettings()
+    let settings: AppSettings
     let devServers = DevServerMonitor()
     let resources = ResourceMonitor()
     let stayAwake = StayAwake()
@@ -96,6 +96,7 @@ final class AppModel {
         let support = ProcessInfo.processInfo.environment["ARCHIPEL_SUPPORT_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? URL.applicationSupportDirectory.appending(path: supportFolder, directoryHint: .isDirectory)
+        settings = AppSettings()
         store = WorkspaceStore(fileURL: support.appending(path: "workspace.json"))
         hookServer = HookServer(socketURL: support.appending(path: "hook.sock"))
         hookExecutableURL = Bundle.main.bundleURL.appending(path: "Contents/Helpers/archipel-hook")
@@ -146,6 +147,33 @@ final class AppModel {
         resources.start { [weak self] in self?.resourceSources() ?? [:] }
         terminalApp?.acceptsDroppedText = { [weak self] in !(self?.isInternalDragPayload($0) ?? false) }
     }
+
+    #if DEBUG
+    /// For SwiftUI previews. Starts no terminal engine, hook socket, notifier, monitors or git
+    /// refreshes and never saves, so a preview can't touch the real workspace file or take the socket
+    /// from a running Archipel. Set `gitSummaries`, `usage` etc. on the result when a preview needs them.
+    init(
+        preview workspace: Workspace,
+        activities: [Session.ID: SessionActivity] = [:],
+        launchFailures: [Session.ID: String] = [:]
+    ) {
+        let scratch = URL.temporaryDirectory.appending(path: "ArchipelPreview-\(UUID().uuidString)", directoryHint: .isDirectory)
+        store = WorkspaceStore(fileURL: scratch.appending(path: "workspace.json"))
+        hookServer = HookServer(socketURL: scratch.appending(path: "hook.sock"))
+        hookExecutableURL = scratch.appending(path: "archipel-hook")
+        terminalApp = nil
+        loginPATH = Task { "/usr/bin:/bin" }
+        canSave = false
+        // Its own suite, so flipping a toggle in the canvas never reaches the Debug app's defaults.
+        // Cleared first so every preview starts from the default settings.
+        let defaults = UserDefaults(suiteName: "ArchipelPreview")!
+        defaults.removePersistentDomain(forName: "ArchipelPreview")
+        settings = AppSettings(defaults: defaults)
+        self.workspace = workspace
+        self.activities = activities
+        self.launchFailures = launchFailures
+    }
+    #endif
 
     /// The login shell's PATH, for finding tools such as `gh` that launchd's
     /// bare PATH does not reach.

@@ -404,3 +404,57 @@ struct IslandEditor: View {
         dismiss()
     }
 }
+
+#if DEBUG
+private extension AppModel {
+    /// Personal is selected, so the Work island shows its attention badge.
+    static func previewPersonalIsland() -> AppModel {
+        var workspace = PreviewFixtures.workspace
+        workspace.selectedIslandID = PreviewFixtures.personalIslandID
+        return AppModel(preview: workspace, activities: PreviewFixtures.activities)
+    }
+
+    static func previewManyIslands() -> AppModel {
+        var workspace = PreviewFixtures.workspace
+        workspace.islands += [
+            Island(name: "Open Source", symbol: "star", tint: .yellow),
+            Island(name: "Experiments", symbol: "flask", tint: .purple),
+            Island(name: "Clients", symbol: "building.2", tint: .red),
+            Island(name: "Games", symbol: "gamecontroller", tint: .pink),
+            Island(name: "Music", symbol: "music.note", tint: .teal),
+        ]
+        workspace.selectedIslandID = workspace.islands[3].id
+        return AppModel(preview: workspace, activities: PreviewFixtures.activities)
+    }
+}
+
+private func previewIslandSwitchers() -> some View {
+    VStack(spacing: 4) {
+        IslandSwitcher().environment(AppModel.preview())
+        IslandSwitcher().environment(AppModel.previewPersonalIsland())
+        IslandSwitcher().environment(AppModel.previewManyIslands())
+        IslandSwitcher().environment(AppModel.emptyPreview())
+    }
+    .frame(width: 280)
+    .padding(.vertical)
+    .background(.background)
+}
+
+#Preview("Switcher") {
+    HStack(spacing: 0) {
+        previewIslandSwitchers()
+        previewIslandSwitchers()
+            .environment(\.colorScheme, .dark)
+    }
+}
+
+#Preview("New Island") {
+    IslandEditor(mode: .create)
+        .environment(AppModel.emptyPreview())
+}
+
+#Preview("Edit Island") {
+    IslandEditor(mode: .edit(PreviewFixtures.workIsland))
+        .environment(AppModel.preview())
+}
+#endif

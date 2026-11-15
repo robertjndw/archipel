@@ -140,3 +140,49 @@ struct RemoveWorktreeSheet: View {
         }
     }
 }
+
+#if DEBUG
+extension RemoveWorktreeSheet {
+    /// The fixture folders do not exist, so `loadStatus()` finds nothing and the count has to be given.
+    fileprivate init(
+        previewing worktree: Worktree,
+        deleteFolder: Bool = false,
+        deleteBranch: Bool = false,
+        changeCount: Int? = nil,
+        outcome: AppModel.BranchRemoval? = nil
+    ) {
+        self.worktree = worktree
+        _deleteFolder = State(initialValue: deleteFolder)
+        _deleteBranch = State(initialValue: deleteBranch)
+        _changeCount = State(initialValue: changeCount)
+        _outcome = State(initialValue: outcome)
+    }
+}
+
+#Preview("Keep folder") {
+    RemoveWorktreeSheet(worktree: PreviewFixtures.featureWorktree)
+        .environment(AppModel.preview())
+}
+
+#Preview("Delete folder and branch, clean") {
+    RemoveWorktreeSheet(previewing: PreviewFixtures.featureWorktree, deleteFolder: true, deleteBranch: true, changeCount: 0)
+        .environment(AppModel.preview())
+}
+
+#Preview("Delete folder, uncommitted changes") {
+    RemoveWorktreeSheet(previewing: PreviewFixtures.featureWorktree, deleteFolder: true, changeCount: 7)
+        .environment(AppModel.preview())
+}
+
+#Preview("Folder already gone") {
+    let model = AppModel.preview()
+    model.missingWorktrees = [PreviewFixtures.fixWorktreeID]
+    return RemoveWorktreeSheet(worktree: PreviewFixtures.fixWorktree)
+        .environment(model)
+}
+
+#Preview("Branch kept, not merged") {
+    RemoveWorktreeSheet(previewing: PreviewFixtures.featureWorktree, outcome: .keptUnmerged("feat/offline-mode"))
+        .environment(AppModel.preview())
+}
+#endif
