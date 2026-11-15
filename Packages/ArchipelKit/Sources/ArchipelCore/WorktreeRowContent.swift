@@ -92,8 +92,6 @@ public struct WorktreeRowContent: Equatable, Sendable {
         case changedFiles(Int)
         /// At least one of them is non-zero.
         case aheadBehind(ahead: Int, behind: Int)
-        /// The agents running here, each kind once, in the order they were started.
-        case agents([AgentKind])
         /// The folder, when it says something the branch name does not.
         case folder(String)
 
@@ -103,7 +101,6 @@ public struct WorktreeRowContent: Equatable, Sendable {
             case .diff: "diff"
             case .changedFiles: "changedFiles"
             case .aheadBehind: "aheadBehind"
-            case .agents: "agents"
             case .folder: "folder"
             }
         }
@@ -121,8 +118,6 @@ public struct WorktreeRowContent: Equatable, Sendable {
                 if ahead > 0 { parts.append("\(Self.count(ahead, "commit")) ahead") }
                 if behind > 0 { parts.append("\(Self.count(behind, "commit")) behind") }
                 return parts.joined(separator: ", ")
-            case .agents(let agents):
-                return agents.count == 1 ? "1 agent" : "\(agents.count) agents"
             case .folder(let name):
                 return "Folder \(name)"
             }
@@ -134,34 +129,39 @@ public struct WorktreeRowContent: Equatable, Sendable {
 
         /// Lower survives longer when the row is narrow. The pull request is what the user acts on
         /// next and the line counts say how big the change is; the file count mostly restates the line
-        /// counts, and the agents are visible in the trailing glyph or the session rows anyway.
+        /// counts.
         var keepPriority: Int {
             switch self {
             case .pullRequest: 0
             case .diff: 1
             case .aheadBehind: 2
             case .changedFiles: 3
-            case .agents: 4
-            case .folder: 5
+            case .folder: 4
             }
         }
     }
 
     public var title: String
+    /// The agent of the worktree's only session. The row draws it as its icon, the way a favicon
+    /// stands for a tab, so the second line doesn't spend itself on naming the agent.
+    public var agent: AgentKind?
     public var detail: Detail?
     public var isUnread: Bool
     public var trailing: Trailing
+    private var metadataBehindMessage: [[MetadataItem]] = []
 
     public init(worktree: Worktree, activity: SessionActivity?, git: WorktreeGitState?, options: Options = .all) {
         title = worktree.displayName
+        agent = worktree.sessions.count == 1 ? worktree.sessions[0].agent : nil
         isUnread = activity?.unread == true
         trailing = activity.map(Trailing.status) ?? .none
 
+        let items = Self.metadataItems(worktree: worktree, git: git, options: options)
         if options.showsMessages, let activity, let message = Self.messageWorthShowing(activity) {
             detail = .message(message, needsUser: activity.needsUser)
+            metadataBehindMessage = items.isEmpty ? [] : Self.variants(of: items)
             return
         }
-        let items = Self.metadataItems(worktree: worktree, git: git, options: options)
         detail = items.isEmpty ? nil : .metadata(Self.variants(of: items))
     }
 
@@ -171,9 +171,18 @@ public struct WorktreeRowContent: Equatable, Sendable {
         return []
     }
 
+    /// Every metadata variant from fullest to sparsest, also when the second line is a message:
+    /// compact rows show the message only on hover and keep the metadata in view.
+    public var metadataVariants: [[MetadataItem]] {
+        switch detail {
+        case .metadata(let variants): variants
+        case .message, nil: metadataBehindMessage
+        }
+    }
+
     /// One sentence for VoiceOver covering the compact symbols and numbers.
     public var metadataAccessibilityLabel: String {
-        metadata.map(\.accessibilityLabel).joined(separator: ", ")
+        (metadataVariants.first ?? []).map(\.accessibilityLabel).joined(separator: ", ")
     }
 
     /// A message is shown while the agent waits for the user, and after a finished turn until the user
@@ -198,10 +207,6 @@ public struct WorktreeRowContent: Equatable, Sendable {
             }
             if git.changedFiles > 0 { items.append(.changedFiles(git.changedFiles)) }
             if git.ahead > 0 || git.behind > 0 { items.append(.aheadBehind(ahead: git.ahead, behind: git.behind)) }
-        }
-        // With two or more sessions the sidebar lists them under the row, which says more than icons.
-        if worktree.sessions.count == 1 {
-            items.append(.agents([worktree.sessions[0].agent]))
         }
         // The folder only adds something when the first line shows the branch instead of it, and the
         // main checkout's folder is the project, which the section header already names.

@@ -21,6 +21,7 @@ struct DetectedWorktreesRow: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .lineLimit(1)
+            .padding(.leading, SidebarWorktreeRow.indent)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
         }

@@ -7,12 +7,15 @@ struct SidebarProjectHeader: View {
     @Environment(AppModel.self) private var model
     let project: Project
     @Binding var renaming: RenameTarget?
+    @Environment(\.sidebarDensity) private var density
     @State private var isHovered = false
 
     var body: some View {
         let summary = attentionSummary(of: project, activities: model.activities)
         HStack(spacing: 8) {
-            ProjectIconView(project: project, size: 20)
+            // The rows' icon column, so a worktree sits exactly one indent step right of its project.
+            ProjectIconView(project: project, size: density.projectIconSize)
+                .frame(width: SidebarWorktreeRow.iconColumnWidth)
             // Primary, unlike a plain section title: the project is an item with an icon of its
             // own, the way a project or an account heads its group in Xcode and Mail.
             Text(project.name)
@@ -23,9 +26,9 @@ struct SidebarProjectHeader: View {
             Spacer(minLength: 4)
             trailing(summary: summary)
         }
-        // Room above, so each project reads as a group of its own.
-        .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.vertical, density.projectHeaderPadding)
+        // Section headers sit a few points further left than rows; this lines the columns up.
+        .padding(.leading, SidebarWorktreeRow.headerAlignmentInset)
         .contentShape(.rect)
         .onHover { isHovered = $0 }
         .animation(.snappy(duration: 0.2), value: isHovered)
@@ -41,6 +44,11 @@ struct SidebarProjectHeader: View {
             Button("Add Worktree", systemImage: "plus") { model.addWorktreeProjectID = project.id }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                // Drawn like the disclosure chevron beside it: same gray, same stroke weight, and a
+                // gap so the two read as separate buttons. Gray also matches the buttons above the sidebar.
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 4)
                 .help("Add a worktree to \(project.name)")
         } else if !project.isExpanded {
             // Expanded, the rows say all of this themselves.

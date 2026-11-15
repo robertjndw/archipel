@@ -41,6 +41,8 @@ struct SidebarView: View {
                 }
             }
         }
+        .environment(\.sidebarDensity, model.settings.sidebarDensity)
+        .animation(.snappy, value: model.settings.sidebarDensity)
         .background(SidebarPeekKeyMonitor(peek: peek, model: model))
         .environment(peek)
         .onChange(of: model.selectedIsland?.id) { peek.close() }

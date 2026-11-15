@@ -20,6 +20,19 @@ struct AppearanceSettingsView: View {
             }
 
             Section("Sidebar") {
+                LabeledContent {
+                    TilePicker(
+                        selection: $settings.sidebarDensity,
+                        options: AppSettings.SidebarDensity.allCases,
+                        title: \.title
+                    ) { density in
+                        SidebarDensityPreview(density: density)
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    Text("Density")
+                    Text(settings.sidebarDensity.summary)
+                }
                 Toggle(isOn: $settings.showsGitStatusInSidebar) {
                     Text("Git status")
                     Text("Changed files and ahead or behind counts next to each worktree.")
@@ -73,6 +86,16 @@ struct AppearanceSettingsView: View {
         }
         .formStyle(.grouped)
         .animation(.default, value: settings.usageDisplay)
+    }
+}
+
+extension AppSettings.SidebarDensity {
+    var summary: String {
+        switch self {
+        case .compact: "One line per worktree. Agent messages show on hover."
+        case .comfortable: "Two lines per worktree: the branch, then what needs you or its changes."
+        case .spacious: "More room around projects, and two lines for a waiting agent's question."
+        }
     }
 }
 

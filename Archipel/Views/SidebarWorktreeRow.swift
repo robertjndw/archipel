@@ -15,27 +15,40 @@ struct SidebarWorktreeRow: View {
     let tint: Color
     @Binding var removing: Worktree?
     @Binding var renaming: RenameTarget?
+    @Environment(\.sidebarDensity) private var density
     @State private var isHovered = false
 
     /// Icon column plus its gap, which is where the title and everything under it starts.
     private static let textInset: CGFloat = 28
+    static let iconColumnWidth: CGFloat = textInset - 8
+    /// How much further left the list places a section header's content than a row's.
+    static let headerAlignmentInset: CGFloat = 3
+    /// Worktrees step in from their project, the way Mail nests mailboxes under an account. Only the
+    /// content moves; the selection highlight keeps the full width, as it does in Mail. At this step a
+    /// worktree's icon starts where its project's tile ends.
+    static let indent: CGFloat = 16
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: density.lineSpacing + 1) {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Image(systemName: symbol)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(tint)
-                    .frame(width: Self.textInset - 8, alignment: .center)
+                icon
+                    .frame(width: Self.iconColumnWidth, alignment: .center)
                     .padding(.trailing, 8)
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: density.lineSpacing) {
                     Text(content.title)
                         .fontWeight(content.isUnread ? .semibold : .regular)
                         .truncationMode(.middle)
-                    detail
+                        .lineLimit(1)
+                    if density.showsSecondLine {
+                        detail
+                    }
                 }
-                .lineLimit(1)
+                // In a compact row the title shares its line with the metadata and wins.
+                .layoutPriority(1)
                 Spacer(minLength: 6)
+                if !density.showsSecondLine, !isMissing {
+                    inlineMetadata
+                }
                 trailing
             }
             if !sessions.isEmpty {
@@ -47,7 +60,9 @@ struct SidebarWorktreeRow: View {
                 .padding(.leading, Self.textInset)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.leading, Self.indent)
+        .padding(.vertical, density.rowPadding)
+        .help(hiddenMessage ?? "")
         .opacity(isMissing ? 0.6 : 1)
         .onHover { isHovered = $0 }
         .animation(.snappy(duration: 0.2), value: content.trailing)
@@ -56,8 +71,44 @@ struct SidebarWorktreeRow: View {
 
     private var isMissing: Bool { model.missingWorktrees.contains(worktree.id) }
 
-    private var symbol: String {
-        worktree.branch == nil ? "folder" : "arrow.triangle.branch"
+    /// The agent's logo when one session runs here, otherwise what the worktree is: a branch or a
+    /// plain folder. Logos keep their own color; the glyphs take the project's.
+    private var icon: some View {
+        Group {
+            if let agent = content.agent {
+                Image(symbol: agent.definition.symbolName)
+                    .accessibilityLabel(agent.definition.displayName)
+            } else {
+                Image(systemName: worktree.branch == nil ? "folder" : "arrow.triangle.branch")
+                    .accessibilityHidden(true)
+            }
+        }
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(tint)
+    }
+
+    /// A compact row has no line for the agent's message, so the pointer brings it up instead.
+    private var hiddenMessage: String? {
+        guard !density.showsSecondLine, case .message(let message, _) = content.detail else { return nil }
+        return message
+    }
+
+    /// The compact row's metadata, after the title. Without room for even the sparsest variant it
+    /// steps aside rather than squeezing the branch name.
+    @ViewBuilder
+    private var inlineMetadata: some View {
+        let variants = content.metadataVariants
+        if !variants.isEmpty, !isHovered {
+            ViewThatFits(in: .horizontal) {
+                ForEach(variants.indices, id: \.self) { index in
+                    SidebarMetadataLine(items: variants[index])
+                }
+                Color.clear.frame(width: 0, height: 0)
+            }
+            .padding(.trailing, 4)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(content.metadataAccessibilityLabel)
+        }
     }
 
     @ViewBuilder
@@ -77,6 +128,7 @@ struct SidebarWorktreeRow: View {
         case .message(let message, let needsUser):
             Text(message)
                 .font(.subheadline)
+                .lineLimit(density.messageLineLimit)
                 .foregroundStyle(needsUser ? AnyShapeStyle(.primary.opacity(0.75)) : AnyShapeStyle(.secondary))
                 .help(message)
         case .metadata(let variants):
@@ -87,6 +139,7 @@ struct SidebarWorktreeRow: View {
                     SidebarMetadataLine(items: variants[index])
                 }
             }
+            .lineLimit(1)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(content.metadataAccessibilityLabel)
         case nil:
@@ -169,18 +222,6 @@ struct SidebarMetadataLine: View {
                 if ahead > 0 { symbolAndCount("arrow.up", ahead) }
                 if behind > 0 { symbolAndCount("arrow.down", behind) }
             }
-        case .agents(let agents):
-            HStack(spacing: 2) {
-                ForEach(agents, id: \.self) { agent in
-                    Image(symbol: agent.definition.symbolName)
-                        .imageScale(.small)
-                        .foregroundStyle(.tertiary)
-                }
-                // A lone glyph on a line of its own reads as a rendering glitch, so one agent is named.
-                if agents.count == 1, let name = AgentDefinition.builtIn(id: agents[0].rawValue)?.displayName {
-                    Text(name).padding(.leading, 1)
-                }
-            }
         case .folder(let name):
             HStack(spacing: 3) {
                 Image(systemName: "folder")
@@ -206,8 +247,6 @@ struct SidebarMetadataLine: View {
                 ahead > 0 ? "\(ahead) \(ahead == 1 ? "commit" : "commits") to push" : nil,
                 behind > 0 ? "\(behind) \(behind == 1 ? "commit" : "commits") to pull" : nil,
             ].compactMap { $0 }.joined(separator: ", ")
-        case .agents:
-            "Agents running in this worktree"
         case .folder(let name):
             "Folder \(name)"
         }
@@ -232,6 +271,7 @@ struct SidebarSessionRow: View {
     let content: SessionRowContent
     let isInSelectedWorktree: Bool
     @Binding var renaming: RenameTarget?
+    @Environment(\.sidebarDensity) private var density
 
     var body: some View {
         Button {
@@ -257,7 +297,7 @@ struct SidebarSessionRow: View {
                         .scaleEffect(0.85)
                 }
             }
-            .frame(height: 24)
+            .frame(height: density.sessionRowHeight)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)

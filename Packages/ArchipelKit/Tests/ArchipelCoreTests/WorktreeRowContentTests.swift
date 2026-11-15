@@ -87,10 +87,9 @@ struct WorktreeRowContentTests {
             .diff(insertions: 10, deletions: 1),
             .changedFiles(3),
             .aheadBehind(ahead: 1, behind: 2),
-            .agents([.claude]),
         ])
         #expect(row.metadataAccessibilityLabel
-            == "Pull request 12, draft, 10 lines added, 1 line removed, 3 changed files, 1 commit ahead, 2 commits behind, 1 agent")
+            == "Pull request 12, draft, 10 lines added, 1 line removed, 3 changed files, 1 commit ahead, 2 commits behind")
     }
 
     @Test func narrowVariantsDropTheLeastImportantFirstAndKeepOrder() {
@@ -105,7 +104,6 @@ struct WorktreeRowContentTests {
         let diff = WorktreeRowContent.MetadataItem.diff(insertions: 10, deletions: 1)
         let ahead = WorktreeRowContent.MetadataItem.aheadBehind(ahead: 1, behind: 0)
         #expect(variants == [
-            [pr, diff, .changedFiles(3), ahead, .agents([.claude])],
             [pr, diff, .changedFiles(3), ahead],
             [pr, diff, ahead],
             [pr, diff],
@@ -121,11 +119,14 @@ struct WorktreeRowContentTests {
         #expect(noPR.metadata == [.diff(insertions: 4, deletions: 0), .changedFiles(3)])
     }
 
-    @Test func agentsOnlyForASingleSession() {
+    @Test func agentIconOnlyForASingleSession() {
         let two = makeWorktree("w", branch: "b", sessions: [makeSession("a"), makeSession("b")])
-        #expect(WorktreeRowContent(worktree: two, activity: nil, git: nil).metadata == [.folder("w")])
+        #expect(WorktreeRowContent(worktree: two, activity: nil, git: nil).agent == nil)
         let one = makeWorktree("w", branch: "b", sessions: [makeSession("a")])
-        #expect(WorktreeRowContent(worktree: one, activity: nil, git: nil).metadata == [.agents([.claude])])
+        let row = WorktreeRowContent(worktree: one, activity: nil, git: nil)
+        #expect(row.agent == .claude)
+        // The agent no longer takes the second line, so the folder gets it.
+        #expect(row.metadata == [.folder("w")])
     }
 
     @Test func sessionRowsOnlyForSeveralSessions() {

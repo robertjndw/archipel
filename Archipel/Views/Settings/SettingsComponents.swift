@@ -175,3 +175,76 @@ extension NSImage {
         return icon
     }
 }
+
+/// A sliver of the sidebar at each density: a project header and its worktrees drawn as bars, so
+/// the tiles compare how much fits rather than what the rows say.
+struct SidebarDensityPreview: View {
+    let density: AppSettings.SidebarDensity
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: rowGap) {
+            project(selectedRow: true)
+            project(selectedRow: false)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 5)
+        .padding(.top, 5)
+        .frame(width: AppearancePreview.size.width, height: AppearancePreview.size.height, alignment: .topLeading)
+        .background(.background.secondary)
+        .clipped()
+    }
+
+    private func project(selectedRow: Bool) -> some View {
+        VStack(alignment: .leading, spacing: rowGap) {
+            HStack(spacing: 3) {
+                RoundedRectangle(cornerRadius: 1.5).fill(Color.accentColor).frame(width: 5, height: 5)
+                bar(width: 22, height: 3, style: .primary)
+            }
+            .padding(.top, headerGap)
+            row(width: 28, isSelected: selectedRow)
+            row(width: 20, isSelected: false)
+        }
+    }
+
+    private func row(width: CGFloat, isSelected: Bool) -> some View {
+        HStack(alignment: .top, spacing: 3) {
+            Circle().fill(.tertiary).frame(width: 3, height: 3).padding(.top, 0.5)
+            VStack(alignment: .leading, spacing: 1.5) {
+                HStack(spacing: 4) {
+                    bar(width: width, height: 2.5, style: .secondary)
+                    if density == .compact {
+                        Spacer(minLength: 0)
+                        bar(width: 8, height: 2, style: .tertiary)
+                    }
+                }
+                if density != .compact {
+                    bar(width: width * 0.7, height: 2, style: .tertiary)
+                }
+            }
+        }
+        .padding(.vertical, rowPadding)
+        .padding(.horizontal, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 2))
+    }
+
+    private func bar(width: CGFloat, height: CGFloat, style: some ShapeStyle) -> some View {
+        Capsule().fill(style).frame(width: width, height: height)
+    }
+
+    private var rowGap: CGFloat { density == .spacious ? 1.5 : 0.5 }
+    private var rowPadding: CGFloat {
+        switch density {
+        case .compact: 1
+        case .comfortable: 1.5
+        case .spacious: 2.5
+        }
+    }
+    private var headerGap: CGFloat {
+        switch density {
+        case .compact: 0
+        case .comfortable: 1
+        case .spacious: 3
+        }
+    }
+}

@@ -10,6 +10,20 @@ final class AppSettings {
         var id: Self { self }
     }
 
+    /// How much room each project and worktree gets in the sidebar, like Xcode's navigator size.
+    enum SidebarDensity: String, CaseIterable, Identifiable {
+        case compact, comfortable, spacious
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .compact: "Compact"
+            case .comfortable: "Comfortable"
+            case .spacious: "Spacious"
+            }
+        }
+    }
+
     /// How the status bar draws subscription usage.
     enum UsageDisplay: String, CaseIterable, Identifiable {
         case numbers, bars
@@ -53,6 +67,7 @@ final class AppSettings {
     // MARK: Appearance
 
     var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) } }
+    var sidebarDensity: SidebarDensity { didSet { defaults.set(sidebarDensity.rawValue, forKey: Key.sidebarDensity) } }
     var showsGitStatusInSidebar: Bool { didSet { defaults.set(showsGitStatusInSidebar, forKey: Key.showsGitStatusInSidebar) } }
     /// Also decides whether `gh` is asked at all.
     var showsPullRequests: Bool { didSet { defaults.set(showsPullRequests, forKey: Key.showsPullRequests) } }
@@ -104,6 +119,7 @@ final class AppSettings {
         fetchesAutomatically = bool(Key.fetchesAutomatically, true)
         externalEditorBundleID = defaults.string(forKey: Key.externalEditorBundleID)
         appearance = defaults.string(forKey: Key.appearance).flatMap(Appearance.init) ?? .system
+        sidebarDensity = defaults.string(forKey: Key.sidebarDensity).flatMap(SidebarDensity.init) ?? .comfortable
         showsGitStatusInSidebar = bool(Key.showsGitStatusInSidebar, true)
         showsPullRequests = bool(Key.showsPullRequests, true)
         showsAgentMessagesInSidebar = bool(Key.showsAgentMessagesInSidebar, true)
@@ -128,6 +144,7 @@ final class AppSettings {
         static let fetchesAutomatically = "settings.fetchesAutomatically"
         static let externalEditorBundleID = "settings.externalEditorBundleID"
         static let appearance = "settings.appearance"
+        static let sidebarDensity = "settings.sidebarDensity"
         static let showsGitStatusInSidebar = "settings.showsGitStatusInSidebar"
         static let showsPullRequests = "settings.showsPullRequests"
         static let showsAgentMessagesInSidebar = "settings.showsAgentMessagesInSidebar"
