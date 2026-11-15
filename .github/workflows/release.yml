@@ -23,6 +23,11 @@ jobs:
     # The app targets macOS 27, which needs Xcode 27. The macos-26 images don't have it.
     runs-on: xcode-27
     timeout-minutes: 60
+    # Spelled out because only an explicit bash shell gets pipefail. Without it a failed
+    # build-dmg.sh piped into tail would let the step pass.
+    defaults:
+      run:
+        shell: bash
     env:
       XCODE_APP: /Applications/Xcode_27.2.app
       HAS_DEVELOPER_ID: ${{ secrets.DEVELOPER_ID_P12_BASE64 != '' }}

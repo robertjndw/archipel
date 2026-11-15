@@ -550,7 +550,14 @@ final class AppModel {
 
     private func open(_ content: TabContent, preview: Bool) {
         guard let worktree = selectedWorktree else { return }
-        changingSelection { _ = $0.openTab(content, in: worktree.id, preview: preview) }
+        changingSelection { workspace in
+            // Opening a preview reuses the pane's preview tab. One with unsaved edits would vanish
+            // with its edits still in the buffer and no tab left to save or discard them from.
+            for tab in worktree.panes.flatMap(\.tabs) where tab.isPreview {
+                if case .file(let url) = tab.content, documents.isDirty(url) { workspace.pinTab(id: tab.id) }
+            }
+            _ = workspace.openTab(content, in: worktree.id, preview: preview)
+        }
     }
 
     func pin(tab id: Tab.ID) {
@@ -595,8 +602,8 @@ final class AppModel {
         closeNow(tab)
     }
 
+    /// The file's buffer is released by `mutate` once no tab shows the file any more.
     private func closeNow(_ tab: Tab) {
-        if case .file(let url) = tab.content { documents.close(url) }
         changingSelection { $0.closeTab(id: tab.id) }
     }
 
@@ -947,10 +954,14 @@ final class AppModel {
 
     func mutate(_ change: (inout Workspace) -> Void) {
         let sessionsBefore = workspace.allSessionIDs
+        let filesBefore = openFileURLs
         change(&workspace)
         // Whichever way a session leaves the workspace (closing its tab, removing its worktree,
         // project or island), its terminal and live state must go with it.
         for id in sessionsBefore.subtracting(workspace.allSessionIDs) { tearDown(id) }
+        // Same for file buffers, which otherwise hold the whole text and undo history until quit.
+        // A dirty one is kept: the quit prompt is then the last chance to save those edits.
+        for url in filesBefore.subtracting(openFileURLs) where !documents.isDirty(url) { documents.close(url) }
         // Here rather than in changingSelection so clicking into another pane counts too.
         if let id = focusedTab?.id { recentTabs.visit(id) }
         saveTask?.cancel()
@@ -959,6 +970,15 @@ final class AppModel {
             guard !Task.isCancelled else { return }
             self?.saveNow()
         }
+    }
+
+    private var openFileURLs: Set<URL> {
+        var urls = Set<URL>()
+        for tab in workspace.allWorktrees.lazy.flatMap(\.panes).flatMap(\.tabs) {
+            // Standardized like FileDocumentStore's keys, so two spellings of one path count as one file.
+            if case .file(let url) = tab.content { urls.insert(url.standardizedFileURL) }
+        }
+        return urls
     }
 
     func saveNow() {

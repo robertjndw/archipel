@@ -208,14 +208,16 @@ extension AppModel {
             let client = await gitHub.value
             let pullRequest = try? await client?.pullRequest(in: worktree.path)
             guard let self else { return }
+            // A missing gh is looked for again next time, since it may be installed while the app runs.
+            if client == nil, self.gitRefresh.gitHub == gitHub { self.gitRefresh.gitHub = nil }
             self.gitRefresh.pullRequestsInFlight.remove(id)
             guard self.workspace.worktree(id: id) != nil else { return }
             self.pullRequests[id] = PullRequestLookup(branch: branch, pullRequest: pullRequest, checkedAt: .now)
         }
     }
 
-    /// Resolved once: whether `gh` is installed does not change while the app runs often enough to
-    /// justify searching the PATH for every lookup.
+    /// Resolved once when found: whether `gh` is installed does not change often enough to justify
+    /// searching the PATH for every lookup.
     private func gitHubClient() -> Task<GitHubClient?, Never> {
         if let task = gitRefresh.gitHub { return task }
         let task = Task { [weak self] () -> GitHubClient? in

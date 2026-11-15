@@ -8,18 +8,20 @@
 set -euo pipefail
 
 file="$1"
+# It can also exit non-zero for a rejection, and set -e would then skip the log below.
 result="$(xcrun notarytool submit "$file" \
   --key "$NOTARY_KEY_PATH" \
   --key-id "$NOTARY_KEY_ID" \
   --issuer "$NOTARY_ISSUER_ID" \
   --wait \
-  --output-format json)"
+  --output-format json)" || true
 echo "$result"
 
-status="$(plutil -extract status raw -o - - <<< "$result")"
+status="$(plutil -extract status raw -o - - <<< "$result" 2>/dev/null)" || status="unknown"
 if [[ "$status" != "Accepted" ]]; then
-  id="$(plutil -extract id raw -o - - <<< "$result")"
-  xcrun notarytool log "$id" --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID"
+  if id="$(plutil -extract id raw -o - - <<< "$result" 2>/dev/null)"; then
+    xcrun notarytool log "$id" --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" || true
+  fi
   echo "error: notarization of $file finished with status $status" >&2
   exit 1
 fi
