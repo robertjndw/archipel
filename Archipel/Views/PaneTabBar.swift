@@ -21,8 +21,9 @@ struct PaneTabBar: View {
     @State private var dropSlot: Int?
 
     static let height: CGFloat = 36
+    /// Slight bounce so the selection settles onto the new tab, close to Safari.
+    private static let motion = Animation.spring(duration: 0.35, bounce: 0.18)
 
-    @Namespace private var glass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// With one pane there is nothing to tell apart, so it always reads as active.
@@ -41,43 +42,52 @@ struct PaneTabBar: View {
 
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    // One container for the row, so the selection's glass morphs
-                    // from the old tab to the new one instead of fading.
-                    GlassEffectContainer {
-                        HStack(spacing: 2) {
-                            ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
-                                TabButton(
-                                    tab: tab,
-                                    label: label(for: tab),
-                                    isSelected: tab.id == pane.selectedTab?.id,
-                                    isActive: isActive,
-                                    glass: glass,
-                                    select: { model.select(tab: tab.id) },
-                                    pin: { model.pin(tab: tab.id) },
-                                    close: { model.close(tab: tab.id) }
-                                )
-                                .contextMenu { tabMenu(tab) }
-                                .draggable(tab.id.uuidString)
-                                .modifier(TabDropTarget(tab: tab) { targeted in
-                                    // One tick per slot the drag moves into, not one per drag event.
-                                    if targeted, dropSlot != index {
-                                        dropSlot = index
-                                        Haptics.levelChange()
-                                    } else if !targeted, dropSlot == index {
-                                        dropSlot = nil
-                                    }
-                                } moveTab: {
+                    HStack(spacing: 2) {
+                        ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
+                            TabButton(
+                                tab: tab,
+                                label: label(for: tab),
+                                isSelected: tab.id == pane.selectedTab?.id,
+                                isActive: isActive,
+                                select: { model.select(tab: tab.id) },
+                                pin: { model.pin(tab: tab.id) },
+                                close: { model.close(tab: tab.id) }
+                            )
+                            .anchorPreference(key: TabFrames.self, value: .bounds) { [tab.id: $0] }
+                            .transition(reduceMotion ? .opacity : .tab)
+                            .contextMenu { tabMenu(tab) }
+                            .draggable(tab.id.uuidString)
+                            .modifier(TabDropTarget(tab: tab) { targeted in
+                                // One tick per slot the drag moves into, not one per drag event.
+                                if targeted, dropSlot != index {
+                                    dropSlot = index
+                                    Haptics.levelChange()
+                                } else if !targeted, dropSlot == index {
                                     dropSlot = nil
-                                    _ = drop([$0.uuidString], at: index)
-                                })
+                                }
+                            } moveTab: {
+                                dropSlot = nil
+                                _ = drop([$0.uuidString], at: index)
+                            })
+                        }
+                    }
+                    .backgroundPreferenceValue(TabFrames.self) { frames in
+                        GeometryReader { geometry in
+                            if let id = pane.selectedTab?.id, let anchor = frames[id] {
+                                let frame = geometry[anchor]
+                                SelectionCapsule(isActive: isActive)
+                                    .frame(width: frame.width, height: frame.height)
+                                    .offset(x: frame.minX, y: frame.minY)
                             }
                         }
-                        // The scroll view clips, so the glass shadow needs room inside it.
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 6)
                     }
-                    .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: pane.selectedTab?.id)
+                    // The model mutates tabs without animation, so the row animates them itself.
+                    .animation(reduceMotion ? nil : Self.motion, value: pane.tabs.map(\.id))
+                    .animation(reduceMotion ? nil : Self.motion, value: pane.selectedTab?.id)
                     .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isActive)
+                    // The scroll view clips, so the glass shadow needs room inside it.
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 6)
                 }
                 // .hidden still shows a scroller when the system is set to always show them.
                 .scrollIndicators(.never)
@@ -85,7 +95,7 @@ struct PaneTabBar: View {
                 // scrolled out of view; without this the bar shows no selection at all.
                 .onChange(of: pane.selectedTab?.id) { _, id in
                     guard let id else { return }
-                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) { proxy.scrollTo(id) }
+                    withAnimation(reduceMotion ? nil : Self.motion) { proxy.scrollTo(id) }
                 }
                 .onAppear {
                     // On appear the row has not been laid out yet and scrolling does nothing.
@@ -214,7 +224,6 @@ private struct TabButton: View {
     let isSelected: Bool
     /// Whether this tab's pane has focus; only then does the selection get glass.
     let isActive: Bool
-    let glass: Namespace.ID
     let select: () -> Void
     let pin: () -> Void
     let close: () -> Void
@@ -260,10 +269,12 @@ private struct TabButton: View {
         .padding(.leading, 12)
         .padding(.trailing, 6)
         .frame(minWidth: 96, maxWidth: 220, minHeight: Chrome.controlHeight)
-        .background { selectionBackground }
-        // On the tab itself rather than in its background: glass in a container is drawn
-        // above the content of the view it backs, which would cover the label.
-        .glassEffect(isSelected && isActive ? .regular : .identity, in: .capsule)
+        .background {
+            if isHovering && !isSelected {
+                Capsule().fill(.quinary)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: isHovering)
         .contentShape(.capsule)
         .gesture(TapGesture(count: 2).onEnded(pin))
         .simultaneousGesture(TapGesture().onEnded(select))
@@ -274,18 +285,45 @@ private struct TabButton: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, select)
     }
+}
 
-    /// The focused pane's selected tab is the one piece of glass in the row,
-    /// like Safari's compact tabs. An unfocused pane falls back to a flat fill,
-    /// which is what tells the panes apart at a glance.
-    @ViewBuilder
-    private var selectionBackground: some View {
-        if isSelected && isActive {
-            EmptyView()
-        } else if isSelected {
-            Capsule().fill(.quaternary)
-        } else if isHovering {
-            Capsule().fill(.quinary)
-        }
+/// The focused pane's selected tab is the one piece of glass in the row,
+/// like Safari's compact tabs. An unfocused pane falls back to a flat fill,
+/// which is what tells the panes apart at a glance.
+///
+/// One view that slides under the selected tab instead of glass on every tab.
+/// Per-tab glass merged with its neighbours when a tab was opened or closed,
+/// which smeared a blurry blob over their labels and sometimes left it there.
+private struct SelectionCapsule: View {
+    let isActive: Bool
+
+    var body: some View {
+        Capsule()
+            .fill(.quaternary)
+            .opacity(isActive ? 0 : 1)
+            .glassEffect(isActive ? .regular : .identity, in: .capsule)
     }
+}
+
+/// Tab frames, so the selection capsule knows where to go.
+private struct TabFrames: PreferenceKey {
+    static let defaultValue: [ArchipelCore.Tab.ID: Anchor<CGRect>] = [:]
+
+    static func reduce(value: inout [ArchipelCore.Tab.ID: Anchor<CGRect>], nextValue: () -> [ArchipelCore.Tab.ID: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+/// Scale, fade and blur for tabs being opened or closed.
+private struct TabTransition: Transition {
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content
+            .scaleEffect(phase.isIdentity ? 1 : 0.8)
+            .opacity(phase.isIdentity ? 1 : 0)
+            .blur(radius: phase.isIdentity ? 0 : 6)
+    }
+}
+
+private extension AnyTransition {
+    static var tab: AnyTransition { AnyTransition(TabTransition()) }
 }
