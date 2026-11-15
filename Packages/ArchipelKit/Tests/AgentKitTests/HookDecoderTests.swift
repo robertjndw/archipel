@@ -66,6 +66,19 @@ struct HookDecoderTests {
         #expect(result.event == .turnFinished(message: nil))
     }
 
+    @Test(arguments: [
+        (#"{"session_id": "abc", "hook_event_name": "SubagentStart", "agent_id": "a1", "agent_type": "Explore"}"#, AgentEvent.subagentStarted(id: "a1")),
+        (#"{"session_id": "abc", "hook_event_name": "SubagentStop", "agent_id": "a1", "agent_type": "Explore"}"#, .subagentFinished(id: "a1")),
+        (#"{"session_id": "abc", "hook_event_name": "PreToolUse", "agent_id": "a1", "tool_name": "Read"}"#, .subagentActivity(id: "a1")),
+        // A failing subagent must not end its parent's turn.
+        (#"{"session_id": "abc", "hook_event_name": "StopFailure", "agent_id": "a1", "error": "rate_limit"}"#, .subagentFinished(id: "a1")),
+        // A subagent asking for approval still needs the user.
+        (#"{"session_id": "abc", "hook_event_name": "PermissionRequest", "agent_id": "a1", "tool_name": "Bash"}"#, .attentionRequested(.permission, message: "Bash")),
+    ])
+    func subagentEvents(json: String, expected: AgentEvent) {
+        #expect(claude(json).event == expected)
+    }
+
     @Test func codexTurnComplete() {
         let result = HookDecoder.decode(source: .codex, payload: Data(Fixtures.codexTurnComplete.utf8))
         #expect(result.event == .turnFinished(message: "Rename complete."))

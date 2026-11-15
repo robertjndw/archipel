@@ -40,4 +40,9 @@ public enum AgentEvent: Equatable, Sendable {
     case terminalNotification(title: String, body: String)
     case bell
     case processExited(code: Int32)
+    /// Claude started a subagent. Ids are Claude's `agent_id`.
+    case subagentStarted(id: String)
+    /// A hook fired from inside a subagent, such as one of its tool calls.
+    case subagentActivity(id: String)
+    case subagentFinished(id: String)
 }

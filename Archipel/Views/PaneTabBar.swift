@@ -242,6 +242,7 @@ private struct TabButton: View {
                 DevServerPill(links: label.devServers)
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
+            SubagentBadge(count: label.activity?.subagents.count ?? 0)
             // The close button takes the status glyph's place on hover, so
             // tabs do not change width under the pointer.
             ZStack {
@@ -266,6 +267,7 @@ private struct TabButton: View {
             .frame(width: 18)
         }
         .animation(.snappy(duration: 0.25), value: label.devServers)
+        .animation(.snappy(duration: 0.25), value: label.activity?.subagents.count)
         .padding(.leading, 12)
         .padding(.trailing, 6)
         .frame(minWidth: 96, maxWidth: 220, minHeight: Chrome.controlHeight)

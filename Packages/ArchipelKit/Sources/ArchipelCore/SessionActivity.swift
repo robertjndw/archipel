@@ -9,6 +9,8 @@ public struct SessionActivity: Equatable, Sendable {
     /// The last turn ran to its end. `.finished` alone also covers an agent that has only just
     /// started and sits at its first prompt, which has nothing to show as done.
     public var completedTurn: Bool
+    /// Subagents the agent has running, for the "+3" next to its status.
+    public var subagents = SubagentRoster()
 
     public init(status: SessionStatus = .notStarted, unread: Bool = false, lastMessage: String? = nil, completedTurn: Bool = false) {
         self.status = status
@@ -27,9 +29,10 @@ public struct SessionActivity: Equatable, Sendable {
     /// clicking into it or sending a prompt. Merely being on screen is not enough: people leave the
     /// window open and walk away. `isBeingViewed` only quiets the terminal bell, which fires while
     /// someone is typing.
-    public mutating func apply(_ event: AgentEvent, isBeingViewed: Bool) {
+    public mutating func apply(_ event: AgentEvent, isBeingViewed: Bool, at now: Date = Date()) {
         // A dead process stays dead until the app relaunches it.
         if case .exited = status, event != .launched { return }
+        subagents.apply(event, at: now)
 
         let previous = status
         switch event {
@@ -43,7 +46,11 @@ public struct SessionActivity: Equatable, Sendable {
             // It is also not a result worth badging, hence the early return.
             if status == .starting || status == .notStarted { status = .finished }
             return
-        case .promptSubmitted, .activity:
+        case .subagentStarted, .subagentFinished:
+            // The roster above is all they change. A subagent only starts from inside a turn, so
+            // the session is working already.
+            return
+        case .promptSubmitted, .activity, .subagentActivity:
             status = .working
             completedTurn = false
             // Typing the next prompt is the clearest sign the last result was seen.
@@ -73,6 +80,40 @@ public struct SessionActivity: Equatable, Sendable {
         switch status {
         case .needsAttention, .finished, .exited: true
         case .notStarted, .starting, .working: false
+        }
+    }
+}
+
+/// The subagents a session has running, from Claude's SubagentStart and SubagentStop hooks.
+///
+/// A stop can go missing, for example when the user interrupts the turn, and a count that never
+/// goes down is worse than none. So entries also expire: right away at the end of the main turn
+/// if they have been quiet for a minute (foreground subagents always end before their parent
+/// does), and after ten quiet minutes in any case. A background subagent dropped too early comes
+/// back with its next tool call.
+public struct SubagentRoster: Equatable, Sendable {
+    private var lastSeen: [String: Date] = [:]
+
+    static let quietAtTurnEnd: TimeInterval = 60
+    static let quietLimit: TimeInterval = 10 * 60
+
+    public init() {}
+
+    public var count: Int { lastSeen.count }
+
+    mutating func apply(_ event: AgentEvent, at now: Date) {
+        lastSeen = lastSeen.filter { now.timeIntervalSince($0.value) < Self.quietLimit }
+        switch event {
+        case .subagentStarted(let id), .subagentActivity(let id):
+            lastSeen[id] = now
+        case .subagentFinished(let id):
+            lastSeen[id] = nil
+        case .turnFinished:
+            lastSeen = lastSeen.filter { now.timeIntervalSince($0.value) < Self.quietAtTurnEnd }
+        case .launched, .sessionStarted, .processExited:
+            lastSeen = [:]
+        case .promptSubmitted, .activity, .attentionRequested, .terminalNotification, .bell:
+            break
         }
     }
 }

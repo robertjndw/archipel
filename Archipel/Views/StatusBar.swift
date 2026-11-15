@@ -17,6 +17,7 @@ struct StatusBar: View {
             AgentsItem()
             Divider()
                 .frame(height: 12)
+            ResourcesItem()
             StayAwakeButton()
         }
         .font(.system(size: 11))

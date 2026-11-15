@@ -174,7 +174,7 @@ extension AgentDefinition {
 /// when a turn dies on an API error (Stop does not fire then).
 let claudeHookEvents = [
     "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest",
-    "Notification", "Stop", "StopFailure", "SessionEnd",
+    "Notification", "Stop", "StopFailure", "SessionEnd", "SubagentStart", "SubagentStop",
 ]
 
 func claudeHookSettings(hook: URL) -> String {

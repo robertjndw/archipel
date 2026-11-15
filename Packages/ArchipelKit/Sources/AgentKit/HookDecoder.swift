@@ -32,6 +32,16 @@ public enum HookDecoder {
     }
 
     private static func claudeEvent(_ payload: [String: Any]) -> AgentEvent? {
+        // Hooks fired inside a subagent carry its id. They must not be read as the main agent's:
+        // a subagent's StopFailure would otherwise end the parent's turn.
+        if let agentID = nonEmptyString(payload["agent_id"]) {
+            switch payload["hook_event_name"] as? String {
+            case "SubagentStart": return .subagentStarted(id: agentID)
+            case "SubagentStop", "StopFailure", "Stop": return .subagentFinished(id: agentID)
+            case "PreToolUse", "PostToolUse": return .subagentActivity(id: agentID)
+            default: break
+            }
+        }
         switch payload["hook_event_name"] as? String {
         case "SessionStart":
             return .sessionStarted

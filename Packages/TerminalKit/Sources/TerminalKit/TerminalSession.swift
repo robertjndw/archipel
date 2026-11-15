@@ -158,6 +158,14 @@ public final class TerminalSession: Identifiable {
         self.exitStatusFile = nil
     }
 
+    /// The process group in the foreground of the pty, nil once the surface is gone or nothing
+    /// holds the terminal. Any member's `getsid` leads to the terminal's whole Unix session.
+    public var foregroundProcessID: pid_t? {
+        guard let surface else { return nil }
+        let pid = ghostty_surface_foreground_pid(surface)
+        return pid > 0 && pid <= UInt64(Int32.max) ? pid_t(pid) : nil
+    }
+
     public func setOccluded(_ occluded: Bool) {
         surfaceView.setHostOccluded(occluded)
     }

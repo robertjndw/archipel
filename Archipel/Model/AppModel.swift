@@ -41,6 +41,7 @@ final class AppModel {
     var focusCommitMessageRequest = false
     let settings = AppSettings()
     let devServers = DevServerMonitor()
+    let resources = ResourceMonitor()
     let stayAwake = StayAwake()
     /// The latest subscription limits per provider, for the status bar. See AppModel+Usage.
     var usage: [UsageProvider: ProviderUsage] = UsageArchive.load()
@@ -135,6 +136,7 @@ final class AppModel {
         refreshCodexUsage()
         watchSessionInteraction()
         devServers.start { [weak self] in self?.terminals ?? [:] }
+        resources.start { [weak self] in self?.resourceSources() ?? [:] }
         terminalApp?.acceptsDroppedText = { [weak self] in !(self?.isInternalDragPayload($0) ?? false) }
     }
 
@@ -608,6 +610,18 @@ final class AppModel {
     }
 
     // MARK: Running sessions
+
+    private func resourceSources() -> [Session.ID: ResourceMonitor.Source] {
+        terminals.reduce(into: [:]) { result, entry in
+            guard let worktree = workspace.worktree(containing: entry.key),
+                  let session = workspace.session(id: entry.key) else { return }
+            result[entry.key] = .init(
+                terminal: entry.value,
+                worktreeID: worktree.id,
+                origin: "\(worktree.displayName) · \(session.displayTitle)"
+            )
+        }
+    }
 
     private func ensureRunning(_ id: Session.ID) {
         guard terminals[id] == nil, let session = workspace.session(id: id),
