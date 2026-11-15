@@ -174,16 +174,7 @@ struct SessionPeekView: View {
     private func subtitle(_ activity: SessionActivity?) -> String {
         let place = model.workspace.worktree(id: target.worktreeID)?.displayName
         guard let activity else { return place ?? "" }
-        let status = switch activity.status {
-        case .notStarted: "Not running"
-        case .starting: "Starting"
-        case .working: "Working"
-        case .needsAttention(.permission): "Needs your approval"
-        case .needsAttention: "Waiting for you"
-        case .finished: "Finished"
-        case .exited(let code): code == 0 ? "Ended" : "Exited with code \(code)"
-        }
-        return [status, place].compactMap(\.self).joined(separator: " · ")
+        return [activity.status.label, place].compactMap(\.self).joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -245,31 +236,9 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
         view.model = model
     }
 
-    final class MonitorView: NSView {
+    final class MonitorView: LocalKeyMonitorView {
         weak var peek: SidebarPeekModel?
         weak var model: AppModel?
-        private var monitor: Any?
-
-        isolated deinit {
-            if let monitor { NSEvent.removeMonitor(monitor) }
-        }
-
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
-            }
-            guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                // Local monitors run on the main thread.
-                nonisolated(unsafe) let event = event
-                let consumed = MainActor.assumeIsolated { self?.handle(event) ?? false }
-                return consumed ? nil : event
-            }
-        }
 
         private enum Key {
             static let space: UInt16 = 49
@@ -280,7 +249,7 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
             static let down: UInt16 = 125
         }
 
-        private func handle(_ event: NSEvent) -> Bool {
+        override func handle(_ event: NSEvent) -> Bool {
             guard let peek, let model else { return false }
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
             if peek.isOpen {

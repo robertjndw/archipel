@@ -171,15 +171,46 @@ struct LineIndex: Equatable, Sendable {
     private(set) var starts: [Int]
     private(set) var length: Int
 
+    /// Reads UTF-16 straight from the NSString. The editor passes NSTextStorage's bridged string, where
+    /// the UTF-8 view has no contiguous storage and would copy and transcode the whole file per keystroke.
     init(_ text: String) {
+        let string = text as NSString
+        let length = string.length
         var starts = [0]
-        var offset = 0
-        let scanned: Void? = text.utf8.withContiguousStorageIfAvailable { Self.scan($0, into: &starts, offset: &offset) }
-        if scanned == nil {
-            Array(text.utf8).withUnsafeBufferPointer { Self.scan($0, into: &starts, offset: &offset) }
+        var afterCR = false
+        let chunk = 4096
+        withUnsafeTemporaryAllocation(of: unichar.self, capacity: chunk) { units in
+            var location = 0
+            while location < length {
+                let count = min(chunk, length - location)
+                string.getCharacters(units.baseAddress!, range: NSRange(location: location, length: count))
+                for index in 0..<count {
+                    let unit = units[index]
+                    let offset = location + index
+                    // CRLF is one break: move the start the CR recorded past the LF. Tracked across
+                    // chunks, since the pair can straddle a boundary.
+                    if afterCR {
+                        afterCR = false
+                        if unit == 0x0A {
+                            starts[starts.count - 1] = offset + 1
+                            continue
+                        }
+                    }
+                    switch unit {
+                    case 0x0A, 0x85, 0x2028, 0x2029:
+                        starts.append(offset + 1)
+                    case 0x0D:
+                        starts.append(offset + 1)
+                        afterCR = true
+                    default:
+                        break
+                    }
+                }
+                location += count
+            }
         }
         self.starts = starts
-        self.length = offset
+        self.length = length
     }
 
     var lineCount: Int { starts.count }
@@ -193,40 +224,5 @@ struct LineIndex: Equatable, Sendable {
             if starts[mid] <= offset { low = mid } else { high = mid - 1 }
         }
         return low
-    }
-
-    private static func scan(_ bytes: UnsafeBufferPointer<UInt8>, into starts: inout [Int], offset: inout Int) {
-        var index = 0
-        let count = bytes.count
-        while index < count {
-            let byte = bytes[index]
-            switch byte {
-            case 0x0A:
-                offset += 1
-                starts.append(offset)
-            case 0x0D:
-                offset += 1
-                if index + 1 < count, bytes[index + 1] == 0x0A {
-                    index += 1
-                    offset += 1
-                }
-                starts.append(offset)
-            case 0xC2 where index + 1 < count && bytes[index + 1] == 0x85:
-                index += 1
-                offset += 1
-                starts.append(offset)
-            case 0xE2 where index + 2 < count && bytes[index + 1] == 0x80 && (bytes[index + 2] == 0xA8 || bytes[index + 2] == 0xA9):
-                index += 2
-                offset += 1
-                starts.append(offset)
-            case 0xF0...0xFF:
-                offset += 2
-            case 0x80...0xBF:
-                break
-            default:
-                offset += 1
-            }
-            index += 1
-        }
     }
 }

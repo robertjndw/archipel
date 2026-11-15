@@ -20,6 +20,10 @@ extension AppModel {
         WorktreeLocation.path(for: project, branch: branch, defaultRoot: settings.worktreesRoot)
     }
 
+    func worktreesFolder(for project: Project) -> URL {
+        WorktreeLocation.parentFolder(for: project, defaultRoot: settings.worktreesRoot)
+    }
+
     func loadProjectIcons() {
         for project in workspace.islands.flatMap(\.projects) { loadIcon(of: project) }
     }

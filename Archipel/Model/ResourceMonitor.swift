@@ -35,20 +35,20 @@ final class ResourceMonitor {
         var id: UUID
         /// Where the processes came from, for example "feat/auth · Claude Code".
         var origin: String
-        var worktreeID: Worktree.ID?
         var usage: Usage
     }
 
     enum Alert: Equatable {
         case leftovers(count: Int)
-        case memory(worktree: Worktree.ID, name: String, bytes: UInt64)
-        case cpu(session: Session.ID?, label: String, percent: Double)
+        case memory(name: String, bytes: UInt64)
+        case cpu(label: String, percent: Double)
     }
 
     /// What the app knows about a running terminal, handed over on every scan.
     struct Source {
         var terminal: TerminalSession
         var worktreeID: Worktree.ID
+        var worktreeName: String
         var origin: String
     }
 
@@ -83,6 +83,7 @@ final class ResourceMonitor {
     private struct Tracked {
         var terminalID: TerminalSession.ID
         var worktreeID: Worktree.ID
+        var worktreeName: String
         var origin: String
         var unixSessionID: Int32?
         var members: Set<ProcessIdentity> = []
@@ -91,7 +92,6 @@ final class ResourceMonitor {
     private struct Closed {
         var id = UUID()
         var origin: String
-        var worktreeID: Worktree.ID
         var closedAt: Date
         /// Kept for a short while only: once its last process is gone a session id can be reused.
         var unixSessionID: Int32?
@@ -142,10 +142,16 @@ final class ResourceMonitor {
         }
         for (id, source) in sources {
             if tracked[id] == nil {
-                tracked[id] = Tracked(terminalID: source.terminal.id, worktreeID: source.worktreeID, origin: source.origin)
+                tracked[id] = Tracked(
+                    terminalID: source.terminal.id,
+                    worktreeID: source.worktreeID,
+                    worktreeName: source.worktreeName,
+                    origin: source.origin
+                )
             }
             tracked[id]?.origin = source.origin
             tracked[id]?.worktreeID = source.worktreeID
+            tracked[id]?.worktreeName = source.worktreeName
             if tracked[id]?.unixSessionID == nil, let pid = source.terminal.foregroundProcessID {
                 let sid = getsid(pid)
                 if sid > 1 { tracked[id]?.unixSessionID = sid }
@@ -207,7 +213,6 @@ final class ResourceMonitor {
             nextLeftovers.append(Leftover(
                 id: closed[index].id,
                 origin: closed[index].origin,
-                worktreeID: closed[index].worktreeID,
                 usage: usage(of: members, unixSessionID: nil, foregroundGroup: nil)
             ))
         }
@@ -220,15 +225,16 @@ final class ResourceMonitor {
             nextApp.cpu = percentages[ownPID] ?? 0
         }
 
-        var worktreeMemory: [Worktree.ID: UInt64] = [:]
+        var worktreeMemory: [Worktree.ID: (name: String, bytes: UInt64)] = [:]
         for (id, usage) in nextSessions {
-            if let worktree = tracked[id]?.worktreeID { worktreeMemory[worktree, default: 0] += usage.memory }
+            guard let entry = tracked[id] else { continue }
+            worktreeMemory[entry.worktreeID, default: (entry.worktreeName, 0)].bytes += usage.memory
         }
         memoryHistory = worktreeMemory.reduce(into: [:]) { result, entry in
-            result[entry.key] = ((memoryHistory[entry.key] ?? []) + [entry.value]).suffix(Self.historyLength)
+            result[entry.key] = ((memoryHistory[entry.key] ?? []) + [entry.value.bytes]).suffix(Self.historyLength)
         }
 
-        let nextAlerts = Self.alerts(sessions: nextSessions, leftovers: nextLeftovers, tracked: tracked)
+        let nextAlerts = Self.alerts(sessions: nextSessions, leftovers: nextLeftovers, worktreeMemory: worktreeMemory.values)
         if nextSessions != sessions { sessions = nextSessions }
         if nextLeftovers != leftovers { leftovers = nextLeftovers }
         if nextApp != app { app = nextApp }
@@ -238,30 +244,28 @@ final class ResourceMonitor {
     private func retire(_ id: Session.ID, at now: Date) {
         guard let entry = tracked.removeValue(forKey: id) else { return }
         if !entry.members.isEmpty || entry.unixSessionID != nil {
-            closed.append(Closed(origin: entry.origin, worktreeID: entry.worktreeID, closedAt: now,
+            closed.append(Closed(origin: entry.origin, closedAt: now,
                                  unixSessionID: entry.unixSessionID, members: entry.members))
         }
     }
 
-    private static func alerts(sessions: [Session.ID: Usage], leftovers: [Leftover], tracked: [Session.ID: Tracked]) -> [Alert] {
+    private static func alerts(
+        sessions: [Session.ID: Usage],
+        leftovers: [Leftover],
+        worktreeMemory: some Sequence<(name: String, bytes: UInt64)>
+    ) -> [Alert] {
         var alerts: [Alert] = []
         let leftoverCount = leftovers.reduce(0) { $0 + $1.usage.processes.count }
         if leftoverCount > 0 { alerts.append(.leftovers(count: leftoverCount)) }
 
-        var byWorktree: [Worktree.ID: (name: String, bytes: UInt64)] = [:]
-        for (id, usage) in sessions {
-            guard let entry = tracked[id] else { continue }
-            let name = entry.origin.components(separatedBy: " · ").first ?? entry.origin
-            byWorktree[entry.worktreeID, default: (name, 0)].bytes += usage.memory
-        }
-        for (id, worktree) in byWorktree.sorted(by: { $0.value.bytes > $1.value.bytes }) where worktree.bytes >= memoryWarning {
-            alerts.append(.memory(worktree: id, name: worktree.name, bytes: worktree.bytes))
+        for worktree in worktreeMemory.sorted(by: { $0.bytes > $1.bytes }) where worktree.bytes >= memoryWarning {
+            alerts.append(.memory(name: worktree.name, bytes: worktree.bytes))
         }
 
-        let hot = sessions.flatMap { id, usage in usage.processes.filter(\.isHot).map { (Optional(id), $0) } }
-            + leftovers.flatMap { $0.usage.processes.filter(\.isHot).map { (Session.ID?.none, $0) } }
-        for (session, row) in hot.sorted(by: { ($0.1.cpu ?? 0) > ($1.1.cpu ?? 0) }) {
-            alerts.append(.cpu(session: session, label: row.label, percent: row.cpu ?? 0))
+        let hot = sessions.values.flatMap { $0.processes.filter(\.isHot) }
+            + leftovers.flatMap { $0.usage.processes.filter(\.isHot) }
+        for row in hot.sorted(by: { ($0.cpu ?? 0) > ($1.cpu ?? 0) }) {
+            alerts.append(.cpu(label: row.label, percent: row.cpu ?? 0))
         }
         return alerts
     }

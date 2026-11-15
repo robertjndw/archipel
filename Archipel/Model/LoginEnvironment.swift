@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// Apps launched from Finder or the Dock get launchd's bare PATH, so agents
@@ -6,7 +7,7 @@ import Foundation
 enum LoginEnvironment {
     nonisolated static func resolvePATH() async -> String {
         let fallback = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+        let shell = AgentDefinition.loginShellPath
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)

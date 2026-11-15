@@ -76,14 +76,7 @@ struct SidebarProjectHeader: View {
         }
         Button("Project Settings…", systemImage: "gearshape") { model.openProjectSettings(project.id) }
         Divider()
-        Button("Show in Finder", systemImage: "folder") {
-            NSWorkspace.shared.activateFileViewerSelecting([project.folderURL])
-        }
-        if let editor = model.preferredEditor {
-            Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(project.folderURL) }
-        }
-        Button("Open in Terminal", systemImage: "apple.terminal") { model.openInTerminal(project.folderURL) }
-        Button("Copy Path", systemImage: "document.on.document") { model.copyToPasteboard(project.folderURL.path) }
+        FolderActions(folder: project.folderURL)
         let others = model.workspace.islands.filter { $0.id != model.selectedIsland?.id }
         if !others.isEmpty {
             Divider()

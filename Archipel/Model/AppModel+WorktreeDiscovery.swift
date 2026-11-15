@@ -9,9 +9,10 @@ extension AppModel {
     /// Asks git for every project's worktrees and notes tracked ones whose folder has vanished.
     /// Cheap enough to run whenever the app comes to the front.
     func refreshWorktreeDiscovery() {
-        missingWorktrees = Set(workspace.allWorktrees
+        let missing = Set(workspace.allWorktrees
             .filter { !FileManager.default.fileExists(atPath: $0.path.path(percentEncoded: false)) }
             .map(\.id))
+        if missing != missingWorktrees { missingWorktrees = missing }
         let projects = workspace.islands.flatMap(\.projects)
         // Refreshes overlap (activation, adding projects, removing a worktree), and a slow older one
         // must not overwrite a newer list with worktrees that have been removed since.
@@ -19,19 +20,16 @@ extension AppModel {
         let generation = worktreeDiscoveryGeneration
         Task {
             for project in projects {
-                let entries: [GitWorktreeEntry]?
-                // Plain folders have no worktrees; dropping the entry hides any stale suggestion.
-                if await git.isRepository(project.folderURL) {
-                    entries = try? await git.worktrees(of: project.folderURL)
-                } else {
-                    entries = nil
-                }
+                // Fails for a plain folder, which has no worktrees; dropping the entry hides any stale suggestion.
+                let entries = try? await git.worktrees(of: project.folderURL)
                 guard generation == worktreeDiscoveryGeneration else { return }
                 let current = workspace.project(id: project.id) ?? project
                 gitWorktrees[project.id] = entries.flatMap { Self.aligned($0, to: current) }
             }
             let known = Set(workspace.islands.flatMap(\.projects).map(\.id))
-            gitWorktrees = gitWorktrees.filter { known.contains($0.key) }
+            if !gitWorktrees.keys.allSatisfy(known.contains) {
+                gitWorktrees = gitWorktrees.filter { known.contains($0.key) }
+            }
         }
     }
 

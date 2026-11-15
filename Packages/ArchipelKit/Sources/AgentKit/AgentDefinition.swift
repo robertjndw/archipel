@@ -8,20 +8,17 @@ public struct LaunchContext: Sendable {
     public var agentSessionID: String?
     public var hookExecutableURL: URL
     public var socketURL: URL
-    public var workingDirectory: URL
 
     public init(
         archipelSessionID: UUID,
         agentSessionID: String?,
         hookExecutableURL: URL,
-        socketURL: URL,
-        workingDirectory: URL
+        socketURL: URL
     ) {
         self.archipelSessionID = archipelSessionID
         self.agentSessionID = agentSessionID
         self.hookExecutableURL = hookExecutableURL
         self.socketURL = socketURL
-        self.workingDirectory = workingDirectory
     }
 }
 
@@ -64,6 +61,11 @@ public struct AgentDefinition: Sendable, Identifiable {
     /// True when the app must put a fresh UUID into `LaunchContext.agentSessionID` before the
     /// first launch, so the session can be resumed later without waiting for a hook.
     public let presetsAgentSessionID: Bool
+    /// True when hooks report the whole lifecycle (start, attention, finish). Without that, the app
+    /// has to infer those moments from the terminal and from the user looking at the session.
+    public let reportsLifecycleThroughHooks: Bool
+    /// True when the session is an agent prompt the app may type text into. A shell would run it.
+    public let acceptsPrompts: Bool
 
     private let freshLaunch: @Sendable (LaunchContext) -> LaunchCommand
     private let resumeLaunch: (@Sendable (LaunchContext, String) -> LaunchCommand)?
@@ -74,6 +76,8 @@ public struct AgentDefinition: Sendable, Identifiable {
         symbolName: String,
         executableName: String,
         presetsAgentSessionID: Bool,
+        reportsLifecycleThroughHooks: Bool,
+        acceptsPrompts: Bool,
         launch: @escaping @Sendable (LaunchContext) -> LaunchCommand,
         resume: (@Sendable (LaunchContext, String) -> LaunchCommand)?
     ) {
@@ -82,6 +86,8 @@ public struct AgentDefinition: Sendable, Identifiable {
         self.symbolName = symbolName
         self.executableName = executableName
         self.presetsAgentSessionID = presetsAgentSessionID
+        self.reportsLifecycleThroughHooks = reportsLifecycleThroughHooks
+        self.acceptsPrompts = acceptsPrompts
         self.freshLaunch = launch
         self.resumeLaunch = resume
     }
@@ -110,6 +116,8 @@ extension AgentDefinition {
         symbolName: "claude.logo",
         executableName: "claude",
         presetsAgentSessionID: true,
+        reportsLifecycleThroughHooks: true,
+        acceptsPrompts: true,
         launch: { context in
             // Without a preset id Claude picks its own; the SessionStart hook reports it.
             let idArguments = context.agentSessionID.map { ["--session-id", $0] } ?? []
@@ -137,6 +145,8 @@ extension AgentDefinition {
         symbolName: "openai.logo",
         executableName: "codex",
         presetsAgentSessionID: false,
+        reportsLifecycleThroughHooks: false,
+        acceptsPrompts: true,
         launch: { context in
             LaunchCommand(
                 executable: "codex",
@@ -153,20 +163,22 @@ extension AgentDefinition {
         }
     )
 
-    public static let shell: AgentDefinition = {
-        let loginShell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
-        return AgentDefinition(
-            id: "shell",
-            displayName: "Shell",
-            symbolName: "terminal",
-            executableName: (loginShell as NSString).lastPathComponent,
-            presetsAgentSessionID: false,
-            launch: { context in
-                LaunchCommand(executable: loginShell, arguments: ["-l"], environment: hookEnvironment(context))
-            },
-            resume: nil
-        )
-    }()
+    /// The user's login shell, falling back to the macOS default when `SHELL` is unset or empty.
+    public static let loginShellPath = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+
+    public static let shell = AgentDefinition(
+        id: "shell",
+        displayName: "Shell",
+        symbolName: "terminal",
+        executableName: (loginShellPath as NSString).lastPathComponent,
+        presetsAgentSessionID: false,
+        reportsLifecycleThroughHooks: false,
+        acceptsPrompts: false,
+        launch: { context in
+            LaunchCommand(executable: loginShellPath, arguments: ["-l"], environment: hookEnvironment(context))
+        },
+        resume: nil
+    )
 }
 
 /// Claude hook events we subscribe to. PostToolUse and StopFailure are there so a session

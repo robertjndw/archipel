@@ -75,8 +75,9 @@ public final class HookServer: Sendable {
             let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
             let continuation = self.continuation
             let queue = self.queue
+            let scratch = ReadScratch()
             source.setEventHandler {
-                Self.acceptPending(on: fd, queue: queue, continuation: continuation)
+                Self.acceptPending(on: fd, queue: queue, scratch: scratch, continuation: continuation)
             }
             source.setCancelHandler { close(fd) }
             source.resume()
@@ -137,13 +138,14 @@ public final class HookServer: Sendable {
     private static func acceptPending(
         on listener: Int32,
         queue: DispatchQueue,
+        scratch: ReadScratch,
         continuation: AsyncStream<HookMessage>.Continuation
     ) {
         while true {
             let fd = accept(listener, nil, nil)
             guard fd >= 0 else { return }
             _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
-            Connection(fd: fd, queue: queue) { line in
+            Connection(fd: fd, queue: queue, scratch: scratch) { line in
                 if let message = decodeEnvelope(line) {
                     continuation.yield(message)
                 }
@@ -168,6 +170,12 @@ public final class HookServer: Sendable {
     }
 }
 
+/// The status line connects on every redraw, so one read buffer per server is reused rather than a fresh
+/// 64 KiB per read. Shared only by connections on the same serial queue, hence the unchecked Sendable.
+private final class ReadScratch: @unchecked Sendable {
+    var bytes = [UInt8](repeating: 0, count: 64 * 1024)
+}
+
 /// One accepted client. Only touched on the server queue, which is what makes the
 /// unchecked Sendable conformance sound.
 private final class Connection: @unchecked Sendable {
@@ -177,10 +185,12 @@ private final class Connection: @unchecked Sendable {
     private let fd: Int32
     private let source: any DispatchSourceRead
     private let onLine: (Data) -> Void
+    private let scratch: ReadScratch
     private var buffer = Data()
 
-    init(fd: Int32, queue: DispatchQueue, onLine: @escaping (Data) -> Void) {
+    init(fd: Int32, queue: DispatchQueue, scratch: ReadScratch, onLine: @escaping (Data) -> Void) {
         self.fd = fd
+        self.scratch = scratch
         self.source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         self.onLine = onLine
     }
@@ -193,11 +203,10 @@ private final class Connection: @unchecked Sendable {
     }
 
     private func readAvailable() {
-        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
-            let count = read(fd, &chunk, chunk.count)
+            let count = scratch.bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
             if count > 0 {
-                buffer.append(contentsOf: chunk[..<count])
+                buffer.append(contentsOf: scratch.bytes[..<count])
                 if buffer.count > Self.maxBytes { return finish(deliver: false) }
             } else if count < 0, errno == EINTR {
                 continue

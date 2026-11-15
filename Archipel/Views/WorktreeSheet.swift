@@ -129,7 +129,7 @@ struct WorktreeSheet: View {
     }
 
     private var destinationFolder: String {
-        model.worktreePath(for: project, branch: "branch-name").deletingLastPathComponent().abbreviatedPath
+        model.worktreesFolder(for: project).abbreviatedPath
     }
 
     private var canAdd: Bool {
@@ -228,7 +228,7 @@ struct WorktreeSheet: View {
                 try await model.createWorktree(in: project, branch: existingBranch, createBranch: false)
             case .existingWorktree:
                 guard let entry = worktrees.first(where: { $0.path == existingWorktree }) else { return }
-                model.addExistingWorktree(entry, to: project.id)
+                model.addExistingWorktrees([entry], to: project.id)
             }
             dismiss()
         } catch {

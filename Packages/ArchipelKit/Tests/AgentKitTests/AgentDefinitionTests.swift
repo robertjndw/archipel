@@ -12,8 +12,7 @@ struct AgentDefinitionTests {
             archipelSessionID: sessionID,
             agentSessionID: agentSessionID,
             hookExecutableURL: hook,
-            socketURL: socket,
-            workingDirectory: URL(fileURLWithPath: "/Users/me/project")
+            socketURL: socket
         )
     }
 

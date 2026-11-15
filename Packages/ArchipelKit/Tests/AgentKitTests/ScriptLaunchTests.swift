@@ -10,8 +10,7 @@ struct ScriptLaunchTests {
             archipelSessionID: sessionID,
             agentSessionID: nil,
             hookExecutableURL: URL(fileURLWithPath: "/Applications/Archipel.app/Contents/Helpers/archipel-hook"),
-            socketURL: URL(fileURLWithPath: "/tmp/archipel.sock"),
-            workingDirectory: URL(fileURLWithPath: "/Users/me/.archipel/worktrees/app/feature")
+            socketURL: URL(fileURLWithPath: "/tmp/archipel.sock")
         )
     }
 

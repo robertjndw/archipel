@@ -38,15 +38,6 @@ final class ChangesModel {
 
     enum Activity: Equatable {
         case commit, push, pull, fetch
-
-        var progressTitle: LocalizedStringKey {
-            switch self {
-            case .commit: "Committing…"
-            case .push: "Pushing…"
-            case .pull: "Pulling…"
-            case .fetch: "Fetching…"
-            }
-        }
     }
 
     init(root: URL, searchPATH: @escaping @MainActor () async -> String) {
@@ -80,20 +71,24 @@ final class ChangesModel {
         do {
             let status = try await git.status(in: root)
             guard current == generation else { return }
-            self.status = status
-            phase = .ready
-            refreshError = nil
+            update(status: status, phase: .ready, refreshError: nil)
         } catch {
             let isRepository = await git.isRepository(root)
             guard current == generation else { return }
             if isRepository {
-                refreshError = error.localizedDescription
+                if refreshError != error.localizedDescription { refreshError = error.localizedDescription }
             } else {
-                status = .empty
-                phase = .notRepository
-                refreshError = nil
+                update(status: .empty, phase: .notRepository, refreshError: nil)
             }
         }
+    }
+
+    /// Observation fires on every assignment, equal or not, and this runs on a 3 second poll; writing
+    /// only what changed keeps an idle tree from rebuilding the whole Changes list each time.
+    private func update(status: GitStatus, phase: Phase, refreshError: String?) {
+        if self.status != status { self.status = status }
+        if self.phase != phase { self.phase = phase }
+        if self.refreshError != refreshError { self.refreshError = refreshError }
     }
 
     func stage(_ change: GitFileChange) {

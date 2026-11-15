@@ -52,8 +52,8 @@ enum ResourceFormat {
     static func summary(of alert: ResourceMonitor.Alert) -> String {
         switch alert {
         case .leftovers(let count): "\(count) left running"
-        case .memory(_, let name, let bytes): "\(name) \(memory(bytes))"
-        case .cpu(_, let label, let percent): "\(label) \(cpu(percent)) CPU"
+        case .memory(let name, let bytes): "\(name) \(memory(bytes))"
+        case .cpu(let label, let percent): "\(label) \(cpu(percent)) CPU"
         }
     }
 
@@ -61,9 +61,9 @@ enum ResourceFormat {
         switch alert {
         case .leftovers(let count):
             count == 1 ? "A process is still running after its tab closed" : "\(count) processes are still running after their tabs closed"
-        case .memory(_, let name, let bytes):
+        case .memory(let name, let bytes):
             "\(name) uses \(memory(bytes)) of memory"
-        case .cpu(_, let label, let percent):
+        case .cpu(let label, let percent):
             "\(label) has used \(cpu(percent)) CPU for over \(Int(ResourceMonitor.cpuWarningDuration / 60)) minutes"
         }
     }
@@ -80,8 +80,8 @@ private enum ResourceSort: String {
 private struct ResourcesPopover: View {
     @Environment(AppModel.self) private var model
     @AppStorage("resources.sort") private var sort: ResourceSort = .memory
+    /// Rows toggled away from their default state, keyed by project, worktree, tab or leftover id.
     @State private var collapsed: Set<UUID> = []
-    @State private var expandedSessions: Set<Session.ID> = []
 
     var body: some View {
         let projects = projectGroups
@@ -203,10 +203,7 @@ private struct ResourcesPopover: View {
     }
 
     @ViewBuilder private func sessionRows(_ entry: SessionGroup) -> some View {
-        let isExpanded = Binding(
-            get: { expandedSessions.contains(entry.id) },
-            set: { if $0 { expandedSessions.insert(entry.id) } else { expandedSessions.remove(entry.id) } }
-        )
+        let isExpanded = binding(for: entry.id, expandedByDefault: false)
         ResourceRow(
             level: 2,
             isExpanded: entry.usage.processes.isEmpty ? nil : isExpanded,

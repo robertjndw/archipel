@@ -262,10 +262,13 @@ final class AppModel {
     private func markViewed(_ id: Session.ID) {
         // Without hooks nothing tells us that the user dealt with a request,
         // so looking at the session has to count as dealing with it.
-        if workspace.session(id: id)?.agent != .claude, activities[id]?.needsUser == true {
+        if workspace.session(id: id)?.agent.definition.reportsLifecycleThroughHooks == false,
+           activities[id]?.needsUser == true {
             activities[id]?.status = .finished
         }
-        activities[id]?.markViewed()
+        // Observers fire on every write, equal or not, and this runs for each visible session on every
+        // selection change.
+        if activities[id]?.unread == true { activities[id]?.markViewed() }
         notifier.clear(sessionID: id)
         refreshDockBadge()
     }
@@ -296,8 +299,6 @@ final class AppModel {
     }
 
     func removeIsland(_ id: Island.ID) {
-        guard workspace.islands.count > 1, let island = workspace.island(id: id) else { return }
-        for session in island.projects.flatMap(\.worktrees).flatMap(\.sessions) { tearDown(session.id) }
         changingSelection { _ = $0.removeIsland(id: id) }
     }
 
@@ -379,7 +380,6 @@ final class AppModel {
     }
 
     func removeProject(_ project: Project) {
-        for session in project.worktrees.flatMap(\.sessions) { tearDown(session.id) }
         changingSelection { $0.removeProject(id: project.id) }
     }
 
@@ -402,11 +402,6 @@ final class AppModel {
     static func untracked(_ entries: [GitWorktreeEntry], in project: Project) -> [GitWorktreeEntry] {
         let known = Set(project.worktrees.map { Project.worktreeKey($0.path) })
         return entries.filter { !$0.isPrunable && !known.contains(Project.worktreeKey($0.path)) }
-    }
-
-    func addExistingWorktree(_ entry: GitWorktreeEntry, to project: Project.ID) {
-        let worktree = Worktree(path: entry.path, branch: entry.branch)
-        changingSelection { _ = $0.addWorktree(worktree, to: project) }
     }
 
     /// Worktrees are created outside the repository by default so they never
@@ -450,9 +445,6 @@ final class AppModel {
         if deleteFolder {
             try await git.removeWorktree(repository: project.folderURL, path: worktree.path, force: force)
         }
-        // Re-read: sessions may have been opened while git was busy.
-        let sessions = workspace.worktree(id: id)?.sessions ?? worktree.sessions
-        for session in sessions { tearDown(session.id) }
         // A folder that stays on disk would be suggested again right away.
         changingSelection { $0.removeWorktree(id: id, dismiss: !deleteFolder) }
         missingWorktrees.remove(id)
@@ -537,6 +529,18 @@ final class AppModel {
         mutate { $0.pinTab(id: id) }
     }
 
+    /// Returns false, with the reason shown, when a file could not be saved.
+    @discardableResult
+    func saveAllDocuments() -> Bool {
+        do {
+            try documents.saveAll()
+            return true
+        } catch {
+            problem = "Not every file could be saved. \(error.localizedDescription)"
+            return false
+        }
+    }
+
     /// Closing a session tab ends the session. A file with unsaved edits is
     /// not closed here; the user is asked first.
     func close(tab id: Tab.ID) {
@@ -564,14 +568,7 @@ final class AppModel {
     }
 
     private func closeNow(_ tab: Tab) {
-        switch tab.content {
-        case .session(let session):
-            tearDown(session)
-        case .file(let url):
-            documents.close(url)
-        case .diff:
-            break
-        }
+        if case .file(let url) = tab.content { documents.close(url) }
         changingSelection { $0.closeTab(id: tab.id) }
     }
 
@@ -618,16 +615,21 @@ final class AppModel {
 
     // MARK: Running sessions
 
+    /// One walk over the workspace rather than two lookups per terminal, since this runs on every scan.
     private func resourceSources() -> [Session.ID: ResourceMonitor.Source] {
-        terminals.reduce(into: [:]) { result, entry in
-            guard let worktree = workspace.worktree(containing: entry.key),
-                  let session = workspace.session(id: entry.key) else { return }
-            result[entry.key] = .init(
-                terminal: entry.value,
-                worktreeID: worktree.id,
-                origin: "\(worktree.displayName) · \(session.displayTitle)"
-            )
+        var sources: [Session.ID: ResourceMonitor.Source] = [:]
+        for worktree in workspace.islands.lazy.flatMap(\.projects).flatMap(\.worktrees) {
+            for session in worktree.sessions {
+                guard let terminal = terminals[session.id] else { continue }
+                sources[session.id] = .init(
+                    terminal: terminal,
+                    worktreeID: worktree.id,
+                    worktreeName: worktree.displayName,
+                    origin: "\(worktree.displayName) · \(session.displayTitle)"
+                )
+            }
         }
+        return sources
     }
 
     private func ensureRunning(_ id: Session.ID) {
@@ -642,26 +644,20 @@ final class AppModel {
             branch: worktree.branch
         )
 
-        // Claude lets us choose the conversation id up front. It is only
-        // persisted once a hook confirms it, so a session that never really
-        // started is not "resumed" into an error on the next launch.
-        let presetID = definition.presetsAgentSessionID ? UUID().uuidString.lowercased() : nil
-        let context = LaunchContext(
-            archipelSessionID: id,
-            agentSessionID: session.agentSessionID ?? presetID,
-            hookExecutableURL: hookExecutableURL,
-            socketURL: hookServer.socketURL,
-            workingDirectory: worktree.path
-        )
-        var command = definition.launchCommand(for: context)
-        if session.agentSessionID != nil, let resume = definition.resumeCommand(for: context) {
-            command = resume
+        var command = if let script {
+            ScriptLaunch.command(
+                script: script.command,
+                context: LaunchContext(
+                    archipelSessionID: id,
+                    agentSessionID: nil,
+                    hookExecutableURL: hookExecutableURL,
+                    socketURL: hookServer.socketURL
+                ),
+                worktree: location
+            )
+        } else {
+            agentCommand(for: session, definition: definition).adding(location)
         }
-        if script == nil, definition.id != AgentDefinition.shell.id {
-            command.arguments += settings.extraArguments(for: definition.id)
-        }
-        command = command.adding(location)
-        if let script { command = ScriptLaunch.command(script: script.command, context: context, worktree: location) }
 
         launchFailures[id] = nil
         apply(.launched, to: id)
@@ -696,7 +692,7 @@ final class AppModel {
                 if script?.kind == .setup {
                     // A setup script is a job with an end, so the sidebar shows it as busy until it exits.
                     apply(.activity, to: id)
-                } else if definition.id != AgentDefinition.claude.id {
+                } else if !definition.reportsLifecycleThroughHooks {
                     // Only Claude announces itself through a hook. Everything else
                     // would sit on "starting" forever without this.
                     apply(.sessionStarted, to: id)
@@ -706,6 +702,27 @@ final class AppModel {
                 apply(.processExited(code: 1), to: id)
             }
         }
+    }
+
+    private func agentCommand(for session: Session, definition: AgentDefinition) -> LaunchCommand {
+        // Claude lets us choose the conversation id up front. It is only
+        // persisted once a hook confirms it, so a session that never really
+        // started is not "resumed" into an error on the next launch.
+        let presetID = definition.presetsAgentSessionID ? UUID().uuidString.lowercased() : nil
+        let context = LaunchContext(
+            archipelSessionID: session.id,
+            agentSessionID: session.agentSessionID ?? presetID,
+            hookExecutableURL: hookExecutableURL,
+            socketURL: hookServer.socketURL
+        )
+        var command = definition.launchCommand(for: context)
+        if session.agentSessionID != nil, let resume = definition.resumeCommand(for: context) {
+            command = resume
+        }
+        if definition.acceptsPrompts {
+            command.arguments += settings.extraArguments(for: definition.id)
+        }
+        return command
     }
 
     private func observe(_ terminal: TerminalSession, for id: Session.ID) {
@@ -729,13 +746,14 @@ final class AppModel {
     }
 
     private func receiveTerminalNotification(_ body: String, for id: Session.ID) {
-        switch workspace.session(id: id)?.agent {
-        case .claude?:
-            // Claude's hooks report the same moments with more detail, and its
-            // "waiting for input" notification would turn a finished turn
-            // back into an attention state.
-            break
-        case .codex?:
+        guard let agent = workspace.session(id: id)?.agent,
+              // Hooks report the same moments with more detail, and Claude's
+              // "waiting for input" notification would turn a finished turn
+              // back into an attention state.
+              !agent.definition.reportsLifecycleThroughHooks
+        else { return }
+        switch agent {
+        case .codex:
             // The launch overrides restrict Codex to approval notifications.
             apply(.attentionRequested(.permission, message: body), to: id)
         default:
@@ -792,7 +810,11 @@ final class AppModel {
         let before = activity
         let viewed = isBeingViewed(id)
         activity.apply(event, isBeingViewed: viewed)
+        // Most hook events (a tool call while already working) change nothing, and writing anyway would
+        // re-render every view that reads `activities`.
+        guard activity != before else { return }
         activities[id] = activity
+        let statusChanged = activity.status != before.status
         if let kind = StatusPulse.kind(from: before.status, to: activity.status),
            let worktreeID = workspace.worktree(containing: id)?.id {
             if NSApp.isActive {
@@ -802,32 +824,25 @@ final class AppModel {
             }
         }
         // Before posting: buttons on an older notification of this session must not answer whatever comes next.
-        if activity.status != before.status { notifier.invalidate(sessionID: id) }
+        if statusChanged { notifier.invalidate(sessionID: id) }
 
         // The session stays unread while on screen, but a banner about the thing you are looking at
         // is noise.
-        if activity.unread, !viewed, activity.status != before.status {
+        if activity.unread, !viewed, statusChanged {
             notify(session: session, activity: activity)
         }
         refreshDockBadge()
-        if activity.status != before.status {
+        if statusChanged {
             sessionStatusChanged(id, from: before.status, to: activity.status)
         }
     }
 
     private func notify(session: Session, activity: SessionActivity) {
-        let headline: String
-        switch activity.status {
-        case .needsAttention(.permission): headline = "Needs your approval"
-        case .needsAttention: headline = "Waiting for you"
-        case .finished: headline = "Finished"
-        case .exited(let code): headline = code == 0 ? "Ended" : "Exited with code \(code)"
-        case .notStarted, .starting, .working: return
-        }
         let enabled = switch activity.status {
         case .needsAttention: settings.notifiesWhenAttentionNeeded
         case .finished: settings.notifiesWhenFinished
-        default: settings.notifiesWhenExited
+        case .exited: settings.notifiesWhenExited
+        case .notStarted, .starting, .working: false
         }
         guard enabled else { return }
         if settings.suppressesNotificationsWhileActive, NSApp.isActive { return }
@@ -839,7 +854,7 @@ final class AppModel {
         deliverNotification(
             session: session,
             activity: activity,
-            title: "\(session.displayTitle): \(headline)",
+            title: "\(session.displayTitle): \(activity.status.label)",
             subtitle: location.compactMap(\.self).joined(separator: " / ")
         )
     }
@@ -903,7 +918,11 @@ final class AppModel {
     // MARK: Persistence
 
     func mutate(_ change: (inout Workspace) -> Void) {
+        let sessionsBefore = workspace.allSessionIDs
         change(&workspace)
+        // Whichever way a session leaves the workspace (closing its tab, removing its worktree,
+        // project or island), its terminal and live state must go with it.
+        for id in sessionsBefore.subtracting(workspace.allSessionIDs) { tearDown(id) }
         // Here rather than in changingSelection so clicking into another pane counts too.
         if let id = focusedTab?.id { recentTabs.visit(id) }
         saveTask?.cancel()

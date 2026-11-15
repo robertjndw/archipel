@@ -23,7 +23,7 @@ extension AppModel {
 
     /// Agent sessions only: a plain shell would run the prompt's lines as commands.
     func reviewTargets(in worktree: Worktree) -> [ReviewTarget] {
-        worktree.sessions.filter { $0.agent != .shell }.map { session in
+        worktree.sessions.filter(\.agent.definition.acceptsPrompts).map { session in
             ReviewTarget(
                 id: session.id,
                 title: session.displayTitle,
@@ -85,7 +85,8 @@ extension AppModel {
               let startedAt = terminalStartTimes[id]
         else { return }
 
-        let settle = session.agent == .claude ? Self.reviewSettleTimeForClaude : Self.reviewSettleTimeForUnhookedAgents
+        let settle = session.agent.definition.reportsLifecycleThroughHooks
+            ? Self.reviewSettleTimeForClaude : Self.reviewSettleTimeForUnhookedAgents
         let wait = settle - startedAt.duration(to: .now)
         if wait > .zero {
             Task { [weak self] in

@@ -117,14 +117,19 @@ enum DiffLineRenderer {
     /// Widest line, estimated from character counts and then measured exactly for the longest few,
     /// which catches wide characters without laying out every line.
     static func width(of lines: [String]) -> CGFloat {
-        var estimates: [(width: CGFloat, index: Int)] = []
-        estimates.reserveCapacity(lines.count)
+        // Kept sorted widest first and capped, so a whole-file diff costs one pass instead of a sort.
+        let measured = 12
+        var longest: [(width: CGFloat, index: Int)] = []
+        longest.reserveCapacity(measured + 1)
         for (index, line) in lines.enumerated() {
             var columns = 0
             for unit in line.utf16 { columns += unit == 9 ? EditorTheme.tabWidth : 1 }
-            estimates.append((CGFloat(min(columns, maximumDrawnLength + 1)) * EditorTheme.characterWidth, index))
+            let width = CGFloat(min(columns, maximumDrawnLength + 1)) * EditorTheme.characterWidth
+            guard longest.count < measured || width > longest[measured - 1].width else { continue }
+            let position = longest.firstIndex { $0.width < width } ?? longest.count
+            longest.insert((width, index), at: position)
+            if longest.count > measured { longest.removeLast() }
         }
-        let longest = estimates.sorted { $0.width > $1.width }.prefix(12)
         var widest = longest.first?.width ?? 0
         for candidate in longest {
             let line = ctLine(lines[candidate.index], lineStart: 0, runs: [])

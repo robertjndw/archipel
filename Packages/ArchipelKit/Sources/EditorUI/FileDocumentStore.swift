@@ -253,7 +253,11 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
     }
 
     private func updateDirty() {
-        let dirty = state == .text || state == .loading ? textStorage.string != savedText : false
+        // Runs on every keystroke. Most edits change the length, which settles it without comparing
+        // the whole bridged string; utf16.count of the native saved text is cached after the first call.
+        let dirty = state == .text || state == .loading
+            ? textStorage.length != savedText.utf16.count || textStorage.string != savedText
+            : false
         guard dirty != isDirty else { return }
         isDirty = dirty
         onDirtyChange(dirty)

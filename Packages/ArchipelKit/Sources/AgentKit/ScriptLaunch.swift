@@ -1,3 +1,4 @@
+import ArchipelCore
 import Foundation
 
 /// Where a session runs, exported to every process the app launches in a worktree so agents and
@@ -17,19 +18,13 @@ public struct WorktreeEnvironment: Equatable, Sendable {
 
     public var variables: [String: String] {
         var variables = [
-            "ARCHIPEL_WORKTREE_PATH": Self.plainPath(worktreePath),
-            "ARCHIPEL_ROOT_PATH": Self.plainPath(rootPath),
+            // Scripts join these with relative paths ("$ARCHIPEL_ROOT_PATH/.env"), so a trailing slash
+            // would become a double slash, and percent escapes would name a different folder.
+            "ARCHIPEL_WORKTREE_PATH": Project.worktreeKey(worktreePath),
+            "ARCHIPEL_ROOT_PATH": Project.worktreeKey(rootPath),
         ]
         if let branch, !branch.isEmpty { variables["ARCHIPEL_BRANCH"] = branch }
         return variables
-    }
-
-    /// Scripts join these with relative paths ("$ARCHIPEL_ROOT_PATH/.env"), so a trailing slash from a
-    /// directory URL would turn into a double slash, and percent escapes would name a different folder.
-    private static func plainPath(_ url: URL) -> String {
-        var path = url.standardizedFileURL.path(percentEncoded: false)
-        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
-        return path
     }
 }
 

@@ -58,10 +58,8 @@ function run(argv) {
 JS
 }
 
-was_running=false
 pids="$(quit_installed)"
 if [[ -n "$pids" ]]; then
-  was_running=true
   echo "Quitting the installed Archipel..."
   for _ in $(seq 120); do
     alive=false
@@ -89,6 +87,6 @@ mv "$staging" "$dest"
 version="$(defaults read "$dest/Contents/Info" CFBundleShortVersionString) ($(git -C "$root" rev-parse --short HEAD))"
 echo "Installed Archipel $version to $dest"
 
-if $was_running; then
+if [[ -n "$pids" ]]; then
   open "$dest"
 fi

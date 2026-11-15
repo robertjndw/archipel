@@ -30,7 +30,7 @@ private struct AgentSection: View {
                     ProgressView().controlSize(.small)
                 case .some(.some(let path)):
                     Label {
-                        Text((path as NSString).abbreviatingWithTildeInPath)
+                        Text(URL(filePath: path).abbreviatedPath)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .textSelection(.enabled)

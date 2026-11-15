@@ -49,13 +49,7 @@ struct ArchipelApp: App {
                     NSApp.sendAction(#selector(NSDocument.save(_:)), to: nil, from: nil)
                 }
                 .keyboardShortcut("s")
-                Button("Save All") {
-                    do {
-                        try model.documents.saveAll()
-                    } catch {
-                        model.problem = "Not every file could be saved. \(error.localizedDescription)"
-                    }
-                }
+                Button("Save All") { model.saveAllDocuments() }
                 .keyboardShortcut("s", modifiers: [.command, .option])
                 .disabled(model.documents.dirtyURLs.isEmpty)
             }
@@ -134,7 +128,7 @@ struct ArchipelApp: App {
                     .keyboardShortcut("u", modifiers: [.command, .shift])
             }
         }
-        MenuBarExtra(isInserted: Binding(get: { model.settings.showsMenuBarExtra }, set: { model.settings.showsMenuBarExtra = $0 })) {
+        MenuBarExtra(isInserted: Bindable(model.settings).showsMenuBarExtra) {
             MenuBarExtraContent()
                 .environment(model)
         } label: {
@@ -226,12 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "Discard Changes")
             switch alert.runModal() {
             case .alertFirstButtonReturn:
-                do {
-                    try model.documents.saveAll()
-                } catch {
-                    model.problem = "Not every file could be saved. \(error.localizedDescription)"
-                    return .terminateCancel
-                }
+                guard model.saveAllDocuments() else { return .terminateCancel }
             case .alertSecondButtonReturn:
                 return .terminateCancel
             default:

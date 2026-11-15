@@ -333,14 +333,7 @@ struct SidebarWorktreeMenu: View {
             Button("Run Setup Script", systemImage: "wrench.and.screwdriver") { model.startScript(.setup, in: worktree.id) }
         }
         Divider()
-        Button("Show in Finder", systemImage: "folder") {
-            NSWorkspace.shared.activateFileViewerSelecting([worktree.path])
-        }
-        if let editor = model.preferredEditor {
-            Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(worktree.path) }
-        }
-        Button("Open in Terminal", systemImage: "apple.terminal") { model.openInTerminal(worktree.path) }
-        Button("Copy Path", systemImage: "document.on.document") { model.copyToPasteboard(worktree.path.path) }
+        FolderActions(folder: worktree.path)
         if let branch = worktree.branch {
             Button("Copy Branch Name", systemImage: "arrow.triangle.branch") { model.copyToPasteboard(branch) }
         }

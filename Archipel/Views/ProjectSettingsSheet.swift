@@ -3,11 +3,6 @@ import ArchipelCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-extension URL {
-    /// The path with the home directory shortened to `~`, for showing to people.
-    var abbreviatedPath: String { (path as NSString).abbreviatingWithTildeInPath }
-}
-
 /// Edits a project's identity, worktree defaults and scripts. Nothing is applied until Save.
 struct ProjectSettingsSheet: View {
     private enum Page: String, CaseIterable, Identifiable {
@@ -143,9 +138,7 @@ struct ProjectSettingsSheet: View {
                     .truncationMode(.middle)
                     .textSelection(.enabled)
             }
-            Button("Show in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([project.folderURL])
-            }
+            Button("Show in Finder") { model.revealInFinder(project.folderURL) }
         }
     }
 
@@ -173,7 +166,7 @@ struct ProjectSettingsSheet: View {
     // MARK: Worktrees
 
     private var defaultFolder: URL {
-        model.settings.worktreesRoot.appending(path: project.name, directoryHint: .isDirectory)
+        WorktreeLocation.defaultParentFolder(for: project, defaultRoot: model.settings.worktreesRoot)
     }
 
     @ViewBuilder

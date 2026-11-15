@@ -186,16 +186,16 @@ public struct GitClient: Sendable {
         return try await run(base + ["--no-index", "--", "/dev/null", path], in: URL(filePath: top), acceptedExitCodes: [0, 1])
     }
 
-    /// The whole file as one hunk, for showing a full comparison. Staged compares HEAD with the index,
+    /// The whole file as one hunk, for showing a full comparison, unless `contextLines` asks for less. Staged compares HEAD with the index,
     /// unstaged compares the index with the working tree, and an untracked file comes back as added.
     /// Returns nil when there is no difference.
     ///
     /// One git call yields both sides, so they always come from the same moment even while an agent
     /// keeps writing.
-    public func fileDiff(path: String, staged: Bool, in folder: URL) async throws -> GitFileDiff? {
+    public func fileDiff(path: String, staged: Bool, contextLines: Int? = nil, in folder: URL) async throws -> GitFileDiff? {
         // Explicit prefixes and no textconv keep the output parseable whatever the user's diff config says.
         let base = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
-                    "--unified=\(Self.wholeFileContext)"]
+                    "--unified=\(contextLines ?? Self.wholeFileContext)"]
         let output: String
         if staged {
             // A pathspec of just the new name would hide the rename, so look for its source first.

@@ -6,6 +6,7 @@ import SwiftUI
 /// it in the browser. With several servers the newest wins; the rest are in
 /// the context menu.
 struct DevServerPill: View {
+    @Environment(AppModel.self) private var model
     /// Oldest first, never empty.
     let links: [DevServerLink]
 
@@ -39,8 +40,7 @@ struct DevServerPill: View {
                 }
                 Divider()
                 Button("Copy URL", systemImage: "document.on.document") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(link.openURL.absoluteString, forType: .string)
+                    model.copyToPasteboard(link.openURL.absoluteString)
                 }
             }
         }

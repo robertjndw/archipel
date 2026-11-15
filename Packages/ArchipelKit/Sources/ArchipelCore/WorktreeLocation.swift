@@ -7,11 +7,18 @@ public enum WorktreeLocation {
         String(branch.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." ? $0 : "-" })
     }
 
-    /// A project with its own folder gets the worktrees directly inside it. The shared default root
-    /// holds every project, so there the project name is a level of its own.
     public static func path(for project: Project, branch: String, defaultRoot: URL) -> URL {
-        let parent = project.worktreesDirectory
-            ?? defaultRoot.appending(path: project.name, directoryHint: .isDirectory)
-        return parent.appending(path: folderName(forBranch: branch), directoryHint: .isDirectory)
+        parentFolder(for: project, defaultRoot: defaultRoot)
+            .appending(path: folderName(forBranch: branch), directoryHint: .isDirectory)
+    }
+
+    /// A project with its own folder gets the worktrees directly inside it.
+    public static func parentFolder(for project: Project, defaultRoot: URL) -> URL {
+        project.worktreesDirectory ?? defaultParentFolder(for: project, defaultRoot: defaultRoot)
+    }
+
+    /// The shared default root holds every project, so there the project name is a level of its own.
+    public static func defaultParentFolder(for project: Project, defaultRoot: URL) -> URL {
+        defaultRoot.appending(path: project.name, directoryHint: .isDirectory)
     }
 }

@@ -1,6 +1,21 @@
 import ArchipelCore
 import SwiftUI
 
+extension SessionStatus {
+    /// How a session's state is worded wherever it is spelled out: tooltips, the peek, notifications.
+    var label: String {
+        switch self {
+        case .notStarted: "Not running"
+        case .starting: "Starting"
+        case .working: "Working"
+        case .needsAttention(.permission): "Needs your approval"
+        case .needsAttention: "Waiting for you"
+        case .finished: "Finished"
+        case .exited(let code): code == 0 ? "Ended" : "Exited with code \(code)"
+        }
+    }
+}
+
 /// The trailing indicator on a session row.
 struct StatusGlyph: View {
     let activity: SessionActivity
@@ -14,9 +29,9 @@ struct StatusGlyph: View {
                     .accessibilityLabel("Working")
                     .help("Working")
             case .needsAttention(.permission):
-                attention("hand.raised.fill", label: "Needs your approval")
+                attention("hand.raised.fill", label: activity.status.label)
             case .needsAttention:
-                attention("questionmark.bubble.fill", label: "Waiting for you")
+                attention("questionmark.bubble.fill", label: activity.status.label)
             case .finished:
                 // The dot is for a result you have not seen yet. Once seen, a quiet check stays until
                 // the next prompt, so a done session does not look like one that never ran.
@@ -37,12 +52,12 @@ struct StatusGlyph: View {
                 Image(systemName: code == 0 ? "stop.circle" : "exclamationmark.triangle.fill")
                     .foregroundStyle(code == 0 ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.red))
                     .accessibilityLabel(code == 0 ? "Ended" : "Exited with an error")
-                    .help(code == 0 ? "Ended" : "Exited with code \(code)")
+                    .help(activity.status.label)
             case .notStarted:
                 Image(systemName: "moon.zzz")
                     .foregroundStyle(.tertiary)
-                    .accessibilityLabel("Not running")
-                    .help("Not running")
+                    .accessibilityLabel(activity.status.label)
+                    .help(activity.status.label)
             }
         }
         .frame(width: 18)

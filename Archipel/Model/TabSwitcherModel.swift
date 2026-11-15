@@ -187,8 +187,12 @@ final class TabSwitcherModel {
     }
 
     nonisolated private static func diffPreview(path: String, staged: Bool, root: URL, git: GitClient) async -> TabPreview? {
-        guard let diff = try? await git.fileDiff(path: path, staged: staged, in: root), !diff.isBinary else { return nil }
-        // The diff carries the whole file as context; start just above the first change.
+        // Every line the preview can show lies within previewLines of the first change, so that much
+        // context keeps them all in the first hunk without git emitting and us parsing the whole file.
+        guard let diff = try? await git.fileDiff(path: path, staged: staged, contextLines: previewLines, in: root),
+              !diff.isBinary
+        else { return nil }
+        // Start just above the first change.
         let lines = diff.hunks.flatMap(\.lines)
         let firstChange = lines.firstIndex { $0.kind != .context } ?? 0
         return .diff(lines.dropFirst(max(firstChange - 2, 0)).prefix(previewLines).map {
@@ -217,33 +221,21 @@ struct TabSwitcherKeyMonitor: NSViewRepresentable {
         view.isBlocked = isBlocked
     }
 
-    final class MonitorView: NSView {
+    final class MonitorView: LocalKeyMonitorView {
         weak var switcher: TabSwitcherModel?
         weak var model: AppModel?
         var isBlocked: () -> Bool = { false }
-        private var monitor: Any?
         private var resignObserver: (any NSObjectProtocol)?
 
         isolated deinit {
-            if let monitor { NSEvent.removeMonitor(monitor) }
             if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         }
 
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override var eventMask: NSEvent.EventTypeMask { [.keyDown, .flagsChanged] }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
-            }
             guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
-                // Local monitors run on the main thread.
-                nonisolated(unsafe) let event = event
-                let consumed = MainActor.assumeIsolated { self?.handle(event) ?? false }
-                return consumed ? nil : event
-            }
             // Cmd-Tab away with Control still down would otherwise leave the panel up with nothing
             // to tell us when Control is let go.
             if resignObserver == nil {
@@ -264,7 +256,7 @@ struct TabSwitcherKeyMonitor: NSViewRepresentable {
             static let right: UInt16 = 124
         }
 
-        private func handle(_ event: NSEvent) -> Bool {
+        override func handle(_ event: NSEvent) -> Bool {
             guard let switcher, let model else { return false }
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
 

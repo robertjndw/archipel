@@ -51,9 +51,15 @@ extension AppModel {
     /// Refreshes every worktree of the selected island. Pull requests are only looked up when asked
     /// for, and then only when the last answer for that branch is older than `minimumPullRequestAge`.
     func refreshGitStatus(lookingUpPullRequests: Bool, minimumPullRequestAge: Duration = pullRequestInterval) {
+        // Only written when something was removed: this runs on every timer tick, and any write to an
+        // observed property re-renders the whole sidebar.
         let existing = Set(workspace.allWorktrees.map(\.id))
-        gitSummaries = gitSummaries.filter { existing.contains($0.key) }
-        pullRequests = pullRequests.filter { existing.contains($0.key) }
+        if !gitSummaries.keys.allSatisfy(existing.contains) {
+            gitSummaries = gitSummaries.filter { existing.contains($0.key) }
+        }
+        if !pullRequests.keys.allSatisfy(existing.contains) {
+            pullRequests = pullRequests.filter { existing.contains($0.key) }
+        }
         let ids = selectedIsland?.projects.flatMap(\.worktrees).map(\.id) ?? []
         refreshGitStatus(of: ids, lookingUpPullRequests: lookingUpPullRequests, minimumPullRequestAge: minimumPullRequestAge)
     }

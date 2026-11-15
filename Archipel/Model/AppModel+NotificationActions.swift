@@ -31,10 +31,10 @@ extension AppModel {
         )
     }
 
-    /// Buttons only where the app knows how to answer: Claude Code and Codex, not a shell or a script,
-    /// which could take a reply as a command.
+    /// Buttons only where the app knows how to answer: an agent prompt, not a shell or a script (which
+    /// always runs as one), since those could take a reply as a command.
     private func notificationCategory(for session: Session, activity: SessionActivity) -> AttentionNotifier.Category? {
-        guard session.agent == .claude || session.agent == .codex, scriptSessions[session.id] == nil else { return nil }
+        guard session.agent.definition.acceptsPrompts else { return nil }
         switch activity.status {
         case .needsAttention(.permission):
             // Claude asks its multiple choice questions through the permission hook; they have no Yes and No.
@@ -54,8 +54,8 @@ extension AppModel {
     func answer(_ response: AttentionNotifier.Response) {
         let id = response.sessionID
         let status = activity(for: id).status
-        guard let session = workspace.session(id: id), session.agent == .claude || session.agent == .codex,
-              scriptSessions[id] == nil, let terminal = terminals[id],
+        guard let session = workspace.session(id: id), session.agent.definition.acceptsPrompts,
+              let terminal = terminals[id],
               notifier.isCurrent(response), AttentionNotifier.statusKey(status) == response.status
         else { return bringForward(id) }
 

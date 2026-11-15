@@ -39,7 +39,7 @@ struct RootView: View {
         }
         .overlay { CommandPalette() }
         .overlay { TabSwitcher() }
-        .background(TabSwitcherKeyMonitor(switcher: switcher, model: model, isBlocked: { palette.isPresented }))
+        .background(TabSwitcherKeyMonitor(switcher: switcher, model: model, isBlocked: { [palette] in palette.isPresented }))
         .toolbar(removing: .title)
         .navigationTitle(windowTitle)
         .tint(model.selectedIsland?.tint.color)

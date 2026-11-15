@@ -78,6 +78,12 @@ struct LineIndexTests {
         #expect(index.line(containing: 12) == 5)
     }
 
+    @Test func keepsCRLFTogetherAcrossReadChunks() {
+        // The index reads 4096 UTF-16 units at a time; the CR is the last unit of the first chunk.
+        let text = String(repeating: "a", count: 4095) + "\r\nb"
+        #expect(LineIndex(text).starts == [0, 4097])
+    }
+
     @Test func countsUTF16ForAstralCharacters() {
         let index = LineIndex("\u{1F600}x\ny")
         #expect(index.starts == [0, 4])

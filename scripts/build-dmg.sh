@@ -32,7 +32,12 @@ if [[ ! -d "$root/Packages/TerminalKit/Frameworks/GhosttyKit.xcframework" ]]; th
   exit 1
 fi
 
-if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
+signed=false
+[[ -n "${SIGNING_IDENTITY:-}" ]] && signed=true
+notarize=false
+$signed && [[ -n "${NOTARY_KEY_PATH:-}" ]] && notarize=true
+
+if $signed; then
   team_id="${DEVELOPMENT_TEAM:?DEVELOPMENT_TEAM must be set when SIGNING_IDENTITY is}"
   signing=(
     CODE_SIGN_STYLE=Manual
@@ -61,7 +66,7 @@ xcodebuild archive \
   "${signing[@]}" >&2
 
 app="$archive/Products/Applications/Archipel.app"
-if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
+if $signed; then
   # The export re-signs for distribution and strips anything a Developer ID
   # build must not carry, such as the get-task-allow entitlement.
   cat > "$work/ExportOptions.plist" <<EOF
@@ -84,11 +89,6 @@ EOF
 fi
 codesign --verify --deep --strict "$app" >&2
 
-notarize=false
-if [[ -n "${SIGNING_IDENTITY:-}" && -n "${NOTARY_KEY_PATH:-}" ]]; then
-  notarize=true
-fi
-
 if $notarize; then
   # Stapling the app itself, not only the DMG, lets it pass Gatekeeper offline
   # once it has been copied out of the disk image.
@@ -105,7 +105,7 @@ ln -s /Applications "$work/dmg/Applications"
 rm -f "$dmg"
 hdiutil create -volname Archipel -srcfolder "$work/dmg" -fs APFS -format UDZO "$dmg" >&2
 
-if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
+if $signed; then
   codesign --sign "$SIGNING_IDENTITY" --timestamp "$dmg" >&2
 fi
 if $notarize; then

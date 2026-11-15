@@ -62,6 +62,10 @@ public struct Workspace: Codable, Equatable, Sendable {
         islands.flatMap { $0.projects.flatMap(\.worktrees) }
     }
 
+    public var allSessionIDs: Set<Session.ID> {
+        Set(islands.lazy.flatMap(\.projects).flatMap(\.worktrees).flatMap(\.sessions).map(\.id))
+    }
+
     public var allSessions: [Session] {
         allWorktrees.flatMap(\.sessions)
     }
@@ -212,21 +216,19 @@ public struct Workspace: Codable, Equatable, Sendable {
     @discardableResult
     public mutating func addWorktree(_ worktree: Worktree, to projectID: Project.ID) -> Bool {
         guard let loc = locate(projectID: projectID) else { return false }
-        let path = worktree.path.standardizedFileURL
-        guard !islands[loc.island].projects[loc.project].worktrees.contains(where: { $0.path.standardizedFileURL == path })
+        let key = Project.worktreeKey(worktree.path)
+        guard !islands[loc.island].projects[loc.project].worktrees.contains(where: { Project.worktreeKey($0.path) == key })
         else { return false }
         var worktree = worktree
         worktree.normalize()
         islands[loc.island].projects[loc.project].worktrees.append(worktree)
-        islands[loc.island].projects[loc.project].dismissedWorktreePaths.remove(Project.worktreeKey(worktree.path))
+        islands[loc.island].projects[loc.project].dismissedWorktreePaths.remove(key)
         selectWorktree(worktree.id)
         return true
     }
 
     public mutating func updateWorktree(id: Worktree.ID, _ change: (inout Worktree) -> Void) {
-        guard let loc = locate(worktreeID: id) else { return }
-        change(&islands[loc.island].projects[loc.project].worktrees[loc.worktree])
-        islands[loc.island].projects[loc.project].worktrees[loc.worktree].normalize()
+        edit(id, change)
     }
 
     /// The main worktree is the project folder itself, so it cannot be removed. With `dismiss` the

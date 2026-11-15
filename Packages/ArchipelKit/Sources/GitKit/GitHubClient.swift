@@ -53,13 +53,6 @@ public struct GitHubClient: Sendable {
         return try GitHubParser.pullRequest(Data(result.stdout.utf8))
     }
 
-    /// Opens GitHub's "new pull request" page for the current branch in the browser (`gh pr create --web`),
-    /// so the repo's PR template and the user's edits apply.
-    public func createPullRequestInBrowser(in folder: URL) async throws {
-        let result = try await run(["pr", "create", "--web"], in: folder)
-        guard result.status == 0 else { throw GitError(command: "gh pr create", output: result) }
-    }
-
     private func run(_ arguments: [String], in folder: URL) async throws -> GitProcess.Output {
         try await GitProcess.run(executable, arguments, in: folder, environment: [
             // gh shells out to git, which also needs to be findable.
