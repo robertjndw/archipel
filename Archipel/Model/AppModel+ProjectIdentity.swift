@@ -88,8 +88,8 @@ nonisolated enum ProjectIconFinder {
         return thumbnail(of: image)
     }
 
-    @concurrent
     /// The image to draw for `icon`, or nil when it is a symbol or nothing was found.
+    @concurrent
     static func image(for icon: ProjectIcon, in root: URL) async -> NSImage? {
         switch icon {
         case .symbol: nil

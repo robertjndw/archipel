@@ -18,9 +18,8 @@ that shows what every agent is doing.
 
 Running three or four agents at once usually means a pile of terminal tabs,
 branches that get in each other's way and a lot of checking whether something
-is done yet. In Archipel every task gets a worktree, every worktree gets its
-sessions, and the sidebar shows which agent is working, which one is waiting for
-you and which one has finished.
+is done yet. In Archipel every task gets its own worktree with its own
+sessions, and the sidebar shows which agents are working, waiting for you or done.
 
 ## Features
 
@@ -29,9 +28,12 @@ you and which one has finished.
 - Work is grouped as islands > projects > worktrees. Switch islands with
   <kbd>Ctrl</kbd>+<kbd>1</kbd> to <kbd>9</kbd> or a two-finger swipe over the sidebar.
   Agents in other islands keep running, and the island gets a badge when one needs you.
-- Create a worktree for a new branch from the sidebar. Worktrees you made with
-  `git worktree` yourself are picked up too.
-- Projects can have an icon and color, or use their GitHub avatar.
+- Add a worktree from one search field: pick an existing branch, or type a name
+  to create a new one. Worktrees you made with `git worktree` yourself are picked
+  up too.
+- Islands and projects get an SF Symbol and a color. A project can also use an
+  icon found in its repository (app icon, favicon or logo) or its owner's GitHub
+  avatar.
 - Each project can have a setup script that runs in new worktrees (installing
   dependencies, copying `.env`) and a run script for <kbd>⌘</kbd><kbd>R</kbd>.
 
@@ -61,8 +63,9 @@ you and which one has finished.
 - Split the window into panes, each with tabs for sessions, files and diffs.
 - Side-by-side diffs and an editor with syntax highlighting.
 - Leave comments on diff lines and send them to an agent in one go.
-- Stage, commit, push and pull from the Changes panel, and open a pull request
-  through `gh`.
+- Stage, discard, commit, push and pull from the Changes panel. Pull only
+  fast-forwards. With `gh` installed, the branch's pull request shows up there
+  and in the sidebar.
 - Open a worktree or file in VS Code, Cursor, Zed, Xcode or another editor.
 
 ### Status bar
@@ -89,6 +92,7 @@ you and which one has finished.
 | Add project | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>O</kbd> |
 | Run project | <kbd>⌘</kbd><kbd>R</kbd> |
 | Commit | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> |
+| Save all files | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>S</kbd> |
 | Show Files / Changes / toggle inspector | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>1</kbd> / <kbd>2</kbd> / <kbd>0</kbd> |
 | Open in external editor | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>E</kbd> |
 
@@ -103,12 +107,12 @@ Applications.
 **Requirements:** macOS 27, Xcode 27 and Zig 0.17 (`brew install zig`). You only need
 the agents you want to use: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or
 [Codex](https://github.com/openai/codex), plus the [GitHub CLI](https://cli.github.com)
-for pull requests.
+to see pull requests.
 
 ```sh
 git clone https://github.com/robertjndw/archipel.git
 cd archipel
-./scripts/build-ghostty.sh   # once, and after bumping the Ghostty tag
+./scripts/build-ghostty.sh   # once (delete Vendor/ghostty first after a tag bump)
 ./scripts/install.sh         # builds a Release copy into /Applications
 ```
 
@@ -168,17 +172,23 @@ open -n --env ARCHIPEL_SUPPORT_DIR=/tmp/archipel-dev path/to/Archipel.app
   `GitKit` (async wrapper over git: status, staging, diffs, worktrees),
   `InspectorUI` (the Files and Changes sidebar), `EditorUI` (the file editor
   and the side-by-side diff view; syntax highlighting comes from highlight.js
-  through the HighlighterSwift package) and the `archipel-hook` helper that
+  through the HighlighterSwift package), `UISupport` (view helpers those two
+  share) and the `archipel-hook` helper that
   agents call. Run `swift test` here. `editor-demo` opens an editor or diff
   in a window of its own.
 - `Packages/TerminalKit` - the only code that talks to Ghostty. Includes
   `terminal-demo`, a one-window harness for testing a surface in isolation.
-- `scripts/` - `build-ghostty.sh`, `install.sh` and `build-dmg.sh`, which the
-  release workflow uses. See [docs/releasing.md](docs/releasing.md).
+- `scripts/` - `build-ghostty.sh`, `install.sh`, and `build-dmg.sh` and
+  `notarize.sh`, which the release workflow uses. See
+  [docs/releasing.md](docs/releasing.md).
 - `Configs/` - shared build settings and the optional `Local.xcconfig`.
 
 ## Acknowledgements
 
-The terminals are [Ghostty](https://github.com/ghostty-org/ghostty). See
+The terminals are [Ghostty](https://github.com/ghostty-org/ghostty), and syntax
+highlighting comes from [highlight.js](https://highlightjs.org) through
+[HighlighterSwift](https://github.com/smittytone/HighlighterSwift). Their
+licenses are in
 [`Packages/TerminalKit/THIRD_PARTY_NOTICES.md`](Packages/TerminalKit/THIRD_PARTY_NOTICES.md)
-for third-party licenses.
+and
+[`Packages/ArchipelKit/THIRD_PARTY_NOTICES.md`](Packages/ArchipelKit/THIRD_PARTY_NOTICES.md).

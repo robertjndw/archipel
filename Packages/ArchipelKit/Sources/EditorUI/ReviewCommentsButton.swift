@@ -30,8 +30,7 @@ struct ReviewCommentsButton: View {
                 }
                 .labelStyle(.titleAndIcon)
             }
-            // The one glass control in the diff header: the comments are what
-            // the review is working towards, so they should stand out.
+            // The only glass control in the diff header, so the comments stand out.
             .buttonStyle(.glass)
             .controlSize(.small)
             .help("Review Comments")

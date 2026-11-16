@@ -29,8 +29,8 @@ extension AppModel {
         projectSettingsID = id
     }
 
-    /// The Run command: restarts this run's Run session if the worktree has one, otherwise starts a
-    /// new one. Without a run script there is nothing to start, so the settings open instead.
+    /// The Run command: restarts the worktree's Run session if it has one, otherwise starts a new
+    /// one. Without a run script there is nothing to start, so the settings open instead.
     func runProject(in worktreeID: Worktree.ID) {
         guard let project = project(ofWorktree: worktreeID) else { return }
         guard project.scripts.runCommand != nil else {

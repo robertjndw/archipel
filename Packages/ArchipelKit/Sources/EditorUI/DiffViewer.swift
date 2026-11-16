@@ -3,7 +3,7 @@ import GitKit
 import SwiftUI
 import UISupport
 
-/// Side-by-side comparison of one changed file in a git checkout.
+/// Diff of one changed file in a git checkout, side by side or inline.
 /// staged true: HEAD vs index. staged false: index vs working tree (an untracked file is all-added).
 public struct DiffViewer: View {
     private let root: URL

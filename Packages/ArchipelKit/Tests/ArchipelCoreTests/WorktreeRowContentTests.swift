@@ -125,7 +125,7 @@ struct WorktreeRowContentTests {
         let one = makeWorktree("w", branch: "b", sessions: [makeSession("a")])
         let row = WorktreeRowContent(worktree: one, activity: nil, git: nil)
         #expect(row.agent == .claude)
-        // The agent no longer takes the second line, so the folder gets it.
+        // The agent shows as the icon, so the second line goes to the folder.
         #expect(row.metadata == [.folder("w")])
     }
 

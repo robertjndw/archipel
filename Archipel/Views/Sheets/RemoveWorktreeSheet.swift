@@ -82,7 +82,7 @@ struct RemoveWorktreeSheet: View {
                 }
             } footer: {
                 if !deleteFolder {
-                    Text("The folder and branch stay on disk. You can add the worktree back from Add Worktree > Existing Worktree.")
+                    Text("The folder and branch stay on disk. You can add the worktree back from Add Worktree.")
                 } else if worktree.branch != nil {
                     Text("A branch with commits that are not merged is kept.")
                 }

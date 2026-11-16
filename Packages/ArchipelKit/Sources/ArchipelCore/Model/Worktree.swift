@@ -41,6 +41,5 @@ public struct Worktree: Codable, Equatable, Identifiable, Sendable {
         panes.first { $0.id == focusedPaneID } ?? panes.first
     }
 
-    /// branch if there is one, otherwise the folder name.
     public var displayName: String { branch ?? path.lastPathComponent }
 }

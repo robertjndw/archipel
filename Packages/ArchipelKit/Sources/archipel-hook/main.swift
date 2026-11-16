@@ -20,7 +20,7 @@ let arguments = CommandLine.arguments
 let isStatusLine = arguments.count >= 2 && arguments[1] == "statusline"
 
 // Watchdog: whatever blocks (a stdin that never closes, a wedged socket, a slow status line
-// script), the agent gets its exit 0. The user's status line gets longer, since it may run git.
+// script), the agent gets its exit 0. The user's status line gets more time, since it may run git.
 DispatchQueue.global().asyncAfter(deadline: .now() + (isStatusLine ? 5 : 2)) { exit(0) }
 
 func run() {

@@ -152,7 +152,7 @@ private struct IslandButton: View {
                 .frame(width: 16)
                 // Always in the tree and unrolled by width instead of inserted with a transition: a
                 // removed view keeps drawing at its old spot while the stack closes up, so the
-                // outgoing name used to slide over its neighbours' icons.
+                // outgoing name would slide over its neighbours' icons.
                 Text(island.name)
                     .lineLimit(1)
                     .truncationMode(.tail)

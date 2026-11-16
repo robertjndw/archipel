@@ -20,7 +20,6 @@ extension AppModel {
         selectedIsland?.projects.contains(where: \.isExpanded) ?? false
     }
 
-    /// Collapses or expands every project of the selected island in one step.
     func setAllProjects(expanded: Bool) {
         let ids = selectedIsland?.projects.map(\.id) ?? []
         mutate { workspace in

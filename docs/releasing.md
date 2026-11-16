@@ -27,7 +27,7 @@ To build the same DMG locally:
 
 ## Signing
 
-The workflow runs without any secrets. The DMG is then signed ad-hoc, and
+The workflow runs without any secrets. The app is then signed ad-hoc, and
 macOS refuses to open it on first launch. To open it anyway, go to System
 Settings > Privacy & Security and click Open Anyway, or remove the quarantine
 flag:

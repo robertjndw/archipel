@@ -297,8 +297,8 @@ private struct TabButton: View {
 /// which is what tells the panes apart at a glance.
 ///
 /// One view that slides under the selected tab instead of glass on every tab.
-/// Per-tab glass merged with its neighbours when a tab was opened or closed,
-/// which smeared a blurry blob over their labels and sometimes left it there.
+/// Per-tab glass merges with its neighbours when a tab opens or closes and
+/// smears a blurry blob over their labels, which sometimes stays there.
 private struct SelectionCapsule: View {
     let isActive: Bool
 

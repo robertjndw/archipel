@@ -201,7 +201,8 @@ func claudeHookSettings(hook: URL) -> String {
         hooks[event] = [["hooks": [handler]]]
     }
     // Claude hands the status line its rate limits, which nothing else exposes. archipel-hook passes
-    // them on and then runs the user's own status line, so the terminal looks the same as before.
+    // them on and then runs the user's own status line, so the terminal looks the same as it does
+    // outside Archipel.
     let statusLine: [String: Any] = [
         "type": "command",
         "command": ShellQuoting.quote(hook.path) + " statusline",
