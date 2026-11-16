@@ -41,7 +41,7 @@ jobs:
       # to a Mac that can't run it.
       MINIMUM_SYSTEM_VERSION: "27.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Work out the version
         env:
@@ -98,7 +98,7 @@ jobs:
 
       - name: Cache GhosttyKit
         id: ghostty-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             Packages/TerminalKit/Frameworks
@@ -223,7 +223,7 @@ jobs:
 
       - name: Upload the DMG as an artifact
         if: github.event_name != 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Archipel-${{ env.VERSION }}
           path: ${{ env.DMG }}

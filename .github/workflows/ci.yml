@@ -23,7 +23,7 @@ jobs:
     env:
       XCODE_APP: /Applications/Xcode_27.2.app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Select Xcode
         run: |
@@ -41,7 +41,7 @@ jobs:
       # Shares its key with the release workflow, so a release usually starts with a warm cache.
       - name: Cache GhosttyKit
         id: ghostty-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             Packages/TerminalKit/Frameworks
