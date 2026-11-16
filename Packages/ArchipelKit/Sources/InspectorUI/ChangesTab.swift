@@ -398,21 +398,40 @@ struct ChangesTab: View {
     }
 
     private func section(_ title: LocalizedStringKey, changes: [GitFileChange], staged: Bool, isExpanded: Binding<Bool>) -> some View {
-        Section(isExpanded: isExpanded) {
-            // Identified by path and side: a partially staged file is listed in both
-            // sections of the same List, and identical ids would make SwiftUI drop a row.
-            ForEach(changes.map { ListedChange(change: $0, staged: staged) }) { row in
-                ChangeRow(change: row.change, staged: staged, model: model) {
-                    discardRequest = .file(row.change, staged: staged)
+        // Section(isExpanded:) gets a hover-only chevron on the trailing edge in sidebar lists,
+        // which pushes the header buttons left right when you try to click them.
+        Section {
+            if isExpanded.wrappedValue {
+                // Identified by path and side: a partially staged file is listed in both
+                // sections of the same List, and identical ids would make SwiftUI drop a row.
+                ForEach(changes.map { ListedChange(change: $0, staged: staged) }) { row in
+                    ChangeRow(change: row.change, staged: staged, model: model) {
+                        discardRequest = .file(row.change, staged: staged)
+                    }
+                        .tag(row.id)
                 }
-                    .tag(row.id)
             }
         } header: {
             HStack {
-                Text(title)
-                Text(changes.count, format: .number)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) { isExpanded.wrappedValue.toggle() }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
+                            .accessibilityHidden(true)
+                        Text(title)
+                        Text(changes.count, format: .number)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(isExpanded.wrappedValue ? "Expanded" : "Collapsed")
+                .accessibilityHint(isExpanded.wrappedValue ? "Collapses the section" : "Expands the section")
                 Spacer()
                 if !staged {
                     let discardable = changes.filter(\.isDiscardable).count
