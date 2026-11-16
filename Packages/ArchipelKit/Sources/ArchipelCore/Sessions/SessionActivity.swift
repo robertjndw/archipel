@@ -21,6 +21,12 @@ public struct SessionActivity: Equatable, Sendable {
 
     public var needsUser: Bool { status.needsUser }
 
+    /// A finished turn with background subagents still running is not done yet. `.starting` is
+    /// left out on purpose: a tab that is only booting shouldn't hold back another tab's result.
+    public var isBusy: Bool {
+        status == .working || subagents.count > 0
+    }
+
     public mutating func markViewed() {
         unread = false
     }
@@ -32,9 +38,10 @@ public struct SessionActivity: Equatable, Sendable {
     public mutating func apply(_ event: AgentEvent, isBeingViewed: Bool, at now: Date = Date()) {
         // A dead process stays dead until the app relaunches it.
         if case .exited = status, event != .launched { return }
+        let previous = status
+        let wasBusy = isBusy
         subagents.apply(event, at: now)
 
-        let previous = status
         switch event {
         case .launched:
             status = .starting
@@ -47,10 +54,16 @@ public struct SessionActivity: Equatable, Sendable {
             if status == .starting || status == .notStarted { status = .finished }
             return
         case .subagentStarted, .subagentFinished:
-            // The roster above is all they change. A subagent only starts from inside a turn, so
-            // the session is working already.
-            return
-        case .promptSubmitted, .activity, .subagentActivity:
+            // Only the roster changes, but the last subagent of an ended turn leaving is when that
+            // turn's result is finally ready, which the check below picks up.
+            break
+        case .subagentActivity:
+            // A background subagent keeps calling tools after the main turn has ended, and that
+            // must not reopen the turn. The one status it does change is a request: a subagent's
+            // permission prompt is reported as the session's, and its next tool call means the
+            // user answered it.
+            if status.needsUser { status = completedTurn ? .finished : .working }
+        case .promptSubmitted, .activity:
             status = .working
             completedTurn = false
             // Typing the next prompt is the clearest sign the last result was seen.
@@ -73,7 +86,21 @@ public struct SessionActivity: Equatable, Sendable {
             status = .exited(code: code)
         }
 
-        if status != previous, Self.isNotable(status) { unread = true }
+        markUnreadIfSettled(from: previous, wasBusy: wasBusy)
+    }
+
+    /// Drops subagents that went quiet for too long. Nothing else may arrive to do it, so the app
+    /// calls this on a timer when `subagents.nextExpiry` passes.
+    public mutating func expireSubagents(at now: Date = Date()) {
+        let wasBusy = isBusy
+        subagents.expire(at: now)
+        markUnreadIfSettled(from: status, wasBusy: wasBusy)
+    }
+
+    private mutating func markUnreadIfSettled(from previous: SessionStatus, wasBusy: Bool) {
+        let becameIdle = wasBusy && !isBusy
+        let settled = status != previous || (status == .finished && becameIdle)
+        if settled, Self.isNotable(status), !(status == .finished && isBusy) { unread = true }
     }
 
     private static func isNotable(_ status: SessionStatus) -> Bool {

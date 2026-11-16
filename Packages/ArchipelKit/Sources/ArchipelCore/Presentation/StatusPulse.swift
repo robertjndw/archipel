@@ -24,4 +24,21 @@ public enum StatusPulse: Comparable, Sendable {
             nil
         }
     }
+
+    /// Requests and failures glow right away. A finished result waits until nothing in the
+    /// worktree is running, otherwise it calls you back while subagents or another tab are still
+    /// going. That can happen without a status change, when the last background subagent leaves.
+    ///
+    /// `siblings` are the worktree's other sessions, which this change did not touch.
+    public static func kind(
+        from before: SessionActivity,
+        to after: SessionActivity,
+        siblings: some Sequence<SessionActivity>
+    ) -> StatusPulse? {
+        if let kind = kind(from: before.status, to: after.status), kind != .finished { return kind }
+        guard after.status == .finished, !after.isBusy, !siblings.contains(where: \.isBusy) else { return nil }
+        // Same rule as for a single status: an agent that only got ready after launching has
+        // produced nothing to look at.
+        return before.isBusy || before.status.needsUser ? .finished : nil
+    }
 }

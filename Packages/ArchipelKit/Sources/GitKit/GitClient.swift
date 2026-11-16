@@ -171,6 +171,57 @@ public struct GitClient: Sendable {
         try await run(["reset", "-q"], in: folder, readOnly: false)
     }
 
+    /// Throws away the working tree edits of unstaged entries, leaving the index alone. Untracked
+    /// files have no copy in git, so they go to the Trash where they can still be recovered.
+    /// Conflicted entries are skipped: picking a side is a merge decision, not a discard.
+    public func discardUnstaged(_ changes: [GitFileChange], in folder: URL) async throws {
+        let changes = changes.filter { $0.kind != .conflicted }
+        let top = try await topLevel(of: folder)
+        for change in changes where change.kind == .untracked {
+            try trash(top.appending(path: change.path))
+        }
+        let tracked = changes.filter { $0.kind != .untracked }.map(\.path)
+        guard !tracked.isEmpty else { return }
+        try await run(["restore", "--worktree", "--"] + pathspecs(tracked), in: folder, readOnly: false)
+    }
+
+    /// Resets staged entries to HEAD in both index and working tree. Files HEAD has never seen
+    /// (added, or the new name of a rename) cannot be restored, so they are removed instead. That
+    /// also covers an unborn branch, where every staged entry is an addition.
+    public func discardStaged(_ changes: [GitFileChange], in folder: URL) async throws {
+        let changes = changes.filter { $0.kind != .conflicted }
+        var removed: [String] = []
+        var restored: [String] = []
+        for change in changes {
+            switch change.kind {
+            case .added:
+                removed.append(change.path)
+            case .renamed, .copied:
+                removed.append(change.path)
+                // A copy leaves its source in place, so only a rename has an old name to bring back.
+                if change.kind == .renamed, let original = change.originalPath { restored.append(original) }
+            default:
+                restored.append(change.path)
+            }
+        }
+        if !removed.isEmpty {
+            try await run(["rm", "-f", "-q", "--"] + pathspecs(removed), in: folder, readOnly: false)
+        }
+        if !restored.isEmpty {
+            try await run(["restore", "--source=HEAD", "--staged", "--worktree", "--"] + pathspecs(restored), in: folder, readOnly: false)
+        }
+    }
+
+    private func topLevel(of folder: URL) async throws -> URL {
+        let top = try await run(["rev-parse", "--show-toplevel"], in: folder).trimmingCharacters(in: .newlines)
+        return URL(filePath: top, directoryHint: .isDirectory)
+    }
+
+    private func trash(_ url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+    }
+
     public func diff(path: String, staged: Bool, in folder: URL) async throws -> String {
         let base = ["diff", "--no-color", "--no-ext-diff"]
         if staged {

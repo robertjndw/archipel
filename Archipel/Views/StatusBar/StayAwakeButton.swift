@@ -53,7 +53,8 @@ struct StayAwakeButton: View {
         case .always: "Keeping the Mac awake while Archipel is open."
         }
         // Idle sleep is the only kind an app can prevent; closing the lid still sleeps the Mac.
-        return state + " The display can still turn off, and closing the lid still puts the Mac to sleep."
+        let display = model.stayAwake.keepsDisplayAwake ? "The display stays on too" : "The display can still turn off"
+        return state + " " + display + ", and closing the lid still puts the Mac to sleep."
     }
 }
 

@@ -8,6 +8,7 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         @Bindable var settings = model.settings
+        @Bindable var stayAwake = model.stayAwake
         let installed = ExternalEditor.installed()
         Form {
             Section {
@@ -54,6 +55,25 @@ struct GeneralSettingsView: View {
                     Text("Fetch automatically")
                     Text("Keeps behind counts current while Archipel is in front. Only remote branches are updated.")
                 }
+            }
+
+            Section {
+                Picker(selection: $stayAwake.mode) {
+                    ForEach(StayAwake.Mode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                } label: {
+                    Text("Keep Mac awake")
+                    Text("Stops the Mac from idle sleeping so agents can finish long turns.")
+                }
+
+                Toggle(isOn: $stayAwake.keepsDisplayAwake) {
+                    Text("Keep display awake")
+                    Text("Otherwise the display may turn off while the Mac stays awake. Closing the lid still puts the Mac to sleep.")
+                }
+                .disabled(stayAwake.mode == .off)
+            } header: {
+                Text("Stay Awake")
             }
 
             Section {

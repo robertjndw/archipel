@@ -19,6 +19,7 @@ final class AppModel {
     /// Glows of changes that happened while Archipel was in the background. They would play behind
     /// another app where nobody sees them, so they wait for the app to come back.
     @ObservationIgnored private var pulsesAwaitingActivation: [Worktree.ID: StatusPulse] = [:]
+    @ObservationIgnored private var subagentExpiry: (date: Date, task: Task<Void, Never>)?
     /// Shown as an alert.
     var problem: String?
 
@@ -645,7 +646,7 @@ final class AppModel {
     }
 
     var hasWorkingSessions: Bool {
-        activities.values.contains { $0.status == .working }
+        activities.values.contains(where: \.isBusy)
     }
 
     // MARK: Running sessions
@@ -840,36 +841,75 @@ final class AppModel {
     }
 
     private func apply(_ event: AgentEvent, to id: Session.ID) {
-        guard let session = workspace.session(id: id) else { return }
+        guard workspace.session(id: id) != nil else { return }
         var activity = activities[id] ?? SessionActivity()
         let before = activity
         let viewed = isBeingViewed(id)
         activity.apply(event, isBeingViewed: viewed)
+        commit(activity, replacing: before, of: id, viewed: viewed)
+    }
+
+    private func commit(_ activity: SessionActivity, replacing before: SessionActivity, of id: Session.ID, viewed: Bool) {
         // Most hook events (a tool call while already working) change nothing, and writing anyway would
         // re-render every view that reads `activities`.
-        guard activity != before else { return }
+        guard activity != before, let session = workspace.session(id: id) else { return }
         activities[id] = activity
+        scheduleSubagentExpiry()
         let statusChanged = activity.status != before.status
-        if let kind = StatusPulse.kind(from: before.status, to: activity.status),
-           let worktreeID = workspace.worktree(containing: id)?.id {
+        let worktree = workspace.worktree(containing: id)
+        let siblings = (worktree?.sessions ?? []).lazy.filter { $0.id != id }.compactMap { self.activities[$0.id] }
+        let pulse = StatusPulse.kind(from: before, to: activity, siblings: siblings)
+        if let pulse, let worktreeID = worktree?.id {
             if NSApp.isActive {
-                statusPulses[worktreeID, default: StatusPulseCount()].play(kind)
+                statusPulses[worktreeID, default: StatusPulseCount()].play(pulse)
             } else {
-                pulsesAwaitingActivation[worktreeID] = max(pulsesAwaitingActivation[worktreeID] ?? kind, kind)
+                pulsesAwaitingActivation[worktreeID] = max(pulsesAwaitingActivation[worktreeID] ?? pulse, pulse)
             }
         }
         // Before posting: buttons on an older notification of this session must not answer whatever comes next.
         if statusChanged { notifier.invalidate(sessionID: id) }
 
+        // Finished banners follow the glow, so they wait until the whole worktree is done.
+        let worthABanner = activity.status == .finished ? pulse == .finished : statusChanged
         // The session stays unread while on screen, but a banner about the thing you are looking at
         // is noise.
-        if activity.unread, !viewed, statusChanged {
+        if activity.unread, !viewed, worthABanner {
             notify(session: session, activity: activity)
         }
         refreshDockBadge()
         if statusChanged {
             sessionStatusChanged(id, from: before.status, to: activity.status)
         }
+    }
+
+    /// A subagent whose stop got lost keeps its worktree busy until something prunes it, and no
+    /// further event may come. So a timer prunes at the earliest expiry.
+    private func scheduleSubagentExpiry() {
+        let next = activities.values.compactMap(\.subagents.nextExpiry).min()
+        guard next != subagentExpiry?.date else { return }
+        subagentExpiry?.task.cancel()
+        guard let next else {
+            subagentExpiry = nil
+            return
+        }
+        let task = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, next.timeIntervalSinceNow)))
+            guard !Task.isCancelled else { return }
+            self?.expireQuietSubagents()
+        }
+        subagentExpiry = (next, task)
+    }
+
+    private func expireQuietSubagents() {
+        subagentExpiry = nil
+        let now = Date()
+        // One session at a time, so the worktree's result glows when its last busy session settles.
+        for (id, before) in activities {
+            var activity = before
+            activity.expireSubagents(at: now)
+            commit(activity, replacing: before, of: id, viewed: isBeingViewed(id))
+        }
+        scheduleSubagentExpiry()
     }
 
     private func notify(session: Session, activity: SessionActivity) {

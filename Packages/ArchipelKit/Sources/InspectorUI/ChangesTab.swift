@@ -118,6 +118,24 @@ final class ChangesModel {
         perform { try await $0.unstageAll(in: $1) }
     }
 
+    func discard(_ change: GitFileChange, staged: Bool) {
+        let changes = [change]
+        perform { git, root in
+            if staged {
+                try await git.discardStaged(changes, in: root)
+            } else {
+                try await git.discardUnstaged(changes, in: root)
+            }
+        }
+    }
+
+    /// Only the unstaged section: staged work is never thrown away in bulk.
+    func discardAll() {
+        let changes = status.unstaged.filter(\.isDiscardable)
+        guard !changes.isEmpty else { return }
+        perform { try await $0.discardUnstaged(changes, in: $1) }
+    }
+
     func commit() {
         let control = commitControl
         guard control.isEnabled else { return }
@@ -256,12 +274,43 @@ final class ChangesModel {
     }
 }
 
+extension GitFileChange {
+    /// Conflicts need resolving, and discarding one would silently pick a side.
+    var isDiscardable: Bool { kind != .conflicted }
+}
+
+/// What the confirmation dialog is asking about. Lives on the model so rows, menus and the
+/// section header can all raise the one dialog.
+enum DiscardRequest: Equatable {
+    case file(GitFileChange, staged: Bool)
+    case allUnstaged(count: Int)
+
+    var title: String {
+        switch self {
+        case .file(let change, _): "Discard changes to \((change.path as NSString).lastPathComponent)?"
+        case .allUnstaged(let count): "Discard all \(count) unstaged changes?"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .file(let change, let staged):
+            if change.kind == .untracked { return "This file is not tracked by Git. It will be moved to the Trash." }
+            if staged { return "Staged and unstaged changes to this file will be lost. This can't be undone." }
+            return "This can't be undone."
+        case .allUnstaged:
+            return "Untracked files will be moved to the Trash. Changes to tracked files can't be recovered. Staged changes are kept."
+        }
+    }
+}
+
 struct ChangesTab: View {
     @Bindable var model: ChangesModel
     let actions: InspectorActions
     @Binding var focusCommitMessage: Bool
     @State private var showsStaged = true
     @State private var showsUnstaged = true
+    @State private var discardRequest: DiscardRequest?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -288,6 +337,20 @@ struct ChangesTab: View {
         .onChange(of: model.status.branch) { refreshRemoteInfo() }
         .onChange(of: model.status.upstream) { refreshRemoteInfo() }
         .onAppActivation(perform: refreshRemoteInfo)
+        .confirmationDialog(
+            discardRequest?.title ?? "",
+            isPresented: Binding(get: { discardRequest != nil }, set: { if !$0 { discardRequest = nil } }),
+            presenting: discardRequest
+        ) { request in
+            Button("Discard", role: .destructive) {
+                switch request {
+                case .file(let change, let staged): model.discard(change, staged: staged)
+                case .allUnstaged: model.discardAll()
+                }
+            }
+        } message: { request in
+            Text(request.message)
+        }
     }
 
     @ViewBuilder
@@ -321,7 +384,9 @@ struct ChangesTab: View {
             .scrollEdgeFade()
             .contextMenu(forSelectionType: ChangeID.self) { ids in
                 if let id = ids.first, let change = model.change(for: id) {
-                    ChangeContextMenu(change: change, staged: id.staged, model: model, actions: actions)
+                    ChangeContextMenu(change: change, staged: id.staged, model: model, actions: actions) {
+                        discardRequest = .file(change, staged: id.staged)
+                    }
                 }
             } primaryAction: { ids in
                 for id in ids { actions.openDiff(id.path, id.staged, false) }
@@ -337,7 +402,9 @@ struct ChangesTab: View {
             // Identified by path and side: a partially staged file is listed in both
             // sections of the same List, and identical ids would make SwiftUI drop a row.
             ForEach(changes.map { ListedChange(change: $0, staged: staged) }) { row in
-                ChangeRow(change: row.change, staged: staged, model: model)
+                ChangeRow(change: row.change, staged: staged, model: model) {
+                    discardRequest = .file(row.change, staged: staged)
+                }
                     .tag(row.id)
             }
         } header: {
@@ -347,6 +414,17 @@ struct ChangesTab: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                 Spacer()
+                if !staged {
+                    let discardable = changes.filter(\.isDiscardable).count
+                    if discardable > 0 {
+                        Button("Discard All Changes", systemImage: "arrow.uturn.backward") {
+                            discardRequest = .allUnstaged(count: discardable)
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Discard All Changes")
+                    }
+                }
                 Button(staged ? "Unstage All" : "Stage All", systemImage: staged ? "minus" : "plus") {
                     staged ? model.unstageAll() : model.stageAll()
                 }
@@ -370,6 +448,7 @@ private struct ChangeRow: View {
     let change: GitFileChange
     let staged: Bool
     let model: ChangesModel
+    let requestDiscard: () -> Void
     @State private var isHovering = false
 
     var body: some View {
@@ -391,6 +470,12 @@ private struct ChangeRow: View {
                 .truncationMode(.head)
             Spacer(minLength: 0)
             if isHovering {
+                if change.isDiscardable {
+                    Button("Discard Changes", systemImage: "arrow.uturn.backward", action: requestDiscard)
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Discard Changes")
+                }
                 Button(staged ? "Unstage Changes" : "Stage Changes", systemImage: staged ? "minus" : "plus", action: toggleStage)
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
@@ -407,6 +492,7 @@ private struct ChangeRow: View {
         .help(change.originalPath.map { "\(change.path), renamed from \($0)" } ?? change.path)
         .accessibilityElement(children: .combine)
         .accessibilityAction(named: staged ? "Unstage" : "Stage", toggleStage)
+        .accessibilityAction(named: "Discard") { if change.isDiscardable { requestDiscard() } }
     }
 
     private func toggleStage() {
@@ -433,10 +519,14 @@ private struct ChangeContextMenu: View {
     let staged: Bool
     let model: ChangesModel
     let actions: InspectorActions
+    let requestDiscard: () -> Void
 
     var body: some View {
         Button(staged ? "Unstage Changes" : "Stage Changes") {
             staged ? model.unstage(change) : model.stage(change)
+        }
+        if change.isDiscardable {
+            Button("Discard Changes…", role: .destructive, action: requestDiscard)
         }
         Divider()
         Button("Open File") { actions.openFile(model.url(for: change), false) }

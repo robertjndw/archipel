@@ -94,6 +94,52 @@ final class GitClientTests {
         #expect(status.unstaged.count == 2)
     }
 
+    @Test func discardUnstagedRestoresTrackedAndTrashesUntracked() async throws {
+        try write("a.txt", "a\n")
+        try write("gone.txt", "g\n")
+        try commitAll()
+        try write("a.txt", "changed\n")
+        try FileManager.default.removeItem(at: repo.appending(path: "gone.txt"))
+        try write("new [1].txt", "n\n")
+
+        let status = try await git.status(in: repo)
+        try await git.discardUnstaged(status.unstaged, in: repo)
+
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "a\n")
+        #expect(FileManager.default.fileExists(atPath: repo.appending(path: "gone.txt").path))
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "new [1].txt").path))
+        #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: []))
+    }
+
+    @Test func discardStagedResetsToHeadAndRemovesAdditions() async throws {
+        try write("a.txt", "a\n")
+        try write("old.txt", "o\n")
+        try commitAll()
+        try write("a.txt", "changed\n")
+        try write("added.txt", "x\n")
+        try sh("mv", "old.txt", "new.txt")
+        try await git.stageAll(in: repo)
+
+        let status = try await git.status(in: repo)
+        try await git.discardStaged(status.staged, in: repo)
+
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "a\n")
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "added.txt").path))
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "new.txt").path))
+        #expect(FileManager.default.fileExists(atPath: repo.appending(path: "old.txt").path))
+        #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: []))
+    }
+
+    @Test func discardStagedWorksWithoutCommits() async throws {
+        try write("first.txt", "1\n")
+        try await git.stageAll(in: repo)
+
+        let status = try await git.status(in: repo)
+        try await git.discardStaged(status.staged, in: repo)
+
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "first.txt").path))
+    }
+
     @Test func worktreeLifecycle() async throws {
         try write("a.txt", "a\n")
         try commitAll()

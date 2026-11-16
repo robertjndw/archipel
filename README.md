@@ -68,7 +68,7 @@ you and which one has finished.
 ### Status bar
 
 - Your Claude and Codex usage limits.
-- Stay Awake, which keeps the Mac from sleeping while agents work.
+- Stay Awake, which keeps the Mac (and optionally the display) from sleeping while agents work.
 - CPU and memory per terminal, including processes that kept running after
   their tab was closed.
 

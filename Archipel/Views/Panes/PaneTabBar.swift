@@ -226,6 +226,7 @@ private struct TabButton: View {
     let pin: () -> Void
     let close: () -> Void
     @State private var isHovering = false
+    @State private var isOverClose = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -261,6 +262,7 @@ private struct TabButton: View {
                     .buttonStyle(.borderless)
                     .imageScale(.small)
                     .opacity(isHovering ? 1 : 0)
+                    .onHover { isOverClose = $0 }
             }
             .frame(width: 18)
         }
@@ -276,8 +278,11 @@ private struct TabButton: View {
         }
         .animation(.easeOut(duration: 0.15), value: isHovering)
         .contentShape(.capsule)
-        .gesture(TapGesture(count: 2).onEnded(pin))
-        .simultaneousGesture(TapGesture().onEnded(select))
+        // The tab-wide taps also fire for a click on the close button, which would select the tab
+        // being closed and make closing it pick a neighbour. A background tap target would not
+        // work instead: the title and icon sit on top of it and swallow the click.
+        .gesture(TapGesture(count: 2).onEnded { if !isOverClose { pin() } })
+        .simultaneousGesture(TapGesture().onEnded { if !isOverClose { select() } })
         .onHover { isHovering = $0 }
         .help(label.detail ?? label.title)
         .accessibilityElement(children: .combine)

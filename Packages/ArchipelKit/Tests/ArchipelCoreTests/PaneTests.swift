@@ -128,6 +128,15 @@ struct PaneTests {
         #expect(ws.tab(id: id)?.isPreview == false)
     }
 
+    @Test func closingAnUnselectedTabKeepsTheSelection() throws {
+        var (ws, m, _) = fixture()
+        let ta = try #require(ws.tab(showing: a.id)), tc = try #require(ws.tab(showing: c.id))
+        ws.selectTab(id: ta.id)
+        ws.closeTab(id: tc.id)
+        #expect(wt(ws, m).panes[0].selectedTab?.id == ta.id)
+        #expect(invariantsHold(ws))
+    }
+
     @Test func closeTabSelectsNextThenPreviousThenNone() throws {
         var (ws, m, _) = fixture()
         let tb = try #require(ws.tab(showing: b.id)), ta = try #require(ws.tab(showing: a.id)), tc = try #require(ws.tab(showing: c.id))

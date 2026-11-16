@@ -76,36 +76,55 @@ private struct InspectorTabSwitcher: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(InspectorView.Tab.allCases) { tab in
-                let isSelected = tab == selection
-                Button {
-                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { selection = tab }
-                } label: {
-                    Label(tab.title, systemImage: tab.symbol)
-                        .font(.callout.weight(isSelected ? .semibold : .regular))
-                        .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                        .padding(.horizontal, 12)
-                        .frame(maxWidth: .infinity, minHeight: 22)
-                        .background {
-                            if isSelected {
-                                // A fill, not a second layer of glass on the capsule's glass.
-                                Capsule()
-                                    .fill(.tint.opacity(0.18))
-                                    .matchedGeometryEffect(id: "selection", in: highlight)
-                            }
-                        }
-                        .contentShape(.capsule)
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-            }
+        // Both segments switch together so the capsule never shows one label and one icon. The text
+        // variant is fixed to its ideal width, so it reports "does not fit" instead of wrapping.
+        ViewThatFits(in: .horizontal) {
+            segments(showsTitle: true)
+            segments(showsTitle: false)
         }
         .padding(3)
         .glassEffect(.regular, in: .capsule)
         .frame(maxWidth: 240)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("View")
+    }
+
+    private func segments(showsTitle: Bool) -> some View {
+        HStack(spacing: 2) {
+            ForEach(InspectorView.Tab.allCases) { tab in
+                let isSelected = tab == selection
+                Button {
+                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { selection = tab }
+                } label: {
+                    Group {
+                        if showsTitle {
+                            Label(tab.title, systemImage: tab.symbol)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        } else {
+                            Image(systemName: tab.symbol)
+                        }
+                    }
+                    .font(.callout.weight(isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity, minHeight: 22)
+                    .background {
+                        if isSelected {
+                            // A fill, not a second layer of glass on the capsule's glass.
+                            Capsule()
+                                .fill(.tint.opacity(0.18))
+                                .matchedGeometryEffect(id: "selection", in: highlight)
+                        }
+                    }
+                    .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .help(tab.title)
+                .accessibilityLabel(tab.title)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
     }
 }
 
