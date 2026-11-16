@@ -4,11 +4,13 @@ import SwiftUI
 
 struct GeneralSettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Updater.self) private var updater
     @State private var isChoosingFolder = false
 
     var body: some View {
         @Bindable var settings = model.settings
         @Bindable var stayAwake = model.stayAwake
+        @Bindable var updater = updater
         let installed = ExternalEditor.installed()
         Form {
             Section {
@@ -45,7 +47,7 @@ struct GeneralSettingsView: View {
             Section("Worktrees") {
                 WorktreesFolderPicker(isChoosingFolder: $isChoosingFolder)
 
-                TextField(text: $settings.branchPrefix, prompt: Text("robert/")) {
+                TextField(text: $settings.branchPrefix, prompt: Text("yourname/")) {
                     Text("Branch prefix")
                     Text("Filled in for new branches and still editable each time.")
                 }
@@ -86,6 +88,26 @@ struct GeneralSettingsView: View {
                     Text("Quitting stops agents. Their conversations resume when you reopen the session.")
                 }
             }
+
+            Section {
+                Toggle("Check for updates automatically", isOn: $updater.checksAutomatically)
+                Toggle(isOn: $updater.receivesBetaUpdates) {
+                    Text("Include beta versions")
+                    Text("Betas come out earlier and can have more bugs. If a newer stable version comes out, you get that instead.")
+                }
+                HStack {
+                    Spacer()
+                    Button("Check Now") { updater.checkForUpdates() }
+                        .disabled(!updater.canCheckForUpdates)
+                }
+            } header: {
+                Text("Updates")
+            } footer: {
+                if !Updater.isEnabled {
+                    Text("Updates are turned off in debug builds.")
+                }
+            }
+            .disabled(!Updater.isEnabled)
         }
         .formStyle(.grouped)
         .fileImporter(isPresented: $isChoosingFolder, allowedContentTypes: [.folder]) { result in
@@ -143,6 +165,7 @@ private struct WorktreesFolderPicker: View {
 #Preview("General") {
     GeneralSettingsView()
         .environment(AppModel.preview())
+        .environment(Updater())
         // The size the Settings window gives each pane.
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: 540)
@@ -152,11 +175,12 @@ private struct WorktreesFolderPicker: View {
     let model = AppModel.preview()
     model.settings.defaultAgentID = "codex"
     model.settings.worktreesRoot = PreviewFixtures.root.appending(path: "worktrees", directoryHint: .isDirectory)
-    model.settings.branchPrefix = "robert/"
+    model.settings.branchPrefix = "alex/"
     model.settings.fetchesAutomatically = false
     model.settings.showsMenuBarExtra = false
     return GeneralSettingsView()
         .environment(model)
+        .environment(Updater())
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: 540)
 }

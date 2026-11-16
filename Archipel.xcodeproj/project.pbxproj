@@ -17,6 +17,7 @@
 		AA0000000000000000000107 /* GitKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000204 /* GitKit */; };
 		AA0000000000000000000108 /* InspectorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000205 /* InspectorUI */; };
 		AA0000000000000000000109 /* EditorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000206 /* EditorUI */; };
+		AA000000000000000000010A /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000207 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -62,9 +63,22 @@
 		AA0000000000000000000305 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Signing.xcconfig; path = Configs/Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA0000000000000000001001 /* Exceptions for "Archipel" folder in "Archipel" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = AA0000000000000000000501 /* Archipel */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AA0000000000000000000701 /* Archipel */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA0000000000000000001001 /* Exceptions for "Archipel" folder in "Archipel" target */,
+			);
 			path = Archipel;
 			sourceTree = "<group>";
 		};
@@ -87,6 +101,7 @@
 				AA0000000000000000000107 /* GitKit in Frameworks */,
 				AA0000000000000000000108 /* InspectorUI in Frameworks */,
 				AA0000000000000000000109 /* EditorUI in Frameworks */,
+				AA000000000000000000010A /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -158,6 +173,7 @@
 				AA0000000000000000000204 /* GitKit */,
 				AA0000000000000000000205 /* InspectorUI */,
 				AA0000000000000000000206 /* EditorUI */,
+				AA0000000000000000000207 /* Sparkle */,
 			);
 			productName = Archipel;
 			productReference = AA0000000000000000000301 /* Archipel.app */;
@@ -204,6 +220,7 @@
 			packageReferences = (
 				AA0000000000000000000E01 /* XCLocalSwiftPackageReference "Packages/ArchipelKit" */,
 				AA0000000000000000000E02 /* XCLocalSwiftPackageReference "Packages/TerminalKit" */,
+				AA0000000000000000000E03 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA0000000000000000000902 /* Products */;
@@ -315,6 +332,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Archipel Dev";
+				INFOPLIST_FILE = Archipel/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MARKETING_VERSION = 0.1;
@@ -337,6 +355,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Archipel/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MARKETING_VERSION = 0.1;
@@ -411,6 +430,17 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		AA0000000000000000000E03 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.10.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		AA0000000000000000000201 /* ArchipelCore */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -435,6 +465,11 @@
 		AA0000000000000000000206 /* EditorUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = EditorUI;
+		};
+		AA0000000000000000000207 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA0000000000000000000E03 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -11,6 +11,7 @@ that shows what every agent is doing.
 ![macOS 27](https://img.shields.io/badge/macOS-27-black?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-SwiftUI-F05138?logo=swift&logoColor=white)
 ![Terminal](https://img.shields.io/badge/terminal-Ghostty-3551F3)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
 </div>
 
@@ -125,6 +126,9 @@ Run `./scripts/install.sh` again to update. It quits and relaunches an installed
 copy that is running, and leaves it untouched if the build fails. It replaces a
 copy installed from a DMG too.
 
+Copies installed from a DMG update themselves. Beta versions can be turned on
+under Settings > General > Updates.
+
 ## How agent status works
 
 Archipel starts each agent itself and injects what it needs per launch, so your own
@@ -183,17 +187,28 @@ open -n --env ARCHIPEL_SUPPORT_DIR=/tmp/archipel-dev path/to/Archipel.app
   in a window of its own.
 - `Packages/TerminalKit` - the only code that talks to Ghostty. Includes
   `terminal-demo`, a one-window harness for testing a surface in isolation.
-- `scripts/` - `build-ghostty.sh`, `install.sh`, and `build-dmg.sh` and
-  `notarize.sh`, which the release workflow uses. See
+- `scripts/` - `build-ghostty.sh`, `install.sh`, and `build-dmg.sh`,
+  `notarize.sh` and `update-appcast.py`, which the release workflow uses.
+  Releases and in-app updates (beta and stable channels) are described in
   [docs/releasing.md](docs/releasing.md).
 - `Configs/` - shared build settings and the optional `Local.xcconfig`.
 
+## Contributing
+
+Issues and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Please report security issues privately, see [SECURITY.md](SECURITY.md).
+
 ## Acknowledgements
 
-The terminals are [Ghostty](https://github.com/ghostty-org/ghostty), and syntax
-highlighting comes from [highlight.js](https://highlightjs.org) through
+The terminals are [Ghostty](https://github.com/ghostty-org/ghostty), updates come
+from [Sparkle](https://sparkle-project.org) and syntax highlighting from
+[highlight.js](https://highlightjs.org) through
 [HighlighterSwift](https://github.com/smittytone/HighlighterSwift). Their
-licenses are in
+licenses are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md),
 [`Packages/TerminalKit/THIRD_PARTY_NOTICES.md`](Packages/TerminalKit/THIRD_PARTY_NOTICES.md)
 and
 [`Packages/ArchipelKit/THIRD_PARTY_NOTICES.md`](Packages/ArchipelKit/THIRD_PARTY_NOTICES.md).
+
+## License
+
+Archipel is available under the [MIT License](LICENSE).
