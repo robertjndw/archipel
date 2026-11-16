@@ -47,7 +47,7 @@ struct GeneralSettingsView: View {
             Section("Worktrees") {
                 WorktreesFolderPicker(isChoosingFolder: $isChoosingFolder)
 
-                TextField(text: $settings.branchPrefix, prompt: Text("robert/")) {
+                TextField(text: $settings.branchPrefix, prompt: Text("yourname/")) {
                     Text("Branch prefix")
                     Text("Filled in for new branches and still editable each time.")
                 }
@@ -175,7 +175,7 @@ private struct WorktreesFolderPicker: View {
     let model = AppModel.preview()
     model.settings.defaultAgentID = "codex"
     model.settings.worktreesRoot = PreviewFixtures.root.appending(path: "worktrees", directoryHint: .isDirectory)
-    model.settings.branchPrefix = "robert/"
+    model.settings.branchPrefix = "alex/"
     model.settings.fetchesAutomatically = false
     model.settings.showsMenuBarExtra = false
     return GeneralSettingsView()

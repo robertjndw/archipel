@@ -56,7 +56,7 @@ final class AppSettings {
     var defaultAgentID: String { didSet { defaults.set(defaultAgentID, forKey: Key.defaultAgentID) } }
     /// Root for new worktrees of projects without a folder of their own: `<root>/<project>/<branch>`.
     var worktreesRoot: URL { didSet { defaults.set(worktreesRoot.path, forKey: Key.worktreesRoot) } }
-    /// Prepended to the name typed for a new branch, e.g. `robert/`.
+    /// Prepended to the name typed for a new branch, e.g. `alex/`.
     var branchPrefix: String { didSet { defaults.set(branchPrefix, forKey: Key.branchPrefix) } }
     var confirmsQuitWhileWorking: Bool { didSet { defaults.set(confirmsQuitWhileWorking, forKey: Key.confirmsQuitWhileWorking) } }
     /// Background `git fetch` per project, so behind counts and Pull reflect the remote.
