@@ -1,0 +1,10 @@
+// Copy to Configs/Local.xcconfig (gitignored) to sign with your own Apple
+// Developer team. A stable signature means macOS keeps privacy grants, such as
+// access to ~/Documents, across rebuilds instead of asking again.
+
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development
+DEVELOPMENT_TEAM = ABCDE12345
+
+// An App ID belongs to a single team, so pick your own prefix.
+ARCHIPEL_BUNDLE_ID = com.example.Archipel
