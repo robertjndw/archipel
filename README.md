@@ -188,7 +188,7 @@ open -n --env ARCHIPEL_SUPPORT_DIR=/tmp/archipel-dev path/to/Archipel.app
 - `Packages/TerminalKit` - the only code that talks to Ghostty. Includes
   `terminal-demo`, a one-window harness for testing a surface in isolation.
 - `scripts/` - `build-ghostty.sh`, `install.sh`, and `build-dmg.sh`,
-  `notarize.sh` and `update-appcast.py`, which the release workflow uses.
+  `notarize.sh` and `build-appcast.py`, which the release workflows use.
   Releases and in-app updates (beta and stable channels) are described in
   [docs/releasing.md](docs/releasing.md).
 - `Configs/` - shared build settings and the optional `Local.xcconfig`.

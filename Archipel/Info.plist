@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Written by .github/workflows/release.yml to the gh-pages branch. -->
+	<!-- Deployed to GitHub Pages by .github/workflows/pages.yml. -->
 	<key>SUFeedURL</key>
 	<string>https://robertjndw.github.io/archipel/appcast.xml</string>
 	<!-- Public half of the EdDSA key from Sparkle's generate_keys. The release workflow refuses to

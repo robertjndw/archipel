@@ -4,8 +4,15 @@ Publishing a GitHub release runs `.github/workflows/release.yml`, which builds
 Archipel and attaches `Archipel-<version>.dmg` to the release. When the
 signing secrets below are set, the DMG is signed with Developer ID, notarized,
 and added to the [Sparkle](https://sparkle-project.org) appcast at
-`https://<owner>.github.io/<repo>/appcast.xml` (the `gh-pages` branch), so
-installed copies update themselves.
+`https://<owner>.github.io/<repo>/appcast.xml`, so installed copies update
+themselves.
+
+The appcast is deployed by `.github/workflows/pages.yml`, which rebuilds it
+from all releases each time. Every signed release carries an
+`appcast-item.json` with the update's signature and size, and the release
+notes are read from the release itself. Editing or deleting a release
+redeploys the appcast, so fixed release notes reach the update window too. To
+redeploy by hand, run `gh workflow run pages.yml`.
 
 There are two channels in that one appcast:
 
@@ -124,15 +131,23 @@ gh secret set SPARKLE_PRIVATE_KEY < sparkle-key.txt && rm sparkle-key.txt
 
 ### 5. GitHub Pages
 
-The first release that reaches the appcast creates the `gh-pages` branch.
-After it, turn on Pages for that branch once:
+Set Pages to deploy from GitHub Actions:
 
 ```sh
-gh api -X POST "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/pages" \
-  -f "source[branch]=gh-pages" -f "source[path]=/"
+gh api -X PUT "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/pages" -f build_type=workflow
 ```
 
-Or use Settings > Pages > Deploy from a branch > `gh-pages` / root.
+Or use Settings > Pages > Source > GitHub Actions.
+
+Release runs deploy from the tag, not from `main`, so the `github-pages`
+environment also has to allow tags:
+
+```sh
+gh api -X POST "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/environments/github-pages/deployment-branch-policies" \
+  -f name='v*' -f type=tag
+```
+
+Or add a `v*` tag rule under Settings > Environments > github-pages.
 
 ### Forks
 
