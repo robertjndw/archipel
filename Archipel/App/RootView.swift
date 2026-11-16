@@ -36,7 +36,10 @@ struct RootView: View {
                 searchPATH: { await model.toolSearchPATH() },
                 focusCommitMessage: $model.focusCommitMessageRequest,
                 onOpenFile: { url, preview in model.openFile(url, preview: preview) },
-                onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) }
+                onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) },
+                onSwitchBranch: {
+                    if let worktree = model.selectedWorktree { model.switchBranchWorktreeID = worktree.id }
+                }
             )
             .inspectorColumnWidth(min: 220, ideal: 280, max: 420)
             .ignoresSafeArea(.container, edges: .top)
@@ -67,6 +70,9 @@ struct RootView: View {
         }
         .sheet(item: projectAddingWorktree) { project in
             WorktreeSheet(project: project)
+        }
+        .sheet(item: worktreeSwitchingBranch) { worktree in
+            SwitchBranchSheet(worktree: worktree)
         }
         .alert("Archipel ran into a problem", item: $model.problem) { _ in
             Button("OK") {}
@@ -102,6 +108,13 @@ struct RootView: View {
         Binding(
             get: { model.addWorktreeProjectID.flatMap { model.workspace.project(id: $0) } },
             set: { model.addWorktreeProjectID = $0?.id }
+        )
+    }
+
+    private var worktreeSwitchingBranch: Binding<Worktree?> {
+        Binding(
+            get: { model.switchBranchWorktreeID.flatMap { model.workspace.worktree(id: $0) } },
+            set: { model.switchBranchWorktreeID = $0?.id }
         )
     }
 

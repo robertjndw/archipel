@@ -199,15 +199,9 @@ struct WorktreeSheet: View {
         selection = min(max(selection + delta, 0), count - 1)
     }
 
-    /// What typing would create. Spaces become dashes so "fix login" is usable as is, and the
-    /// configured prefix is added unless the name already carries a prefix of its own.
+    /// What typing would create, or nil when that branch already exists.
     private var createName: String? {
-        let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(whereSeparator: \.isWhitespace)
-            .joined(separator: "-")
-        guard !typed.isEmpty else { return nil }
-        let prefix = model.settings.branchPrefix
-        let name = prefix.isEmpty || typed.hasPrefix(prefix) || typed.contains("/") ? typed : prefix + typed
+        guard let name = model.newBranchName(fromTyped: query) else { return nil }
         return allBranches.contains(name) ? nil : name
     }
 
@@ -428,71 +422,20 @@ private struct SuggestionRow: View {
     let isInvalid: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: suggestion.symbol)
-                .frame(width: 18)
-                .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-                .accessibilityHidden(true)
-            title
-                .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .layoutPriority(1)
-            Spacer(minLength: 8)
-            Text(isInvalid ? "Not a valid branch name" : suggestion.detail)
-                .font(.callout)
-                .foregroundStyle(detailStyle)
-                .lineLimit(1)
-                // The branch name is the part worth truncating.
-                .fixedSize()
-        }
-        .padding(.horizontal, 8)
-        .frame(maxHeight: .infinity)
-        .background {
-            if isSelected {
-                // Full accent like Open Quickly, since this is the row Return acts on.
-                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.tint)
-            }
-        }
-    }
-
-    private var detailStyle: AnyShapeStyle {
-        if isSelected { return AnyShapeStyle(.white.opacity(0.85)) }
-        return isInvalid ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary)
+        SearchResultRow(
+            symbol: suggestion.symbol,
+            title: title,
+            detail: isInvalid ? "Not a valid branch name" : suggestion.detail,
+            detailIsWarning: isInvalid,
+            isSelected: isSelected
+        )
     }
 
     private var title: Text {
         if suggestion.kind == .create {
             return Text("Create Branch “\(suggestion.title)”")
         }
-        return highlighted(suggestion.title, Set(suggestion.matches))
-    }
-
-    /// Bolds and tints matched characters. Built per run so long names don't create one Text per letter.
-    private func highlighted(_ string: String, _ matches: Set<Int>) -> Text {
-        guard !matches.isEmpty else { return Text(string) }
-        var result = AttributedString()
-        var run = ""
-        var runMatches = false
-        func flush() {
-            guard !run.isEmpty else { return }
-            var piece = AttributedString(run)
-            if runMatches {
-                piece.inlinePresentationIntent = .stronglyEmphasized
-                // Accent-colored letters would disappear on the selected row's accent background.
-                if !isSelected { piece.foregroundColor = .accentColor }
-            }
-            result += piece
-            run = ""
-        }
-        for (index, character) in string.enumerated() {
-            let isMatch = matches.contains(index)
-            if isMatch != runMatches { flush() }
-            runMatches = isMatch
-            run.append(character)
-        }
-        flush()
-        return Text(result)
+        return .highlighting(suggestion.title, matches: suggestion.matches, onAccent: isSelected)
     }
 }
 

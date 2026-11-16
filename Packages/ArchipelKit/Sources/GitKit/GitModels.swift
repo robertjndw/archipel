@@ -101,3 +101,13 @@ public struct GitSummary: Equatable, Sendable {
         self.diffStat = diffStat
     }
 }
+
+/// Where `GitClient.switchBranch` takes a checkout.
+public enum GitSwitchTarget: Equatable, Sendable {
+    /// A local branch.
+    case local(String)
+    /// A remote-tracking branch such as `origin/feature`. Creates the local branch `feature` tracking it.
+    case remote(String)
+    /// A new branch from `base`, or from HEAD when `base` is nil.
+    case new(String, base: String?)
+}

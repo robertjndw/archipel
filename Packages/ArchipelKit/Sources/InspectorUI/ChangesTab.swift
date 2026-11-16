@@ -315,11 +315,7 @@ struct ChangesTab: View {
     var body: some View {
         VStack(spacing: 0) {
             InspectorHeader(refresh: refresh) {
-                if let branch = model.status.branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
-                } else if model.phase == .ready {
-                    Label("Detached HEAD", systemImage: "arrow.triangle.branch")
-                }
+                branchTitle
             } accessory: {
                 if model.phase == .ready { SyncMenu(model: model) }
             }
@@ -350,6 +346,36 @@ struct ChangesTab: View {
             }
         } message: { request in
             Text(request.message)
+        }
+    }
+
+    @ViewBuilder
+    private var branchTitle: some View {
+        if model.phase == .ready, let switchBranch = actions.switchBranch {
+            // Plain button with a chevron, like Xcode's branch picker. A bordered one is too heavy
+            // for this header.
+            Button(action: switchBranch) {
+                HStack(spacing: 3) {
+                    branchLabel
+                    Image(systemName: "chevron.up.chevron.down")
+                        .imageScale(.small)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help("Switch Branch…")
+        } else {
+            branchLabel
+        }
+    }
+
+    @ViewBuilder
+    private var branchLabel: some View {
+        if let branch = model.status.branch {
+            Label(branch, systemImage: "arrow.triangle.branch")
+        } else if model.phase == .ready {
+            Label("Detached HEAD", systemImage: "arrow.triangle.branch")
         }
     }
 

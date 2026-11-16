@@ -8,7 +8,7 @@ import SwiftUI
 enum PreviewSamples {
     nonisolated static let root = URL(filePath: "/tmp/archipel-preview/archipel", directoryHint: .isDirectory)
 
-    static let actions = InspectorActions(openFile: { _, _ in }, openDiff: { _, _, _ in })
+    static let actions = InspectorActions(openFile: { _, _ in }, openDiff: { _, _, _ in }, switchBranch: {})
 
     // MARK: Status
 

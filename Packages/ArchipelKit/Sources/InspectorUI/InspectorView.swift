@@ -15,17 +15,19 @@ public struct InspectorView: View {
     /// `searchPATH` supplies the user's login-shell PATH, which is where `gh` is found.
     /// Setting `focusCommitMessage` puts the cursor in the commit message field once the Changes tab
     /// shows it; the inspector sets it back to false.
+    /// With `onSwitchBranch`, the branch name in the Changes tab becomes a button that calls it.
     public init(
         root: URL?,
         searchPATH: @escaping @MainActor () async -> String,
         focusCommitMessage: Binding<Bool> = .constant(false),
         onOpenFile: @escaping (_ url: URL, _ preview: Bool) -> Void,
-        onOpenDiff: @escaping (_ path: String, _ staged: Bool, _ preview: Bool) -> Void
+        onOpenDiff: @escaping (_ path: String, _ staged: Bool, _ preview: Bool) -> Void,
+        onSwitchBranch: (() -> Void)? = nil
     ) {
         self.root = root
         self.searchPATH = searchPATH
         _focusCommitMessage = focusCommitMessage
-        actions = InspectorActions(openFile: onOpenFile, openDiff: onOpenDiff)
+        actions = InspectorActions(openFile: onOpenFile, openDiff: onOpenDiff, switchBranch: onSwitchBranch)
     }
 
     public var body: some View {
@@ -162,6 +164,7 @@ private struct InspectorContent: View {
 struct InspectorActions {
     var openFile: (_ url: URL, _ preview: Bool) -> Void
     var openDiff: (_ path: String, _ staged: Bool, _ preview: Bool) -> Void
+    var switchBranch: (() -> Void)? = nil
 }
 
 /// The strip under the picker: what is being shown on the left, a refresh control on the right.

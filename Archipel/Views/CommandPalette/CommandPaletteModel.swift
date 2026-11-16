@@ -101,6 +101,15 @@ struct PaletteCommand: Identifiable {
                 if let project = model.project(ofWorktree: worktreeID) { model.addWorktreeProjectID = project.id }
             },
             PaletteCommand(
+                id: "switch-branch",
+                title: "Switch Branch…",
+                symbol: "arrow.triangle.swap",
+                shortcutHint: "⇧⌘B",
+                isAvailable: hasSelection
+            ) {
+                if let worktreeID { model.switchBranchWorktreeID = worktreeID }
+            },
+            PaletteCommand(
                 id: "project-settings",
                 title: "Project Settings…",
                 symbol: "gearshape",
