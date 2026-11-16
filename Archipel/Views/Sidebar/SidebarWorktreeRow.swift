@@ -337,6 +337,10 @@ struct SidebarWorktreeMenu: View {
         }
         Divider()
         FolderActions(folder: worktree.path)
+        if worktree.branch != nil || model.gitSummaries[worktree.id] != nil {
+            Button("Switch Branch…", systemImage: "arrow.triangle.swap") { model.switchBranchWorktreeID = worktree.id }
+                .disabled(model.missingWorktrees.contains(worktree.id))
+        }
         if let branch = worktree.branch {
             Button("Copy Branch Name", systemImage: "arrow.triangle.branch") { model.copyToPasteboard(branch) }
         }

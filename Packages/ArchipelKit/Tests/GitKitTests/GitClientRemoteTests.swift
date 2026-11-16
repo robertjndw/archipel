@@ -155,6 +155,81 @@ final class GitClientRemoteTests {
         #expect(summary.changedFiles == 3)
     }
 
+    // MARK: Switching branches
+
+    @Test func switchesToLocalAndNewBranches() async throws {
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+        try sh("branch", "other")
+
+        try await git.switchBranch(to: .local("other"), in: repo)
+        #expect(await git.currentBranch(in: repo) == "other")
+
+        try await git.switchBranch(to: .new("feat/fresh", base: "main"), in: repo)
+        #expect(await git.currentBranch(in: repo) == "feat/fresh")
+
+        await #expect(throws: GitError.self) {
+            try await git.switchBranch(to: .local("does-not-exist"), in: repo)
+        }
+        #expect(await git.currentBranch(in: repo) == "feat/fresh")
+    }
+
+    @Test func switchCarriesChangesAlongButRefusesToOverwriteThem() async throws {
+        try write("a.txt", "a\n")
+        try write("b.txt", "b\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+        try sh("switch", "-q", "-c", "other")
+        try write("a.txt", "theirs\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "change a", in: repo)
+        try sh("switch", "-q", "main")
+
+        try write("b.txt", "carried\n")
+        try await git.switchBranch(to: .local("other"), in: repo)
+        #expect(await git.currentBranch(in: repo) == "other")
+        #expect(try String(contentsOf: repo.appending(path: "b.txt"), encoding: .utf8) == "carried\n")
+        try sh("switch", "-q", "main")
+
+        try write("a.txt", "mine\n")
+        do {
+            try await git.switchBranch(to: .local("other"), in: repo)
+            Issue.record("expected a conflicting switch to be refused")
+        } catch let error as GitError {
+            #expect(error.message.contains("a.txt"))
+            #expect(!error.message.contains("Aborting"))
+            #expect(!error.message.hasPrefix("error:"))
+        }
+        #expect(await git.currentBranch(in: repo) == "main")
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "mine\n")
+    }
+
+    @Test func listsRemoteBranchesAndTracksOne() async throws {
+        let remote = try makeBareRemote()
+        try sh("remote", "add", "origin", remote.path)
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+        try await git.push(in: repo)
+
+        let other = try makeOtherClone(of: remote)
+        try run(["-C", other.path, "switch", "-q", "-c", "feature"])
+        try "x\n".write(to: other.appending(path: "feature.txt"), atomically: true, encoding: .utf8)
+        try run(["-C", other.path, "add", "-A"])
+        try run(["-C", other.path, "commit", "-q", "-m", "feature"])
+        try run(["-C", other.path, "push", "-q", "-u", "origin", "feature"])
+        try await git.fetch(in: repo)
+        try sh("remote", "set-head", "origin", "main")
+
+        #expect(try await git.remoteBranches(in: repo).sorted() == ["origin/feature", "origin/main"])
+
+        try await git.switchBranch(to: .remote("origin/feature"), in: repo)
+        let summary = try await git.summary(in: repo)
+        #expect(summary.branch == "feature")
+        #expect(summary.upstream == "origin/feature")
+    }
+
     // MARK: Helpers
 
     /// A second clone of the remote, standing in for a teammate who pushes.

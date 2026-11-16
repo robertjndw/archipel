@@ -116,6 +116,11 @@ struct ArchipelApp: App {
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(project == nil)
+                Button("Switch Branch…", systemImage: "arrow.triangle.swap") {
+                    if let worktree { model.switchBranchWorktreeID = worktree.id }
+                }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+                .disabled(worktree == nil)
                 Button("Project Settings…", systemImage: "gearshape") {
                     if let project { model.openProjectSettings(project.id) }
                 }

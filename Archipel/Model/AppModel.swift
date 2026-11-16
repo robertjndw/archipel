@@ -38,6 +38,9 @@ final class AppModel {
     /// The project the Add Worktree sheet is open for. Here for the same reason as `projectSettingsID`:
     /// the sidebar, the Project menu and the palette all open it.
     var addWorktreeProjectID: Project.ID?
+    /// The worktree the Switch Branch sheet is open for. Opened from the sidebar, the inspector's
+    /// branch name, the Project menu and the palette.
+    var switchBranchWorktreeID: Worktree.ID?
     /// Set by Commit… to put the cursor in the inspector's commit message field; the inspector clears it.
     var focusCommitMessageRequest = false
     let settings: AppSettings

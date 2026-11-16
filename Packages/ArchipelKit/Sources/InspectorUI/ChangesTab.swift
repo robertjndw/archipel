@@ -315,11 +315,7 @@ struct ChangesTab: View {
     var body: some View {
         VStack(spacing: 0) {
             InspectorHeader(refresh: refresh) {
-                if let branch = model.status.branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
-                } else if model.phase == .ready {
-                    Label("Detached HEAD", systemImage: "arrow.triangle.branch")
-                }
+                branchTitle
             } accessory: {
                 if model.phase == .ready { SyncMenu(model: model) }
             }
@@ -350,6 +346,36 @@ struct ChangesTab: View {
             }
         } message: { request in
             Text(request.message)
+        }
+    }
+
+    @ViewBuilder
+    private var branchTitle: some View {
+        if model.phase == .ready, let switchBranch = actions.switchBranch {
+            // Plain button with a chevron, like Xcode's branch picker. A bordered one is too heavy
+            // for this header.
+            Button(action: switchBranch) {
+                HStack(spacing: 3) {
+                    branchLabel
+                    Image(systemName: "chevron.up.chevron.down")
+                        .imageScale(.small)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help("Switch Branch…")
+        } else {
+            branchLabel
+        }
+    }
+
+    @ViewBuilder
+    private var branchLabel: some View {
+        if let branch = model.status.branch {
+            Label(branch, systemImage: "arrow.triangle.branch")
+        } else if model.phase == .ready {
+            Label("Detached HEAD", systemImage: "arrow.triangle.branch")
         }
     }
 
@@ -405,10 +431,16 @@ struct ChangesTab: View {
                 // Identified by path and side: a partially staged file is listed in both
                 // sections of the same List, and identical ids would make SwiftUI drop a row.
                 ForEach(changes.map { ListedChange(change: $0, staged: staged) }) { row in
-                    ChangeRow(change: row.change, staged: staged, model: model) {
-                        discardRequest = .file(row.change, staged: staged)
+                    // Keep the HStack. With ChangeRow directly in the ForEach, a few thousand changes froze
+                    // the app for 40 seconds after a branch switch, and Xcode Previews crashed on a SwiftUI
+                    // assertion. Probably List can't tell that ChangeRow is a single row without building
+                    // it; an HStack always is one.
+                    HStack {
+                        ChangeRow(change: row.change, staged: staged, model: model) {
+                            discardRequest = .file(row.change, staged: staged)
+                        }
                     }
-                        .tag(row.id)
+                    .tag(row.id)
                 }
             }
         } header: {

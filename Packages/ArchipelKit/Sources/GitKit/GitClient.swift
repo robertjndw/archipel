@@ -25,6 +25,33 @@ public struct GitClient: Sendable {
             .map(String.init)
     }
 
+    /// Remote-tracking branches as `origin/name`. The symbolic `origin/HEAD` is left out: it only
+    /// points at one of the others, and switching to it would leave HEAD detached.
+    public func remoteBranches(in repository: URL) async throws -> [String] {
+        try await run(["for-each-ref", "--format=%(refname:short)%09%(symref)", "refs/remotes/"], in: repository)
+            .split(separator: "\n")
+            .compactMap { line in
+                let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+                guard fields.count == 2, fields[1].isEmpty else { return nil }
+                return String(fields[0])
+            }
+    }
+
+    /// Checks out another branch in place. Uncommitted changes come along if they don't conflict,
+    /// otherwise git refuses and nothing changes. `switch` instead of `checkout` because it never
+    /// overwrites files or detaches HEAD by accident.
+    public func switchBranch(to target: GitSwitchTarget, in folder: URL) async throws {
+        let args = switch target {
+        // --no-guess so a typo never quietly creates a tracking branch from a remote of that name.
+        case .local(let branch): ["switch", "--no-guess", branch]
+        case .remote(let remoteBranch): ["switch", "--track", remoteBranch]
+        case .new(let branch, let base): ["switch", "-c", branch] + (base.map { [$0] } ?? [])
+        }
+        let result = try await GitProcess.run(args, in: folder, readOnly: false)
+        guard result.status != 0 else { return }
+        throw GitError(switchFailure: result)
+    }
+
     /// `base` is the ref a new branch starts from; nil means HEAD. It is ignored for an existing branch.
     public func addWorktree(repository: URL, path: URL, branch: String, createBranch: Bool, base: String? = nil) async throws {
         let args = createBranch
@@ -305,6 +332,25 @@ extension GitError {
             self.init(command: "git worktree", output: output)
         } else {
             self.init(message: reasons.joined(separator: "\n"))
+        }
+    }
+
+    /// A refused switch lists the conflicting files on the lines after "error:", so unlike
+    /// `worktree add` we keep plain lines and only drop the hints and the trailing "Aborting".
+    init(switchFailure output: GitProcess.Output) {
+        let lines = output.stderr.split(whereSeparator: \.isNewline).compactMap { line -> String? in
+            if line.hasPrefix("hint: ") || line == "hint:" || line == "Aborting" { return nil }
+            for prefix in ["fatal: ", "error: "] where line.hasPrefix(prefix) {
+                let reason = line.dropFirst(prefix.count)
+                return reason.prefix(1).uppercased() + reason.dropFirst()
+            }
+            // git indents the file list with a tab, which a sheet draws far too wide.
+            return line.hasPrefix("\t") ? "    " + line.drop { $0 == "\t" } : String(line)
+        }
+        if lines.isEmpty {
+            self.init(command: "git switch", output: output)
+        } else {
+            self.init(message: lines.joined(separator: "\n"))
         }
     }
 }
