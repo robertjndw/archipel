@@ -38,8 +38,9 @@ final class Updater {
         checksAutomatically = controller.updater.automaticallyChecksForUpdates
         receivesBetaUpdates = UpdaterDelegate.receivesBetaUpdates
         canCheckObservation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
-            let canCheck = updater.canCheckForUpdates
-            Task { @MainActor in self?.canCheckForUpdates = canCheck }
+            // KVO closures are always nonisolated, but SPUUpdater only ever changes this on the
+            // main thread.
+            MainActor.assumeIsolated { self?.canCheckForUpdates = updater.canCheckForUpdates }
         }
     }
 
@@ -50,7 +51,7 @@ final class Updater {
 
 /// Kept apart from `Updater` and nonisolated because Sparkle calls it as a plain Objective-C delegate.
 private final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
-    static let betaKey = "settings.receivesBetaUpdates"
+    nonisolated static let betaKey = "settings.receivesBetaUpdates"
 
     /// Someone running a beta got it from a prerelease DMG, so they stay on the beta channel until
     /// they turn it off. Everyone else starts on stable.
