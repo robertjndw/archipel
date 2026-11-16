@@ -141,7 +141,10 @@ struct FuzzyMatcherTests {
         }
         print("fuzzy rank 50k: \(elapsed) / \(rare)")
         #expect(count == 50)
-        #expect(elapsed < .seconds(2))
-        #expect(rare < .seconds(2))
+        // About a second on a recent Mac, but swift test builds without optimizations and CI
+        // runners are several times slower. The bound is only there to catch a blowup, such as
+        // the matcher going quadratic, which would take minutes, not seconds.
+        #expect(elapsed < .seconds(10))
+        #expect(rare < .seconds(10))
     }
 }
