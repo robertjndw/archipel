@@ -80,7 +80,8 @@ struct SyncState: Equatable {
 /// otherwise offers pull, push or publish. Pull and push are always in the header's sync menu too.
 enum PrimaryAction: Equatable {
     case commit(CommitControl)
-    case pull(commits: Int, isEnabled: Bool)
+    /// `ahead` is only nonzero for a diverged branch, usually after someone force-pushed.
+    case pull(commits: Int, ahead: Int, isEnabled: Bool)
     case push(commits: Int, isEnabled: Bool)
     case publish(isEnabled: Bool)
 
@@ -89,7 +90,7 @@ enum PrimaryAction: Equatable {
             self = .commit(commit)
         } else if sync.needsPull {
             // Pull before push: git rejects a push to an upstream that has moved on.
-            self = .pull(commits: sync.behind, isEnabled: sync.canPull)
+            self = .pull(commits: sync.behind, ahead: sync.ahead, isEnabled: sync.canPull)
         } else if sync.canPublishOrPush {
             self = sync.isPublished
                 ? .push(commits: sync.ahead, isEnabled: sync.canPush)
@@ -103,7 +104,7 @@ enum PrimaryAction: Equatable {
     var isEnabled: Bool {
         switch self {
         case .commit(let control): control.isEnabled
-        case .pull(_, let isEnabled), .push(_, let isEnabled), .publish(let isEnabled): isEnabled
+        case .pull(_, _, let isEnabled), .push(_, let isEnabled), .publish(let isEnabled): isEnabled
         }
     }
 
@@ -118,7 +119,7 @@ enum PrimaryAction: Equatable {
     var title: LocalizedStringKey {
         switch self {
         case .commit(let control): control.title
-        case .pull(let commits, _): "Pull ^[\(commits) Commit](inflect: true)"
+        case .pull(let commits, _, _): "Pull ^[\(commits) Commit](inflect: true)"
         case .push(let commits, _): "Push ^[\(commits) Commit](inflect: true)"
         case .publish: "Publish Branch"
         }
@@ -135,7 +136,8 @@ enum PrimaryAction: Equatable {
     var symbol: String? {
         switch self {
         case .commit: nil
-        case .pull: "arrow.down"
+        // A diverged branch shows just the two counts, VS Code style.
+        case .pull(_, let ahead, _): ahead > 0 ? nil : "arrow.down"
         case .push: "arrow.up"
         case .publish: "icloud.and.arrow.up"
         }
@@ -205,7 +207,11 @@ struct CommitArea: View {
                     } else if model.activity == action.activity {
                         ProgressView().controlSize(.small)
                     }
-                    Text(action.title)
+                    if case .pull(let behind, let ahead, _) = action, ahead > 0 {
+                        DivergedCounts(behind: behind, ahead: ahead)
+                    } else {
+                        Text(action.title)
+                    }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -229,6 +235,8 @@ struct CommitArea: View {
     private func help(for action: PrimaryAction) -> LocalizedStringKey {
         switch action {
         case .commit(let control): control.mode == .commitAll ? "Stages all changes, then commits them." : "Commits the staged changes."
+        case .pull(let behind, let ahead, _) where ahead > 0:
+            "The branch has diverged from \(model.syncState.upstream ?? "its upstream") (\(behind) behind, \(ahead) ahead) and can't be fast-forwarded. Rebase or merge in a terminal."
         case .pull: "Fast-forwards to \(model.syncState.upstream ?? "the upstream"). Never merges or rebases."
         case .push, .publish: model.syncState.help
         }
@@ -373,6 +381,23 @@ struct SyncArrow: View {
     }
 }
 
+/// Same look as the sync menu's label.
+private struct DivergedCounts: View {
+    let behind: Int
+    let ahead: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Label(String(behind), systemImage: "arrow.down")
+            Label(String(ahead), systemImage: "arrow.up")
+        }
+        .labelStyle(.compact)
+        .monospacedDigit()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(behind) to pull, \(ahead) to push")
+    }
+}
+
 /// Tight spacing so "↓2 ↑1" reads as one indicator.
 private struct CompactLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -417,7 +442,8 @@ private func previewCommitArea(_ title: String, _ model: ChangesModel) -> some V
     ScrollView {
         VStack(alignment: .leading, spacing: 8) {
             previewCommitArea("Clean, up to date", .previewSample(PreviewSamples.synced()))
-            previewCommitArea("Behind", .previewSample(PreviewSamples.synced(ahead: 2, behind: 3)))
+            previewCommitArea("Behind", .previewSample(PreviewSamples.synced(behind: 3)))
+            previewCommitArea("Diverged", .previewSample(PreviewSamples.synced(ahead: 2, behind: 3)))
             previewCommitArea("Ahead, open pull request", .previewSample(PreviewSamples.synced(ahead: 1), pullRequest: PreviewSamples.pullRequest(.open)))
             previewCommitArea("Pushing, draft pull request", .previewSample(
                 PreviewSamples.synced(ahead: 2), activity: .push, pullRequest: PreviewSamples.pullRequest(.open, isDraft: true)
