@@ -159,7 +159,10 @@ open -n --env ARCHIPEL_SUPPORT_DIR=/tmp/archipel-dev path/to/Archipel.app
 
 ### Project layout
 
-- `Archipel/` - the SwiftUI app.
+- `Archipel/` - the SwiftUI app. `Model/` is `AppModel` and `AppSettings`,
+  `Services/` wraps system APIs (notifications, sleep, process stats), and
+  `Views/` has a folder per feature. The Xcode groups follow the folders on
+  disk, so new files are picked up without touching the project.
 - `Packages/ArchipelKit` - `ArchipelCore` (model, status logic, persistence),
   `AgentKit` (agent launch commands, hook decoding, hook socket server),
   `GitKit` (async wrapper over git: status, staging, diffs, worktrees),
