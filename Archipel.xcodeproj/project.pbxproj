@@ -17,7 +17,7 @@
 		AA0000000000000000000107 /* GitKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000204 /* GitKit */; };
 		AA0000000000000000000108 /* InspectorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000205 /* InspectorUI */; };
 		AA0000000000000000000109 /* EditorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000206 /* EditorUI */; };
-		AA000000000000000000010A /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000207 /* Sparkle */; };
+		AA000000000000000000010B /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000207 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,7 +101,7 @@
 				AA0000000000000000000107 /* GitKit in Frameworks */,
 				AA0000000000000000000108 /* InspectorUI in Frameworks */,
 				AA0000000000000000000109 /* EditorUI in Frameworks */,
-				AA000000000000000000010A /* Sparkle in Frameworks */,
+				AA000000000000000000010B /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
