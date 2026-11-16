@@ -431,10 +431,16 @@ struct ChangesTab: View {
                 // Identified by path and side: a partially staged file is listed in both
                 // sections of the same List, and identical ids would make SwiftUI drop a row.
                 ForEach(changes.map { ListedChange(change: $0, staged: staged) }) { row in
-                    ChangeRow(change: row.change, staged: staged, model: model) {
-                        discardRequest = .file(row.change, staged: staged)
+                    // Keep the HStack. With ChangeRow directly in the ForEach, a few thousand changes froze
+                    // the app for 40 seconds after a branch switch, and Xcode Previews crashed on a SwiftUI
+                    // assertion. Probably List can't tell that ChangeRow is a single row without building
+                    // it; an HStack always is one.
+                    HStack {
+                        ChangeRow(change: row.change, staged: staged, model: model) {
+                            discardRequest = .file(row.change, staged: staged)
+                        }
                     }
-                        .tag(row.id)
+                    .tag(row.id)
                 }
             }
         } header: {
