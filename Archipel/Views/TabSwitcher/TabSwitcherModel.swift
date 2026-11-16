@@ -152,7 +152,7 @@ final class TabSwitcherModel {
             for id in candidates {
                 guard let tab = app.workspace.tab(id: id) else { continue }
                 switch tab.content {
-                case .session:
+                case .session, .web:
                     continue
                 case .file(let url):
                     group.addTask { (id, await Self.filePreview(url)) }

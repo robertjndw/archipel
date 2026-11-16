@@ -171,6 +171,14 @@ struct PaneTabBar: View {
                 detail: path,
                 activity: nil
             )
+        case .web(let url):
+            let title = model.webPages.title(for: tab.id)
+            return TabLabel(
+                title: title ?? url.host() ?? url.absoluteString,
+                symbol: "globe",
+                detail: url.absoluteString,
+                activity: nil
+            )
         }
     }
 
@@ -200,6 +208,11 @@ struct PaneTabBar: View {
                 Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(url) }
             }
             Button("Open in Default App", systemImage: "arrow.up.forward.app") { NSWorkspace.shared.open(url) }
+        }
+        if case .web(let url) = tab.content {
+            Divider()
+            Button("Open in Browser", systemImage: "safari") { NSWorkspace.shared.open(url) }
+            Button("Copy URL", systemImage: "document.on.document") { model.copyToPasteboard(url.absoluteString) }
         }
         Divider()
         Button("Close Tab", systemImage: "xmark", role: .destructive) { model.close(tab: tab.id) }

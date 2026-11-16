@@ -214,6 +214,13 @@ private struct SwitcherCard: View {
                 file: worktree?.path.appending(path: path),
                 isDiff: true
             )
+        case .web(let url)?:
+            return Label(
+                title: tab.flatMap { model.webPages.title(for: $0.id) } ?? url.host() ?? url.absoluteString,
+                symbol: "globe",
+                place: where_,
+                project: project
+            )
         case nil:
             return Label(title: "Tab", symbol: "questionmark", place: "")
         }

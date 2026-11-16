@@ -82,6 +82,8 @@ private struct PaneView: View {
                 targets: model.reviewTargets(in: worktree),
                 onSend: { model.sendReviewComments(in: worktree.id, to: $0) }
             )
+        case .web(let url):
+            if let tab = pane.selectedTab { WebTabView(tabID: tab.id, url: url) }
         case nil:
             ContentUnavailableView {
                 Label("No Tabs", systemImage: "terminal")

@@ -27,6 +27,8 @@ final class AppModel {
     /// Open file buffers. They live here and not in the editor views because
     /// a view only exists while its tab is selected.
     let documents = FileDocumentStore()
+    /// Pages of web tabs, for the same reason as `documents`.
+    let webPages = WebPageStore()
     /// A file tab with unsaved edits that the user asked to close.
     var tabAwaitingCloseDecision: Tab?
     /// Diff review comments of every worktree. Kept here for the same reason as `documents`.
@@ -552,15 +554,52 @@ final class AppModel {
         open(.diff(path: path, staged: staged), preview: preview)
     }
 
-    private func open(_ content: TabContent, preview: Bool) {
-        guard let worktree = selectedWorktree else { return }
+    /// Opens a web page as a tab, or in the browser when that is the user's choice for web links.
+    /// `alternate` flips that choice.
+    func openWebLink(_ url: URL, alternate: Bool = false, in worktreeID: Worktree.ID? = nil) {
+        let destination = alternate ? settings.webLinkDestination.other : settings.webLinkDestination
+        guard destination == .archipel else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        open(.web(url), in: worktreeID, preview: true)
+    }
+
+    /// A link ⌘-clicked in a session's terminal opens in that session's worktree.
+    private func openTerminalLink(_ link: TerminalLink, alternate: Bool, from sessionID: Session.ID) {
+        let worktreeID = workspace.worktree(containing: sessionID)?.id
+        switch link {
+        case .web(let url):
+            openWebLink(url, alternate: alternate, in: worktreeID)
+        case .file(let url) where !isDirectory(url):
+            let destination = alternate ? settings.fileLinkDestination.other : settings.fileLinkDestination
+            if destination == .archipel {
+                open(.file(url), in: worktreeID, preview: true)
+            } else {
+                link.openExternally()
+            }
+        case .file, .mail:
+            // Folders have no tab of their own, so they always go to Finder; mail to the mail app.
+            link.openExternally()
+        }
+    }
+
+    private func isDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+
+    private func open(_ content: TabContent, in worktreeID: Worktree.ID? = nil, preview: Bool) {
+        guard let worktree = worktreeID.flatMap(workspace.worktree(id:)) ?? selectedWorktree else { return }
+        // Read before the change: inside it, `workspace` is exclusively borrowed.
+        let isElsewhere = worktree.id != selectedWorktree?.id
         changingSelection { workspace in
             // Opening a preview reuses the pane's preview tab. One with unsaved edits would vanish
             // with its edits still in the buffer and no tab left to save or discard them from.
             for tab in worktree.panes.flatMap(\.tabs) where tab.isPreview {
                 if case .file(let url) = tab.content, documents.isDirty(url) { workspace.pinTab(id: tab.id) }
             }
-            _ = workspace.openTab(content, in: worktree.id, preview: preview)
+            let tab = workspace.openTab(content, in: worktree.id, preview: preview)
+            if let tab, isElsewhere { workspace.selectTab(id: tab) }
         }
     }
 
@@ -777,6 +816,8 @@ final class AppModel {
                     self.apply(.processExited(code: Int32(truncatingIfNeeded: exitCode)), to: id)
                 case .titleChanged(let title):
                     self.receiveTerminalTitle(title, for: id)
+                case .openLink(let link, let alternate):
+                    self.openTerminalLink(link, alternate: alternate, from: id)
                 case .workingDirectoryChanged, .progress, .closeRequested:
                     break
                 }
@@ -1005,6 +1046,7 @@ final class AppModel {
         // Same for file buffers, which otherwise hold the whole text and undo history until quit.
         // A dirty one is kept: the quit prompt is then the last chance to save those edits.
         for url in filesBefore.subtracting(openFileURLs) where !documents.isDirty(url) { documents.close(url) }
+        webPages.retain(only: webTabIDs)
         // Here rather than in changingSelection so clicking into another pane counts too.
         if let id = focusedTab?.id { recentTabs.visit(id) }
         saveTask?.cancel()
@@ -1022,6 +1064,14 @@ final class AppModel {
             if case .file(let url) = tab.content { urls.insert(url.standardizedFileURL) }
         }
         return urls
+    }
+
+    private var webTabIDs: Set<Tab.ID> {
+        var ids = Set<Tab.ID>()
+        for tab in workspace.allWorktrees.lazy.flatMap(\.panes).flatMap(\.tabs) {
+            if case .web = tab.content { ids.insert(tab.id) }
+        }
+        return ids
     }
 
     func saveNow() {

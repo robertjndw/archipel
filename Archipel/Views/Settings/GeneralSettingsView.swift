@@ -44,6 +44,28 @@ struct GeneralSettingsView: View {
                 .disabled(installed.isEmpty)
             }
 
+            Section {
+                Picker(selection: $settings.fileLinkDestination) {
+                    Text("Archipel").tag(AppSettings.LinkDestination.archipel)
+                    Text("Default App").tag(AppSettings.LinkDestination.defaultApp)
+                } label: {
+                    Text("Open files in")
+                    Text("Text files, images and PDFs open in a tab. Folders always open in Finder.")
+                }
+
+                Picker(selection: $settings.webLinkDestination) {
+                    Text("Archipel").tag(AppSettings.LinkDestination.archipel)
+                    Text("Default Browser").tag(AppSettings.LinkDestination.defaultApp)
+                } label: {
+                    Text("Open web links in")
+                    Text("Also used by the dev server button on a session's tab.")
+                }
+            } header: {
+                Text("Terminal Links")
+            } footer: {
+                Text("⌘-click a link in a terminal to open it. ⌘⌥-click uses the other choice.")
+            }
+
             Section("Worktrees") {
                 WorktreesFolderPicker(isChoosingFolder: $isChoosingFolder)
 
