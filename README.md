@@ -31,6 +31,10 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
 - Add a worktree from one search field: pick an existing branch, or type a name
   to create a new one. Worktrees you made with `git worktree` yourself are picked
   up too.
+- Switch the branch a worktree has checked out with <kbd>⇧</kbd><kbd>⌘</kbd><kbd>B</kbd>,
+  from its context menu or by clicking the branch name in the Changes panel. Pick a
+  local or remote branch, or type a name to create one. Uncommitted changes come
+  along, and you get a warning when an agent is still working in that worktree.
 - Islands and projects get an SF Symbol and a color. A project can also use an
   icon found in its repository (app icon, favicon or logo) or its owner's GitHub
   avatar.
@@ -89,6 +93,7 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
 | Switch island | <kbd>Ctrl</kbd><kbd>1</kbd>...<kbd>9</kbd> |
 | Next session needing attention | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>U</kbd> |
 | Add worktree | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> |
+| Switch branch | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>B</kbd> |
 | Add project | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>O</kbd> |
 | Run project | <kbd>⌘</kbd><kbd>R</kbd> |
 | Commit | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> |
@@ -169,7 +174,7 @@ open -n --env ARCHIPEL_SUPPORT_DIR=/tmp/archipel-dev path/to/Archipel.app
   disk, so new files are picked up without touching the project.
 - `Packages/ArchipelKit` - `ArchipelCore` (model, status logic, persistence),
   `AgentKit` (agent launch commands, hook decoding, hook socket server),
-  `GitKit` (async wrapper over git: status, staging, diffs, worktrees),
+  `GitKit` (async wrapper over git: status, staging, diffs, branches, worktrees),
   `InspectorUI` (the Files and Changes sidebar), `EditorUI` (the file editor
   and the side-by-side diff view; syntax highlighting comes from highlight.js
   through the HighlighterSwift package), `UISupport` (view helpers those two
