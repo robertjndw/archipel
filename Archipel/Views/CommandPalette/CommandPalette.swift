@@ -142,6 +142,8 @@ private struct PaletteRowView: View {
             }
         }
         .padding(.horizontal, 10)
+        // Without this the highlight only covers the text, not the whole row.
+        .frame(maxHeight: .infinity)
         .background {
             if isSelected {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill(.tint.opacity(0.22))
