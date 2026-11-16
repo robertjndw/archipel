@@ -15,6 +15,7 @@ final class Updater {
     #endif
 
     private(set) var canCheckForUpdates = false
+    private(set) var lastCheckDate: Date?
 
     var checksAutomatically: Bool {
         didSet { controller.updater.automaticallyChecksForUpdates = checksAutomatically }
@@ -37,6 +38,13 @@ final class Updater {
         controller = SPUStandardUpdaterController(startingUpdater: Self.isEnabled, updaterDelegate: delegate, userDriverDelegate: nil)
         checksAutomatically = controller.updater.automaticallyChecksForUpdates
         receivesBetaUpdates = UpdaterDelegate.receivesBetaUpdates
+        lastCheckDate = controller.updater.lastUpdateCheckDate
+        // Background checks move the date too, so read it whenever a cycle ends rather than only
+        // after a check from the button.
+        delegate.didFinishUpdateCycle = { [weak self] in
+            guard let self else { return }
+            lastCheckDate = controller.updater.lastUpdateCheckDate
+        }
         canCheckObservation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
             // KVO closures are always nonisolated, but SPUUpdater only ever changes this on the
             // main thread.
@@ -53,6 +61,8 @@ final class Updater {
 private final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
     nonisolated static let betaKey = "settings.receivesBetaUpdates"
 
+    var didFinishUpdateCycle: (() -> Void)?
+
     /// Someone running a beta got it from a prerelease DMG, so they stay on the beta channel until
     /// they turn it off. Everyone else starts on stable.
     nonisolated static var receivesBetaUpdates: Bool {
@@ -65,6 +75,11 @@ private final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
 
     /// Items without a channel are stable and always allowed. Beta users still move on to a stable
     /// release once it is newer than their beta.
+    nonisolated func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        // Sparkle calls its delegate on the main thread.
+        MainActor.assumeIsolated { didFinishUpdateCycle?() }
+    }
+
     nonisolated func allowedChannels(for updater: SPUUpdater) -> Set<String> {
         Self.receivesBetaUpdates ? ["beta"] : []
     }

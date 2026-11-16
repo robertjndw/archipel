@@ -2,10 +2,23 @@ import AgentKit
 import SwiftUI
 
 struct AgentSettingsView: View {
+    @Environment(AppModel.self) private var model
     private let agents = AgentDefinition.builtIns.filter { $0.id != AgentDefinition.shell.id }
 
     var body: some View {
+        @Bindable var settings = model.settings
         Form {
+            Section {
+                Picker(selection: $settings.defaultAgentID) {
+                    ForEach(AgentDefinition.builtIns) { agent in
+                        Label(agent.displayName, symbol: agent.symbolName).tag(agent.id)
+                    }
+                } label: {
+                    Text("Default agent")
+                    Text("Started by New Session (⌘T) and the plus button.")
+                }
+            }
+
             ForEach(agents) { agent in
                 AgentSection(agent: agent, showsFooter: agent.id == agents.last?.id)
             }
