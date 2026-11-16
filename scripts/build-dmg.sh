@@ -89,6 +89,18 @@ EOF
 fi
 codesign --verify --deep --strict "$app" >&2
 
+# Local runs pick up frameworks from DerivedData, so one that isn't embedded only
+# crashes on other Macs. alpha.2 shipped without TerminalKit that way.
+missing=()
+while read -r lib; do
+  [[ -e "$app/Contents/Frameworks/${lib#@rpath/}" ]] || missing+=("$lib")
+done < <(otool -L "$app/Contents/MacOS/Archipel" | awk 'NR > 1 && $1 ~ /^@rpath\// { print $1 }' | sort -u)
+if (( ${#missing[@]} )); then
+  echo "error: Archipel.app links libraries it doesn't embed in Contents/Frameworks:" >&2
+  printf '  %s\n' "${missing[@]}" >&2
+  exit 1
+fi
+
 if $notarize; then
   # Stapling the app itself, not only the DMG, lets it pass Gatekeeper offline
   # once it has been copied out of the disk image.
