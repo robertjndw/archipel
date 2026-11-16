@@ -1,6 +1,7 @@
 #!/bin/bash
-# Builds a Release Archipel.app and packs it into a DMG with an Applications
-# shortcut. Used by .github/workflows/release.yml, and runnable locally.
+# Builds a Release Archipel.app and packs it into a drag-to-install DMG, laid
+# out by scripts/dmg/settings.py. Used by .github/workflows/release.yml, and
+# runnable locally. Needs uv (brew install uv) to run dmgbuild.
 #
 #   ./scripts/build-dmg.sh <version> [build-number]
 #
@@ -26,6 +27,12 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/archipel-dmg.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 archive="$work/Archipel.xcarchive"
 dmg="$out/Archipel-$version.dmg"
+
+# Check before archiving, which takes a few minutes.
+if ! command -v uvx >/dev/null; then
+  echo "error: uv is missing. Install it with: brew install uv" >&2
+  exit 1
+fi
 
 if [[ ! -d "$root/Packages/TerminalKit/Frameworks/GhosttyKit.xcframework" ]]; then
   echo "error: GhosttyKit is missing. Run ./scripts/build-ghostty.sh first." >&2
@@ -111,11 +118,15 @@ if $notarize; then
 fi
 
 echo "Building the DMG..." >&2
-mkdir -p "$work/dmg" "$out"
-ditto "$app" "$work/dmg/Archipel.app"
-ln -s /Applications "$work/dmg/Applications"
+mkdir -p "$out"
 rm -f "$dmg"
-hdiutil create -volname Archipel -srcfolder "$work/dmg" -fs APFS -format UDZO "$dmg" >&2
+# dmgbuild writes the window layout into the .DS_Store itself. Tools that
+# script Finder for it tend to hang on CI. Pinned so an update can't move things.
+uvx --from dmgbuild==2.0.0 dmgbuild \
+  -s "$root/scripts/dmg/settings.py" \
+  -D app="$app" \
+  -D background="$root/scripts/dmg/background.tiff" \
+  Archipel "$dmg" >&2
 
 if $signed; then
   codesign --sign "$SIGNING_IDENTITY" --timestamp "$dmg" >&2

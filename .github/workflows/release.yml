@@ -155,6 +155,9 @@ jobs:
             echo "NOTARY_ISSUER_ID=$NOTARY_ISSUER_ID"
           } >> "$GITHUB_ENV"
 
+      # build-dmg.sh runs dmgbuild through uvx.
+      - uses: astral-sh/setup-uv@v7
+
       - name: Build the DMG
         env:
           OUTPUT_DIR: ${{ runner.temp }}/out

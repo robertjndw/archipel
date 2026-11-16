@@ -52,6 +52,15 @@ To build the same DMG locally:
 ./scripts/build-dmg.sh 0.2.0      # writes .build/dmg/Archipel-0.2.0.dmg
 ```
 
+This needs [uv](https://docs.astral.sh/uv/) (`brew install uv`) for
+`dmgbuild`. The window layout is in `scripts/dmg/settings.py`, and the
+background is drawn by `scripts/dmg/make-background.swift`. If you change one,
+check the icon positions still match the other, then regenerate the background:
+
+```sh
+swift scripts/dmg/make-background.swift scripts/dmg/background.tiff
+```
+
 ## Signing
 
 The workflow runs without any secrets. The app is then signed ad-hoc, macOS
