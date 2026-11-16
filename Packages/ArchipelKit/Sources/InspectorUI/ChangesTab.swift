@@ -29,8 +29,8 @@ final class ChangesModel {
     /// Kept here rather than in the view so switching inspector tabs does not lose a half-written message.
     var message = ""
     private(set) var activity: Activity?
-    /// Bumped when a push lands, so the arrow can fly off while the remote info is still refreshing.
-    private(set) var completedPushes = 0
+    /// Bumped when a push or pull lands, so its arrow can fly off before the label changes.
+    private(set) var syncCompletion = SyncCompletion(count: 0, direction: .up)
     private(set) var hasRemote = false
     private(set) var pullRequestLookup: PullRequestLookup?
     private let searchPATH: @MainActor () async -> String
@@ -166,14 +166,24 @@ final class ChangesModel {
     func push() {
         guard syncState.canPush else { return }
         run(.push) { [git, root] in try await git.push(in: root) } onSuccess: { [self] in
-            completedPushes += 1
-            await refreshRemoteInfo()
+            await sendOffArrow(.up) { await refreshRemoteInfo() }
         }
     }
 
     func pull() {
         guard syncState.canPull else { return }
-        run(.pull) { [git, root] in try await git.pull(in: root) } onSuccess: {}
+        run(.pull) { [git, root] in try await git.pull(in: root) } onSuccess: { [self] in
+            await sendOffArrow(.down) {}
+        }
+    }
+
+    /// Returns once the arrow has flown off. The refresh afterwards usually removes the arrow, and
+    /// with a fast remote that would cut the flight short.
+    private func sendOffArrow(_ direction: SyncDirection, while work: () async -> Void) async {
+        syncCompletion = SyncCompletion(count: syncCompletion.count + 1, direction: direction)
+        async let flight: Void? = try? Task.sleep(for: SyncArrow.sendOffDuration)
+        await work()
+        _ = await flight
     }
 
     func fetch() {

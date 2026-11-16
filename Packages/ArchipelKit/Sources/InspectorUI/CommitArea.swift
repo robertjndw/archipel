@@ -57,7 +57,7 @@ struct SyncState: Equatable {
     var canPull: Bool { isPublished && !isDetached && !isBusy }
     var canFetch: Bool { hasRemote && !isBusy }
 
-    var pushTitle: LocalizedStringKey { isPublished ? "Push" : "Publish Branch" }
+    var pushTitle: String { isPublished ? String(localized: "Push") : String(localized: "Publish Branch") }
 
     var help: LocalizedStringKey {
         if isDetached { return "HEAD is detached. Check out a branch to push." }
@@ -65,14 +65,20 @@ struct SyncState: Equatable {
         if behind > 0 {
             return "The branch is \(behind) behind \(upstream ?? "its upstream"). Pull first, otherwise git rejects the push."
         }
-        return ahead > 0 ? "Push \(ahead) commits to \(upstream ?? "the upstream")." : "Nothing to push."
+        let target = upstream ?? String(localized: "the upstream")
+        switch ahead {
+        case 0: return "Nothing to push."
+        case 1: return "Push 1 commit to \(target)."
+        default: return "Push \(ahead) commits to \(target)."
+        }
     }
 
-    var summary: LocalizedStringKey {
-        if isDetached { return "Detached HEAD" }
-        guard let upstream else { return hasRemote ? "Not published" : "No remote" }
-        if ahead == 0 && behind == 0 { return "Up to date with \(upstream)" }
-        return "\(ahead) ahead, \(behind) behind \(upstream)"
+    /// A String, not a key, because it's also the menu trigger's AppKit tooltip.
+    var summary: String {
+        if isDetached { return String(localized: "Detached HEAD") }
+        guard let upstream else { return hasRemote ? String(localized: "Not published") : String(localized: "No remote") }
+        if ahead == 0 && behind == 0 { return String(localized: "Up to date with \(upstream)") }
+        return String(localized: "\(ahead) ahead, \(behind) behind \(upstream)")
     }
 }
 
@@ -116,20 +122,22 @@ enum PrimaryAction: Equatable {
         }
     }
 
+    // Spelled out instead of ^[…](inflect: true): the grammar engine takes "Commit" for a verb and
+    // conjugates it, which gives "1 Commits" and "2 Commit", even when told it's a noun.
     var title: LocalizedStringKey {
         switch self {
         case .commit(let control): control.title
-        case .pull(let commits, _, _): "Pull ^[\(commits) Commit](inflect: true)"
-        case .push(let commits, _): "Push ^[\(commits) Commit](inflect: true)"
+        case .pull(let commits, _, _): commits == 1 ? "Pull 1 Commit" : "Pull \(commits) Commits"
+        case .push(let commits, _): commits == 1 ? "Push 1 Commit" : "Push \(commits) Commits"
         case .publish: "Publish Branch"
         }
     }
 
     /// Up for push, down for pull.
-    var wiggle: WiggleSymbolEffect {
+    var direction: SyncDirection {
         switch self {
-        case .pull: .wiggle.down
-        case .commit, .push, .publish: .wiggle.up
+        case .pull: .down
+        case .commit, .push, .publish: .up
         }
     }
 
@@ -198,10 +206,9 @@ struct CommitArea: View {
                     if let symbol = action.symbol {
                         SyncArrow(
                             systemName: symbol,
-                            wiggle: action.wiggle,
+                            direction: action.direction,
                             isBusy: model.activity == action.activity,
-                            completedPushes: model.completedPushes,
-                            canSendOff: action.activity == .push
+                            completion: model.syncCompletion
                         )
                         .contentTransition(.symbolEffect(.replace))
                     } else if model.activity == action.activity {
@@ -263,45 +270,77 @@ struct CommitArea: View {
 
 /// Pull, push and fetch in the header next to Refresh, similar to Xcode's Integrate menu.
 /// The label shows the ahead/behind counts.
+///
+/// Not a SwiftUI `Menu`: AppKit draws a menu's label as a static image, so symbol effects don't play,
+/// and it only keeps the first label, which drops a count when the branch has diverged. A borderless
+/// button looks like Refresh next to it and opens an NSMenu instead.
 struct SyncMenu: View {
     let model: ChangesModel
+    @State private var anchor = MenuAnchor()
 
     var body: some View {
         let sync = model.syncState
+        let isEnabled = !(sync.isDetached && !sync.canFetch)
 
-        Menu {
-            Button("Pull", systemImage: "arrow.down", action: model.pull)
-                .disabled(!sync.canPull)
-            Button(sync.pushTitle, systemImage: sync.isPublished ? "arrow.up" : "icloud.and.arrow.up", action: model.push)
-                .disabled(!sync.canPush)
-            Divider()
-            Button("Fetch", systemImage: "arrow.triangle.2.circlepath", action: model.fetch)
-                .disabled(!sync.canFetch)
-        } label: {
+        Button { showMenu(sync) } label: {
             label(sync)
+                // Font and inset of a native menu button. The header itself uses callout.
+                .font(.body)
+                .padding(.horizontal, 3)
+                .animation(.smooth(duration: 0.3), value: remoteActivity)
         }
-        .menuStyle(.button)
         .buttonStyle(.borderless)
-        .menuIndicator(.hidden)
+        // Opens on mouse down like a native menu. The button underneath handles keyboard and VoiceOver.
+        .overlay { MenuTrigger(anchor: anchor, tooltip: sync.summary, isEnabled: isEnabled) { showMenu(sync) } }
         .fixedSize()
-        .disabled(sync.isDetached && !sync.canFetch)
-        .help(sync.summary)
+        .disabled(!isEnabled)
         .accessibilityLabel("Sync")
         .accessibilityValue(Text(sync.summary))
     }
 
+    private func showMenu(_ sync: SyncState) {
+        guard let view = anchor.view else { return }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(ActionMenuItem(String(localized: "Pull"), symbol: "arrow.down", isEnabled: sync.canPull, action: model.pull))
+        menu.addItem(ActionMenuItem(sync.pushTitle, symbol: sync.isPublished ? "arrow.up" : "icloud.and.arrow.up", isEnabled: sync.canPush, action: model.push))
+        menu.addItem(.separator())
+        menu.addItem(ActionMenuItem(String(localized: "Fetch"), symbol: "arrow.triangle.2.circlepath", isEnabled: sync.canFetch, action: model.fetch))
+        // 9 pt below the button is where a native pull-down puts its menu.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 9 : -9), in: view)
+    }
+
+    /// Commit progress already shows on the bottom button.
+    private var remoteActivity: ChangesModel.Activity? {
+        model.activity == .commit ? nil : model.activity
+    }
+
     @ViewBuilder
     private func label(_ sync: SyncState) -> some View {
-        // Commit progress already shows on the bottom button.
-        if let activity = model.activity, activity != .commit {
-            ActivitySymbol(activity: activity, completedPushes: model.completedPushes)
-        } else if sync.ahead > 0 || sync.behind > 0 {
-            HStack(spacing: 4) {
+        ZStack {
+            if let activity = remoteActivity {
+                ActivitySymbol(activity: activity, completion: model.syncCompletion)
+                    // No removal animation, a sent-off arrow is already gone at this point.
+                    .transition(.identity)
+            } else {
+                idleLabel(sync)
+                    // Delayed so it doesn't overlap the arrow flying off.
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.8)).animation(.smooth(duration: 0.3).delay(0.15)),
+                        removal: .identity
+                    ))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func idleLabel(_ sync: SyncState) -> some View {
+        if sync.ahead > 0 || sync.behind > 0 {
+            HStack(spacing: 6) {
                 if sync.behind > 0 { Label(String(sync.behind), systemImage: "arrow.down") }
                 if sync.ahead > 0 { Label(String(sync.ahead), systemImage: "arrow.up") }
             }
-            .labelStyle(.compact)
-            .monospacedDigit()
+            .labelStyle(SyncCountLabelStyle())
             .contentTransition(.numericText())
             .animation(.smooth, value: sync)
         } else {
@@ -310,10 +349,61 @@ struct SyncMenu: View {
     }
 }
 
+/// Lets the button reach the AppKit view it should open its menu from.
+@MainActor
+private final class MenuAnchor {
+    weak var view: NSView?
+}
+
+/// Sits on top of the sync button and opens the menu on mouse down, like a native pull-down.
+private struct MenuTrigger: NSViewRepresentable {
+    let anchor: MenuAnchor
+    let tooltip: String
+    /// SwiftUI's `disabled` doesn't reach AppKit views, so the trigger checks this itself.
+    let isEnabled: Bool
+    let open: () -> Void
+
+    final class TriggerView: NSView {
+        var open: () -> Void = {}
+        var isEnabled = true
+        override func mouseDown(with event: NSEvent) {
+            if isEnabled { open() }
+        }
+        // Not focusable or visible to VoiceOver: the SwiftUI button underneath covers both.
+        override func isAccessibilityElement() -> Bool { false }
+    }
+
+    func makeNSView(context: Context) -> TriggerView { TriggerView() }
+
+    func updateNSView(_ view: TriggerView, context: Context) {
+        view.open = open
+        view.isEnabled = isEnabled
+        view.toolTip = tooltip
+        anchor.view = view
+    }
+}
+
+private final class ActionMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, symbol: String, isEnabled: Bool, action handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(runHandler), keyEquivalent: "")
+        target = self
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        self.isEnabled = isEnabled
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func runHandler() { handler() }
+}
+
 /// Shown instead of a spinner while a remote action runs.
 private struct ActivitySymbol: View {
     let activity: ChangesModel.Activity
-    let completedPushes: Int
+    let completion: SyncCompletion
 
     var body: some View {
         switch activity {
@@ -321,23 +411,31 @@ private struct ActivitySymbol: View {
             Image(systemName: "arrow.triangle.2.circlepath")
                 .symbolEffect(.rotate.clockwise.wholeSymbol, options: .repeat(.continuous))
         case .pull:
-            Image(systemName: "arrow.down")
-                .symbolEffect(.wiggle.down, options: .repeat(.continuous))
+            SyncArrow(systemName: "arrow.down", direction: .down, isBusy: true, completion: completion)
         case .push, .commit:
-            SyncArrow(systemName: "arrow.up", wiggle: .wiggle.up, isBusy: true, completedPushes: completedPushes, canSendOff: true)
+            SyncArrow(systemName: "arrow.up", direction: .up, isBusy: true, completion: completion)
         }
     }
 }
 
-/// Wiggles while its action runs and flies off upward when a push succeeds. By the time the model is
-/// idle the label has usually dropped the arrow; if it hasn't, the arrow comes back.
+enum SyncDirection: Equatable { case up, down }
+
+/// A push or pull that just landed.
+struct SyncCompletion: Equatable {
+    var count: Int
+    var direction: SyncDirection
+}
+
+/// Wiggles while its action runs and flies off in its direction when the action succeeds. By the time
+/// the model is idle the label has usually dropped the arrow; if it hasn't, the arrow comes back.
 struct SyncArrow: View {
     let systemName: String
-    let wiggle: WiggleSymbolEffect
+    let direction: SyncDirection
     let isBusy: Bool
-    let completedPushes: Int
-    /// False for the pull arrow, which shares the primary button's slot but must not fly up.
-    let canSendOff: Bool
+    let completion: SyncCompletion
+
+    /// Crouch plus flight. The model waits this long before refreshing so the arrow can leave.
+    static let sendOffDuration = Duration.milliseconds(450)
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var phase = Phase.resting
@@ -346,12 +444,17 @@ struct SyncArrow: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .symbolEffect(wiggle, options: .repeat(.continuous), isActive: isBusy && phase == .resting)
-            .offset(y: offset)
-            .scaleEffect(phase == .sent ? 0.7 : 1, anchor: .bottom)
+            .symbolEffect(direction == .up ? .wiggle.up : .wiggle.down, options: .repeat(.continuous), isActive: isBusy && phase == .resting)
+            .offset(y: direction == .up ? offset : -offset)
+            .scaleEffect(phase == .sent ? 0.7 : 1, anchor: direction == .up ? .bottom : .top)
             .blur(radius: phase == .sent ? 1 : 0)
             .opacity(phase == .sent ? 0 : 1)
-            .onChange(of: completedPushes) { sendOff() }
+            // The primary button swaps between the pull and push arrow, so only fly off when the
+            // finished action went this arrow's way.
+            .onChange(of: completion) {
+                guard completion.direction == direction else { return }
+                sendOff()
+            }
             .onChange(of: isBusy) {
                 guard !isBusy, phase != .resting else { return }
                 withAnimation(.smooth(duration: 0.3)) { phase = .resting }
@@ -367,7 +470,6 @@ struct SyncArrow: View {
     }
 
     private func sendOff() {
-        guard canSendOff else { return }
         if reduceMotion {
             withAnimation(.easeOut(duration: 0.25)) { phase = .sent }
             return
@@ -387,29 +489,26 @@ private struct DivergedCounts: View {
     let ahead: Int
 
     var body: some View {
-        HStack(spacing: 4) {
+        // Full-size arrows, so the button doesn't look smaller than its Push and Pull variants.
+        HStack(spacing: 6) {
             Label(String(behind), systemImage: "arrow.down")
             Label(String(ahead), systemImage: "arrow.up")
         }
-        .labelStyle(.compact)
+        .labelStyle(SyncCountLabelStyle())
         .monospacedDigit()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(behind) to pull, \(ahead) to push")
     }
 }
 
-/// Tight spacing so "↓2 ↑1" reads as one indicator.
-private struct CompactLabelStyle: LabelStyle {
+/// Full-size arrow, spaced like the image and title of a native button.
+private struct SyncCountLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 1) {
-            configuration.icon.imageScale(.small)
+        HStack(spacing: 4) {
+            configuration.icon
             configuration.title
         }
     }
-}
-
-private extension LabelStyle where Self == CompactLabelStyle {
-    static var compact: CompactLabelStyle { .init() }
 }
 
 #if DEBUG
@@ -470,12 +569,12 @@ private func previewCommitArea(_ title: String, _ model: ChangesModel) -> some V
 
 // Runs on a loop since the canvas doesn't take clicks for this preview.
 #Preview("Push Send-Off") {
-    @Previewable @State var pushes = 0
+    @Previewable @State var pushes = SyncCompletion(count: 0, direction: .up)
     @Previewable @State var isBusy = false
 
     Button {} label: {
         HStack(spacing: 6) {
-            SyncArrow(systemName: "arrow.up", wiggle: .wiggle.up, isBusy: isBusy, completedPushes: pushes, canSendOff: true)
+            SyncArrow(systemName: "arrow.up", direction: .up, isBusy: isBusy, completion: pushes)
             Text("Push 2 Commits")
         }
         .frame(maxWidth: .infinity)
@@ -488,7 +587,7 @@ private func previewCommitArea(_ title: String, _ model: ChangesModel) -> some V
         while !Task.isCancelled {
             isBusy = true
             try? await Task.sleep(for: .seconds(1.5))
-            pushes += 1
+            pushes.count += 1
             try? await Task.sleep(for: .seconds(1))
             isBusy = false
             try? await Task.sleep(for: .seconds(1.5))
