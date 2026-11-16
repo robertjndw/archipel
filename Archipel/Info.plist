@@ -8,7 +8,7 @@
 	<!-- Public half of the EdDSA key from Sparkle's generate_keys. The release workflow refuses to
 	     publish while this is still the placeholder, since every update would fail verification. -->
 	<key>SUPublicEDKey</key>
-	<string>REPLACE_WITH_SPARKLE_PUBLIC_KEY</string>
+	<string>M+kcDmMiIktS7NiEG47oMngB50kLDYfxa87DQDu7yB4=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 </dict>
