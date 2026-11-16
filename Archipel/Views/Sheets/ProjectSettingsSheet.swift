@@ -213,16 +213,16 @@ struct ProjectSettingsSheet: View {
         Section {
             if let branches {
                 Picker("Base branch", selection: $baseBranch) {
-                    Text("Current HEAD").tag(String?.none)
+                    Text("Automatic").tag(String?.none)
                     ForEach(baseBranchChoices(from: branches), id: \.self) { Text($0).tag(Optional($0)) }
                 }
             } else {
-                TextField("Base branch", text: baseBranchText, prompt: Text("Current HEAD"))
+                TextField("Base branch", text: baseBranchText, prompt: Text("Automatic"))
             }
         } header: {
             Text("New Branches")
         } footer: {
-            Text("New branches start from this branch. Current HEAD uses whatever the main checkout has checked out.")
+            Text("New branches start from this branch. Automatic uses the remote's default branch for new worktrees and the current branch when switching in place.")
         }
     }
 

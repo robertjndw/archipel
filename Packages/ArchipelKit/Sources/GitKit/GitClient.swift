@@ -45,7 +45,8 @@ public struct GitClient: Sendable {
         // --no-guess so a typo never quietly creates a tracking branch from a remote of that name.
         case .local(let branch): ["switch", "--no-guess", branch]
         case .remote(let remoteBranch): ["switch", "--track", remoteBranch]
-        case .new(let branch, let base): ["switch", "-c", branch] + (base.map { [$0] } ?? [])
+        // --no-track for the same reason as in addWorktree: a remote base must not become the upstream.
+        case .new(let branch, let base): ["switch", "-c", branch] + (base.map { ["--no-track", $0] } ?? [])
         }
         let result = try await GitProcess.run(args, in: folder, readOnly: false)
         guard result.status != 0 else { return }
@@ -54,12 +55,60 @@ public struct GitClient: Sendable {
 
     /// `base` is the ref a new branch starts from; nil means HEAD. It is ignored for an existing branch.
     public func addWorktree(repository: URL, path: URL, branch: String, createBranch: Bool, base: String? = nil) async throws {
+        // --no-track because branching off `origin/main` would otherwise make it the upstream: status
+        // then reads "ahead of origin/main" and a plain push is refused for the mismatched name.
         let args = createBranch
-            ? ["worktree", "add", "-b", branch, "--", path.path] + (base.map { [$0] } ?? [])
+            ? ["worktree", "add", "-b", branch] + (base == nil ? [] : ["--no-track"]) + ["--", path.path] + (base.map { [$0] } ?? [])
             : ["worktree", "add", "--", path.path, branch]
         let result = try await GitProcess.run(args, in: repository, readOnly: false)
         guard result.status != 0 else { return }
         throw GitError(worktreeAddFailure: result)
+    }
+
+    /// The remote's default branch as `origin/main`, read from the local `origin/HEAD`. Clones set
+    /// that, but `git remote add` does not, so `origin/main` and `origin/master` are tried after it.
+    /// Nil without such a branch, which includes having no origin at all. Never touches the network.
+    public func remoteDefaultBranch(in repository: URL) async -> String? {
+        if let output = try? await run(["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"], in: repository) {
+            let ref = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !ref.isEmpty { return ref }
+        }
+        for name in ["main", "master"] {
+            if await refExists("refs/remotes/origin/\(name)", in: repository) { return "origin/\(name)" }
+        }
+        return nil
+    }
+
+    /// Splits a remote-tracking branch such as `origin/feature/x` into remote and branch, or nil when
+    /// `ref` is not one. A local branch of the same name wins, as it does when git resolves the name.
+    public func remoteTrackingBranch(_ ref: String, in repository: URL) async -> (remote: String, branch: String)? {
+        guard await !refExists("refs/heads/\(ref)", in: repository),
+              await refExists("refs/remotes/\(ref)", in: repository),
+              let output = try? await run(["remote"], in: repository)
+        else { return nil }
+        // Remote names may contain slashes themselves, so match against the configured names.
+        let remote = output.split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { ref.hasPrefix($0 + "/") }
+            .max { $0.count < $1.count }
+        guard let remote else { return nil }
+        return (remote, String(ref.dropFirst(remote.count + 1)))
+    }
+
+    /// Updates a single remote-tracking branch, e.g. right before branching off it. The sheet waits
+    /// on this, so a dead connection should fail fast.
+    public func fetch(branch: String, from remote: String, in repository: URL) async throws {
+        let args = [
+            "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=15",
+            "fetch", "--quiet", "--no-tags", remote, "refs/heads/\(branch)",
+        ]
+        let result = try await GitProcess.run(args, in: repository, readOnly: false, environment: Self.unattendedEnvironment)
+        guard result.status == 0 else { throw GitError(command: "git fetch", output: result) }
+    }
+
+    private func refExists(_ ref: String, in repository: URL) async -> Bool {
+        let result = try? await GitProcess.run(["rev-parse", "--verify", "-q", ref], in: repository, readOnly: true)
+        return result?.status == 0
     }
 
     /// Asks git rather than reimplementing check-ref-format's rules. Uses `--branch`, so it also
@@ -139,12 +188,13 @@ public struct GitClient: Sendable {
     /// ssh gets BatchMode so an unknown host key or a locked key fails at once instead of waiting
     /// for a prompt nobody can answer. A GIT_SSH_COMMAND the user set is left alone.
     public func fetch(in folder: URL) async throws {
-        var environment: [String: String] = [:]
-        if ProcessInfo.processInfo.environment["GIT_SSH_COMMAND"] == nil {
-            environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-        }
-        let result = try await GitProcess.run(["fetch", "--quiet", "--prune"], in: folder, readOnly: false, environment: environment)
+        let result = try await GitProcess.run(["fetch", "--quiet", "--prune"], in: folder, readOnly: false, environment: Self.unattendedEnvironment)
         guard result.status == 0 else { throw GitError(command: "git fetch", output: result) }
+    }
+
+    private static var unattendedEnvironment: [String: String] {
+        guard ProcessInfo.processInfo.environment["GIT_SSH_COMMAND"] == nil else { return [:] }
+        return ["GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=10"]
     }
 
     /// Fetches, then fast-forwards the branch to its upstream. Never merges or rebases. A diverged

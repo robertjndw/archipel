@@ -21,6 +21,8 @@ struct WorktreeSheet: View {
     @State private var isLoaded = false
     @State private var isRepository = true
     @State private var isWorking = false
+    /// Where a new branch starts when the project names no base branch. Nil means HEAD.
+    @State private var remoteDefaultBranch: String?
     @State private var failure: String?
     /// Off only for previews, which fill the sheet themselves and have no repository to ask.
     private var asksGit = true
@@ -169,7 +171,7 @@ struct WorktreeSheet: View {
     // MARK: State
 
     private var baseBranch: String {
-        (model.workspace.project(id: project.id) ?? project).baseBranch ?? "the current HEAD"
+        (model.workspace.project(id: project.id) ?? project).baseBranch ?? remoteDefaultBranch ?? "the current HEAD"
     }
 
     private var selectedSuggestion: Suggestion? {
@@ -258,6 +260,7 @@ struct WorktreeSheet: View {
         defer { isLoaded = true }
         isRepository = await model.git.isRepository(project.folderURL)
         guard isRepository else { return }
+        remoteDefaultBranch = await model.git.remoteDefaultBranch(in: project.folderURL)
         do {
             try await loadBranches()
             worktrees = try await model.availableWorktrees(for: project)

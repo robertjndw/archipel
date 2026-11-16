@@ -449,19 +449,38 @@ final class AppModel {
         if FileManager.default.fileExists(atPath: path.path) {
             throw GitError(message: "The folder \(path.abbreviatedPath) already exists. Pick another branch name, or move or delete that folder.")
         }
+        let base = createBranch ? await fetchedWorktreeBase(for: project) : nil
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
         try await git.addWorktree(
             repository: project.folderURL,
             path: path,
             branch: branch,
             createBranch: createBranch,
-            base: project.baseBranch
+            base: base
         )
         let worktree = Worktree(path: path, branch: branch)
         changingSelection { _ = $0.addWorktree(worktree, to: project.id) }
         if workspace.project(id: project.id)?.scripts.setupCommand != nil {
             startScript(.setup, in: worktree.id)
         }
+    }
+
+    /// Where a new worktree's branch starts: the project's base branch, else the remote's default
+    /// branch. Worktrees are usually fresh tasks, so they should start from what's merged. Nil means
+    /// HEAD, for repositories without a remote.
+    func worktreeBase(for project: Project) async -> String? {
+        if let configured = project.baseBranch { return configured }
+        return await git.remoteDefaultBranch(in: project.folderURL)
+    }
+
+    /// `worktreeBase`, fetched first when it is a remote-tracking branch. A failed fetch (offline,
+    /// expired credentials) is ignored, since a slightly stale base is better than no worktree.
+    private func fetchedWorktreeBase(for project: Project) async -> String? {
+        guard let base = await worktreeBase(for: project) else { return nil }
+        if let tracking = await git.remoteTrackingBranch(base, in: project.folderURL) {
+            try? await git.fetch(branch: tracking.branch, from: tracking.remote, in: project.folderURL)
+        }
+        return base
     }
 
     /// Takes the worktree out of the sidebar. With `deleteFolder` git removes the folder too,

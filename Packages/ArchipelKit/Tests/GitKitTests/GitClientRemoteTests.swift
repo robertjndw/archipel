@@ -230,6 +230,67 @@ final class GitClientRemoteTests {
         #expect(summary.upstream == "origin/feature")
     }
 
+    @Test func remoteDefaultBranchFallsBackWithoutOriginHead() async throws {
+        #expect(await git.remoteDefaultBranch(in: repo) == nil)
+
+        let remote = try makeBareRemote()
+        try sh("remote", "add", "origin", remote.path)
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+        try await git.push(in: repo)
+        // `remote add` leaves origin/HEAD unset, so this is the main/master guess.
+        #expect(await git.remoteDefaultBranch(in: repo) == "origin/main")
+
+        try sh("branch", "trunk")
+        try sh("push", "-q", "origin", "trunk")
+        try sh("remote", "set-head", "origin", "trunk")
+        #expect(await git.remoteDefaultBranch(in: repo) == "origin/trunk")
+    }
+
+    @Test func remoteTrackingBranchSplitsOnlyRemoteRefs() async throws {
+        let remote = try makeBareRemote()
+        try sh("remote", "add", "origin", remote.path)
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+        try sh("branch", "feature/x")
+        try sh("push", "-q", "origin", "main", "feature/x")
+        try await git.fetch(in: repo)
+
+        let tracking = await git.remoteTrackingBranch("origin/feature/x", in: repo)
+        #expect(tracking?.remote == "origin")
+        #expect(tracking?.branch == "feature/x")
+        #expect(await git.remoteTrackingBranch("main", in: repo) == nil)
+        #expect(await git.remoteTrackingBranch("origin/missing", in: repo) == nil)
+    }
+
+    @Test func worktreeFromFetchedRemoteBaseHasNoUpstream() async throws {
+        let remote = try makeBareRemote()
+        try sh("remote", "add", "origin", remote.path)
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+        try await git.push(in: repo)
+        try commitInOther(try makeOtherClone(of: remote), "theirs.txt")
+
+        try await git.fetch(branch: "main", from: "origin", in: repo)
+        let wt = base.appending(path: "wt")
+        try await git.addWorktree(repository: repo, path: wt, branch: "task", createBranch: true, base: "origin/main")
+
+        #expect(FileManager.default.fileExists(atPath: wt.appending(path: "theirs.txt").path))
+        let summary = try await git.summary(in: wt)
+        #expect(summary.branch == "task")
+        #expect(summary.upstream == nil)
+    }
+
+    @Test func fetchingAnUnreachableRemoteThrows() async throws {
+        try sh("remote", "add", "origin", base.appending(path: "nowhere.git").path)
+        await #expect(throws: GitError.self) {
+            try await self.git.fetch(branch: "main", from: "origin", in: self.repo)
+        }
+    }
+
     // MARK: Helpers
 
     /// A second clone of the remote, standing in for a teammate who pushes.
