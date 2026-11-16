@@ -93,7 +93,7 @@ struct GeneralSettingsView: View {
                 Toggle("Check for updates automatically", isOn: $updater.checksAutomatically)
                 Toggle(isOn: $updater.receivesBetaUpdates) {
                     Text("Include beta versions")
-                    Text("Betas arrive earlier and may be rough around the edges. When a stable version is newer than your beta, you get that one.")
+                    Text("Betas come out earlier and can have more bugs. If a newer stable version comes out, you get that instead.")
                 }
                 HStack {
                     Spacer()

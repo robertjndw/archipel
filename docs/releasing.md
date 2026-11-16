@@ -103,8 +103,9 @@ appcast.
 
 ### 4. Sparkle signing key
 
-Sparkle rejects any update that is not signed with this key, so keep the
-private half safe. Losing it means installed copies can no longer update.
+Sparkle rejects any update that isn't signed with this key. Back up the
+private key somewhere safe: if you lose it, installed copies can't update
+anymore.
 
 ```sh
 xcodebuild -resolvePackageDependencies -project Archipel.xcodeproj
@@ -135,9 +136,9 @@ Or use Settings > Pages > Deploy from a branch > `gh-pages` / root.
 
 ### Forks
 
-`SUFeedURL` and `SUPublicEDKey` in `Archipel/Info.plist` point at the upstream
-appcast. A fork that ships its own releases has to change both, otherwise its
-users are offered upstream builds, or fail to verify its own.
+`SUFeedURL` and `SUPublicEDKey` in `Archipel/Info.plist` point at this repo's
+appcast. If you ship releases from a fork, change both to your own, or your
+builds will update to the ones from this repo.
 
 ## Runner
 
