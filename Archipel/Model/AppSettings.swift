@@ -50,6 +50,14 @@ final class AppSettings {
         }
     }
 
+    /// Where a ⌘-clicked link opens. ⌘⌥-click picks the other one.
+    enum LinkDestination: String, CaseIterable, Identifiable {
+        case archipel, defaultApp
+        var id: Self { self }
+
+        var other: Self { self == .archipel ? .defaultApp : .archipel }
+    }
+
     // MARK: General
 
     /// What ⌘T and the plain "new session" buttons start.
@@ -63,6 +71,10 @@ final class AppSettings {
     var fetchesAutomatically: Bool { didSet { defaults.set(fetchesAutomatically, forKey: Key.fetchesAutomatically) } }
     /// Bundle identifier of the editor "Open in Editor" uses. nil picks the first installed one of `ExternalEditor.known`.
     var externalEditorBundleID: String? { didSet { defaults.set(externalEditorBundleID, forKey: Key.externalEditorBundleID) } }
+    /// Files ⌘-clicked in a terminal.
+    var fileLinkDestination: LinkDestination { didSet { defaults.set(fileLinkDestination.rawValue, forKey: Key.fileLinkDestination) } }
+    /// Web links ⌘-clicked in a terminal, and the dev server pill.
+    var webLinkDestination: LinkDestination { didSet { defaults.set(webLinkDestination.rawValue, forKey: Key.webLinkDestination) } }
 
     // MARK: Appearance
 
@@ -118,6 +130,9 @@ final class AppSettings {
         confirmsQuitWhileWorking = bool(Key.confirmsQuitWhileWorking, true)
         fetchesAutomatically = bool(Key.fetchesAutomatically, true)
         externalEditorBundleID = defaults.string(forKey: Key.externalEditorBundleID)
+        fileLinkDestination = defaults.string(forKey: Key.fileLinkDestination).flatMap(LinkDestination.init) ?? .archipel
+        // The browser stays the default for web links: it has the user's logins and extensions.
+        webLinkDestination = defaults.string(forKey: Key.webLinkDestination).flatMap(LinkDestination.init) ?? .defaultApp
         appearance = defaults.string(forKey: Key.appearance).flatMap(Appearance.init) ?? .system
         sidebarDensity = defaults.string(forKey: Key.sidebarDensity).flatMap(SidebarDensity.init) ?? .comfortable
         showsGitStatusInSidebar = bool(Key.showsGitStatusInSidebar, true)
@@ -143,6 +158,8 @@ final class AppSettings {
         static let confirmsQuitWhileWorking = "settings.confirmsQuitWhileWorking"
         static let fetchesAutomatically = "settings.fetchesAutomatically"
         static let externalEditorBundleID = "settings.externalEditorBundleID"
+        static let fileLinkDestination = "settings.fileLinkDestination"
+        static let webLinkDestination = "settings.webLinkDestination"
         static let appearance = "settings.appearance"
         static let sidebarDensity = "settings.sidebarDensity"
         static let showsGitStatusInSidebar = "settings.showsGitStatusInSidebar"

@@ -244,6 +244,9 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
 
     override func mouseDown(with event: NSEvent) {
         if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        // Ghostty's hover state still has the ⌥ from the last key event, so a
+        // click without a mouse move in between would miss the link.
+        if Self.isAlternateLinkGesture(event.modifierFlags) { sendMousePosition(event) }
         sendMouseButton(GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, event)
     }
 
@@ -276,7 +279,7 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
     @discardableResult
     private func sendMouseButton(_ state: ghostty_input_mouse_state_e, _ button: ghostty_input_mouse_button_e, _ event: NSEvent) -> Bool {
         guard let surface else { return false }
-        return ghostty_surface_mouse_button(surface, state, button, Self.mods(event.modifierFlags))
+        return ghostty_surface_mouse_button(surface, state, button, Self.mouseMods(event.modifierFlags))
     }
 
     private static func mouseButton(_ number: Int) -> ghostty_input_mouse_button_e {
@@ -300,7 +303,7 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
         super.mouseExited(with: event)
         // While dragging we keep getting mouseDragged outside the view.
         guard let surface, NSEvent.pressedMouseButtons == 0 else { return }
-        ghostty_surface_mouse_pos(surface, -1, -1, Self.mods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, -1, -1, Self.mouseMods(event.modifierFlags))
     }
 
     override func mouseMoved(with event: NSEvent) { sendMousePosition(event) }
@@ -312,7 +315,7 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
         guard let surface else { return }
         let point = convert(event.locationInWindow, from: nil)
         // Ghostty's origin is top-left.
-        ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, Self.mods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, Self.mouseMods(event.modifierFlags))
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -462,6 +465,15 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
             if sidePressed { action = GHOSTTY_ACTION_PRESS }
         }
         sendKey(action, event: event)
+
+        // Same problem as in mouseDown: without this, a link under a pointer
+        // that isn't moving doesn't get underlined on ⌘⌥.
+        if Self.isAlternateLinkGesture(event.modifierFlags), let surface, let window {
+            let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            if bounds.contains(point) {
+                ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, Self.mouseMods(event.modifierFlags))
+            }
+        }
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -713,6 +725,19 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
     }
 
     // MARK: Helpers
+
+    /// ⌘⌥-click is ⌘-click with the host's link setting flipped. Ghostty only
+    /// matches links on exactly ⌘, so its mouse handling never sees the ⌥.
+    private static func isAlternateLinkGesture(_ flags: NSEvent.ModifierFlags) -> Bool {
+        flags.intersection([.command, .option, .control, .shift]) == [.command, .option]
+    }
+
+    /// A program that reads the mouse sees ⌘⌥-clicks as ⌘-clicks.
+    private static func mouseMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
+        guard isAlternateLinkGesture(flags) else { return mods(flags) }
+        let alt = GHOSTTY_MODS_ALT.rawValue | GHOSTTY_MODS_ALT_RIGHT.rawValue
+        return ghostty_input_mods_e(mods(flags).rawValue & ~alt)
+    }
 
     static func mods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
         var mods = GHOSTTY_MODS_NONE.rawValue

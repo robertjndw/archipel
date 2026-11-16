@@ -338,9 +338,9 @@ extension TerminalApp {
             reloadConfig(soft: soft, surface: surface)
             return true
         case .openURL(let string, let kind):
-            Self.openURL(string, kind: ghostty_action_open_url_kind_e(kind))
+            openURL(string, kind: ghostty_action_open_url_kind_e(kind), session: session(for: key))
             // Always claim it: unhandled, Ghostty falls back to spawning `open`
-            // on the raw target, bypassing the policy below.
+            // on the raw target, bypassing TerminalLink's checks.
             return true
         default:
             break
@@ -366,40 +366,26 @@ extension TerminalApp {
         return true
     }
 
-    /// Terminal output is untrusted: OSC 8 links and detected URLs can point
-    /// anywhere. Only web/mail URLs and existing non-executable files are
-    /// opened; custom schemes, apps and executables are refused.
-    private static func openURL(_ string: String, kind: ghostty_action_open_url_kind_e) {
-        let url: URL
-        if let candidate = URL(string: string), candidate.scheme != nil {
-            url = candidate
-        } else {
-            url = URL(filePath: NSString(string: string).standardizingPath)
-        }
-
-        switch url.scheme?.lowercased() {
-        case "http", "https":
-            guard url.host() != nil else { return }
-        case "mailto":
-            break
-        case "file":
-            // Ghostty-originated kinds (text/html) are its own files, e.g. the config.
-            if kind != GHOSTTY_ACTION_OPEN_URL_KIND_TEXT && kind != GHOSTTY_ACTION_OPEN_URL_KIND_HTML {
-                let path = url.path(percentEncoded: false)
-                var isDirectory: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
-                      !NSWorkspace.shared.isFilePackage(atPath: path),
-                      isDirectory.boolValue || !FileManager.default.isExecutableFile(atPath: path)
-                else {
-                    logger.info("refusing to open untrusted file target")
-                    return
-                }
-            }
-        default:
-            logger.info("refusing to open URL with untrusted scheme")
+    private func openURL(_ string: String, kind: ghostty_action_open_url_kind_e, session: TerminalSession?) {
+        // Text and HTML kinds are Ghostty's own files, such as its config,
+        // not something the terminal printed.
+        if kind == GHOSTTY_ACTION_OPEN_URL_KIND_TEXT || kind == GHOSTTY_ACTION_OPEN_URL_KIND_HTML {
+            let url = URL(string: string).flatMap { $0.scheme == nil ? nil : $0 } ?? URL(filePath: string)
+            if url.isFileURL { NSWorkspace.shared.open(url) }
             return
         }
-        NSWorkspace.shared.open(url)
+        guard let link = TerminalLink(string) else {
+            logger.info("refusing to open untrusted link target")
+            return
+        }
+        guard let session else {
+            link.openExternally()
+            return
+        }
+        // SurfaceView hides ⌥ from Ghostty during ⌘⌥ mouse events. This runs
+        // during the click, so the current modifier flags still include it.
+        let flags = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        session.emit(.openLink(link, alternate: flags.contains(.option)))
     }
 }
 

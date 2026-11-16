@@ -89,6 +89,7 @@ func describe(_ event: TerminalEvent) -> String {
     case .progress(let p): "event: progress \(p.map { "\($0.state) \($0.percent.map(String.init) ?? "-")" } ?? "removed")"
     case .childExited(let code): "event: childExited exitCode=\(code)"
     case .closeRequested: "event: closeRequested"
+    case .openLink(let link, let alternate): "event: openLink \(link.url.absoluteString.debugDescription) alternate=\(alternate)"
     }
 }
 
@@ -121,6 +122,7 @@ final class DemoDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor [options] in
             for await event in session.events {
                 if options.printEvents { emit(describe(event)) }
+                if case .openLink(let link, _) = event { link.openExternally() }
                 if case .closeRequested = event, !options.waitAfterCommand {
                     session.close()
                     NSApp.terminate(nil)

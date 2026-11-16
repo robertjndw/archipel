@@ -5,6 +5,9 @@ public enum TabContent: Codable, Hashable, Sendable {
     case file(URL)
     /// `path` is relative to the worktree root.
     case diff(path: String, staged: Bool)
+    /// The page first opened. Navigating inside the tab doesn't change it, so opening that URL
+    /// again finds this tab.
+    case web(URL)
 }
 
 public struct Tab: Codable, Equatable, Identifiable, Sendable {
