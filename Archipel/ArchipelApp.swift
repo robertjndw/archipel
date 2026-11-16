@@ -34,6 +34,9 @@ struct ArchipelApp: App {
                 .onAppear {
                     delegate.model = model
                     applyAppearance()
+                    // Reading the system's symbol list takes a few dozen milliseconds, which would
+                    // otherwise land on the main thread the first time an island editor opens.
+                    Task.detached(priority: .utility) { _ = SymbolCatalog.shared }
                 }
         }
         .defaultSize(width: 1280, height: 800)

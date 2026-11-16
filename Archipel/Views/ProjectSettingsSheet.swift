@@ -15,6 +15,18 @@ struct ProjectSettingsSheet: View {
 
     private enum IconKind: Hashable { case automatic, symbol, image }
 
+    /// Shown first in the symbol picker: symbols that suit software projects.
+    static let suggestedSymbols = [
+        "shippingbox", "terminal", "chevron.left.forwardslash.chevron.right", "curlybraces",
+        "hammer", "wrench.and.screwdriver", "gearshape", "cpu",
+        "server.rack", "externaldrive", "internaldrive", "network",
+        "globe", "cloud", "antenna.radiowaves.left.and.right", "bolt",
+        "flame", "leaf", "swift", "app.badge",
+        "macwindow", "iphone", "safari", "doc.text",
+        "book", "chart.bar", "cube", "puzzlepiece",
+        "lock.shield", "testtube.2", "ladybug", "sparkles",
+    ]
+
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let project: Project
@@ -107,7 +119,11 @@ struct ProjectSettingsSheet: View {
             case .automatic:
                 EmptyView()
             case .symbol(let current):
-                ProjectSymbolGrid(selection: current) { icon = .symbol($0) }
+                SymbolPicker(
+                    selection: Binding(get: { current }, set: { icon = .symbol($0) }),
+                    suggestions: Self.suggestedSymbols,
+                    tint: previewColor
+                )
             case .image(let url):
                 LabeledContent("Image") {
                     HStack {
@@ -155,7 +171,7 @@ struct ProjectSettingsSheet: View {
                 icon = .automatic
             case .symbol:
                 if case .symbol = icon { return }
-                icon = .symbol(ProjectSymbolGrid.symbols[0])
+                icon = .symbol(Self.suggestedSymbols[0])
             case .image:
                 if case .image = icon { return }
                 isPickingImage = true

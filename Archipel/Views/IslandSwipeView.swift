@@ -100,9 +100,14 @@ private struct IslandSwipeDriver: ViewModifier {
         state.ownsGesture = false
         let target = gesture.settledIndex()
         let generation = state.generation
-        let spring = Animation.spring(duration: 0.4, bounce: 0.18)
+        let width = state.width
+        let start = state.offset
         guard target != gesture.selectedIndex, model.workspace.islands.indices.contains(target) else {
-            withAnimation(reduceMotion ? nil : spring) { state.offset = 0 }
+            // Springs back from wherever the fingers let go, at the speed they were moving, so the
+            // release does not stop dead before turning around.
+            withAnimation(reduceMotion ? nil : Self.settleSpring(velocity: gesture.velocity, distance: -start)) {
+                state.offset = 0
+            }
             return
         }
         let id = model.workspace.islands[target].id
@@ -112,25 +117,51 @@ private struct IslandSwipeDriver: ViewModifier {
             return
         }
         // Moving right revealed the previous island: the old content leaves to the right and the new
-        // one comes in from the left, with a spring settle.
+        // one comes in from the left.
         let side: Double = target < gesture.selectedIndex ? 1 : -1
-        withAnimation(.easeIn(duration: 0.12)) {
-            state.offset = side * state.width * 0.6
+        // Linear and at least as fast as the fingers: any curve that starts from rest makes the list
+        // look like it catches on something after a fast flick. It runs all the way out so the
+        // island swap below happens while none of the list is on screen.
+        let speed = max(side * gesture.velocity, Self.minimumExitSpeed)
+        let remaining = max(width - side * start, 0)
+        let exit = min(max(remaining / speed, 0.04), 0.16)
+        let entry = side * width * Self.entryFraction
+        withAnimation(.linear(duration: exit)) {
+            state.offset = side * width
         } completion: {
             guard state.generation == generation else {
                 // A newer horizontal gesture owns the offset; otherwise nothing else would
-                // bring the list back from the half-slid, faded state.
-                if !state.ownsGesture { withAnimation(spring) { state.offset = 0 } }
+                // bring the list back from the slid-out state.
+                if !state.ownsGesture {
+                    withAnimation(.spring(duration: 0.4, bounce: 0.18)) { state.offset = 0 }
+                }
                 return
             }
             var instant = Transaction()
             instant.disablesAnimations = true
-            withTransaction(instant) { state.offset = -side * state.width * 0.35 }
+            withTransaction(instant) { state.offset = -entry }
             // Only flagged when the selection really changes, or no onChange would clear it.
             if model.selectedIsland?.id != id { state.selectingBySwipe = true }
             model.select(island: id)
-            withAnimation(spring) { state.offset = 0 }
+            // Picks up the exit's speed, so the new list carries the motion in instead of starting
+            // from rest.
+            withAnimation(Self.settleSpring(velocity: side * speed, distance: entry)) { state.offset = 0 }
         }
+    }
+
+    /// Below this, a slow drag past the commit point would crawl out of the sidebar.
+    private static let minimumExitSpeed = 1100.0
+    /// How far off-center the new island's list starts, as a share of the width.
+    private static let entryFraction = 0.35
+
+    /// A spring toward zero that starts at `velocity` (points per second, positive to the right),
+    /// covering `distance` points. SwiftUI wants the start velocity as a share of the distance.
+    private static func settleSpring(velocity: Double, distance: Double) -> Animation {
+        guard abs(distance) > 1 else { return .spring(duration: 0.35, bounce: 0.12) }
+        // Capped because a near-finished distance would turn any speed into a huge share of it,
+        // and the spring would overshoot hard.
+        let share = min(max(velocity / distance, -8), 18)
+        return .interpolatingSpring(duration: 0.38, bounce: 0.12, initialVelocity: share)
     }
 }
 

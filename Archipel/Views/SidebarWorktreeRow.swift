@@ -179,7 +179,9 @@ struct SidebarMetadataLine: View {
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
-        HStack(spacing: 7) {
+        // Baseline, not center: symbols are taller than the digits and hang below them, so a
+        // centered item with an icon sits lower than a text-only one like the line counts.
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
             ForEach(items) { item in
                 view(for: item)
                     .help(help(for: item))
@@ -205,7 +207,7 @@ struct SidebarMetadataLine: View {
                 .background(badge.state.color.opacity(isProminent ? 0.3 : 0.15), in: .capsule)
                 .fixedSize()
         case .diff(let insertions, let deletions):
-            HStack(spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
                 if insertions > 0 {
                     Text(verbatim: "+\(insertions)")
                         .foregroundStyle(isProminent ? AnyShapeStyle(.secondary) : AnyShapeStyle(.green))
@@ -219,12 +221,12 @@ struct SidebarMetadataLine: View {
         case .changedFiles(let count):
             symbolAndCount("doc", count)
         case .aheadBehind(let ahead, let behind):
-            HStack(spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
                 if ahead > 0 { symbolAndCount("arrow.up", ahead) }
                 if behind > 0 { symbolAndCount("arrow.down", behind) }
             }
         case .folder(let name):
-            HStack(spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
                 Image(systemName: "folder")
                     .imageScale(.small)
                     .foregroundStyle(.tertiary)
@@ -254,7 +256,7 @@ struct SidebarMetadataLine: View {
     }
 
     private func symbolAndCount(_ symbol: String, _ value: Int) -> some View {
-        HStack(spacing: 1) {
+        HStack(alignment: .firstTextBaseline, spacing: 1) {
             Image(systemName: symbol)
                 .imageScale(.small)
                 .foregroundStyle(.tertiary)
@@ -469,5 +471,18 @@ private struct WorktreeRowsPreview: View {
     WorktreeRowsPreview()
         .frame(width: 260, height: 560)
         .preferredColorScheme(.dark)
+}
+
+// Outside a List, so the baselines of the line counts, icons and numbers can be checked on their own,
+// zoomed in.
+#Preview("Metadata Line") {
+    SidebarMetadataLine(items: [
+        .diff(insertions: 40, deletions: 9),
+        .changedFiles(1),
+        .aheadBehind(ahead: 2, behind: 1),
+    ])
+    .scaleEffect(3, anchor: .leading)
+    .frame(width: 420, height: 80, alignment: .leading)
+    .padding()
 }
 #endif

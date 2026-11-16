@@ -289,7 +289,12 @@ struct IslandEditor: View {
                     swatches
                 }
                 Section("Icon") {
-                    symbolGrid
+                    SymbolPicker(
+                        selection: $symbol,
+                        suggestions: Self.symbols,
+                        tint: tint.color,
+                        includesFillVariants: false
+                    )
                 }
             }
             .formStyle(.grouped)
@@ -360,32 +365,6 @@ struct IslandEditor: View {
             }
         }
         .animation(.snappy(duration: 0.2), value: tint)
-    }
-
-    private var symbolGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 8), spacing: 6) {
-            ForEach(Self.symbols, id: \.self) { candidate in
-                let isChosen = candidate == symbol
-                Button {
-                    symbol = candidate
-                } label: {
-                    Image(systemName: candidate)
-                        .font(.system(size: 15))
-                        .frame(width: 34, height: 34)
-                        .foregroundStyle(isChosen ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-                        .background(
-                            isChosen ? AnyShapeStyle(tint.color.gradient) : AnyShapeStyle(.quaternary.opacity(0.5)),
-                            in: .rect(cornerRadius: 8, style: .continuous)
-                        )
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(candidate.replacingOccurrences(of: ".", with: " "))
-                .accessibilityAddTraits(isChosen ? .isSelected : [])
-            }
-        }
-        .padding(.vertical, 4)
-        .animation(.snappy(duration: 0.2), value: symbol)
     }
 
     private var isEditing: Bool {
