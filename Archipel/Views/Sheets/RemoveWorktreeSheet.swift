@@ -1,4 +1,5 @@
 import ArchipelCore
+import EditorUI
 import GitKit
 import SwiftUI
 
@@ -17,8 +18,39 @@ struct RemoveWorktreeSheet: View {
     @State private var outcome: AppModel.BranchRemoval?
 
     private var isMissing: Bool { model.missingWorktrees.contains(worktree.id) }
+    /// A missing folder that may only be out of reach, on a volume that is not mounted. Looked up
+    /// once in `loadStatus()`, because telling the two apart touches the disk.
+    @State private var isUnavailable = false
     private var deletesFromDisk: Bool { deleteFolder && !isMissing }
     private var lostChanges: Int { deletesFromDisk ? changeCount ?? 0 : 0 }
+
+    /// Removing closes the worktree's sessions and tabs whether or not the folder is deleted.
+    private var warnings: [String] {
+        var warnings: [String] = []
+        let busy = model.busySessionCount(in: worktree.id)
+        if busy > 0 {
+            warnings.append(busy == 1
+                ? "An agent is working in this worktree. Removing it stops that agent."
+                : "\(busy) agents are working in this worktree. Removing it stops them.")
+        }
+        let root = worktree.path.standardizedFileURL.path
+        let unsaved = model.documents.dirtyURLs.count { $0.path.hasPrefix(root + "/") }
+        if unsaved > 0 {
+            // What `AppModel.removeWorktree` does with them: edits to files that are deleted or
+            // already gone are dropped, edits to files that stay are kept for Save All and the
+            // prompt at quit.
+            let count = unsaved == 1 ? "1 file has unsaved changes in the editor." : "\(unsaved) files have unsaved changes in the editor."
+            let fate = if deletesFromDisk {
+                "Deleting the folder discards them."
+            } else if isMissing, !isUnavailable {
+                "The folder is gone, so removing the worktree discards them."
+            } else {
+                "Their tabs close, but the changes are kept until you save them with Save All or quit."
+            }
+            warnings.append("\(count) \(fate)")
+        }
+        return warnings
+    }
 
     var body: some View {
         Form {
@@ -26,6 +58,14 @@ struct RemoveWorktreeSheet: View {
                 Label(note, systemImage: "info.circle")
             } else {
                 options
+                if !warnings.isEmpty {
+                    Section {
+                        ForEach(warnings, id: \.self) { warning in
+                            Label(warning, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             if let failure {
                 Label(failure, systemImage: "exclamationmark.triangle")
@@ -57,10 +97,17 @@ struct RemoveWorktreeSheet: View {
     private var options: some View {
         if isMissing {
             Section {
-                Label("The folder is already gone, so there is nothing to delete from disk.", systemImage: "questionmark.folder")
-                    .foregroundStyle(.secondary)
+                Label(
+                    isUnavailable
+                        ? "The folder cannot be reached right now. It may be on a volume that is not connected."
+                        : "The folder is already gone, so there is nothing to delete from disk.",
+                    systemImage: "questionmark.folder"
+                )
+                .foregroundStyle(.secondary)
             } footer: {
-                Text("Removing it closes its sessions and takes it out of the sidebar.")
+                Text(isUnavailable
+                    ? "Removing it closes its sessions and takes it out of the sidebar. The worktree itself is left as it is, and you can add it back from Add Worktree once the folder is reachable."
+                    : "Removing it closes its sessions and takes it out of the sidebar.")
             }
         } else {
             Section {
@@ -116,6 +163,7 @@ struct RemoveWorktreeSheet: View {
     }
 
     private func loadStatus() async {
+        isUnavailable = isMissing && !WorktreeLocation.isProvablyGone(worktree.path)
         guard !isMissing, let status = try? await model.git.status(in: worktree.path) else { return }
         changeCount = Set((status.staged + status.unstaged).map(\.path)).count
     }

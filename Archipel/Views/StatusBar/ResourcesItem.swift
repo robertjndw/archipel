@@ -6,6 +6,7 @@ import SwiftUI
 struct ResourcesItem: View {
     @Environment(AppModel.self) private var model
     @State private var showsDetails = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let alerts = model.resources.alerts
@@ -15,6 +16,7 @@ struct ResourcesItem: View {
             HStack(spacing: 4) {
                 Image(systemName: alerts.isEmpty ? "memorychip" : "exclamationmark.triangle.fill")
                     .foregroundStyle(alerts.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.orange))
+                    .contentTransition(.symbolEffect(.replace))
                 if let first = alerts.first {
                     Text(ResourceFormat.summary(of: first))
                         .foregroundStyle(.primary)
@@ -28,6 +30,7 @@ struct ResourcesItem: View {
             .fixedSize()
             .frame(maxHeight: .infinity)
             .contentShape(.rect)
+            .animation(reduceMotion ? nil : Motion.hover, value: alerts.isEmpty)
         }
         .buttonStyle(.plain)
         .help(alerts.isEmpty ? "CPU and memory of your tabs" : alerts.map(ResourceFormat.detail).joined(separator: "\n"))
@@ -119,7 +122,7 @@ private struct ResourcesPopover: View {
             }
         }
         .frame(width: 400)
-        .font(.system(size: 12))
+        .font(.callout)
         .monospacedDigit()
         .onAppear { model.resources.isWatched = true }
         .onDisappear { model.resources.isWatched = false }
@@ -151,7 +154,7 @@ private struct ResourcesPopover: View {
                 .frame(width: MetricPair.memoryWidth, alignment: .trailing)
             Color.clear.frame(width: resourceRowGutter, height: 1)
         }
-        .font(.system(size: 10))
+        .font(.caption)
         .textCase(.uppercase)
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
@@ -159,17 +162,30 @@ private struct ResourcesPopover: View {
     }
 
     private func sortButton(_ title: String, _ option: ResourceSort) -> some View {
-        Button(title) { sort = option }
-            .buttonStyle(.plain)
-            .fontWeight(sort == option ? .semibold : .regular)
-            .foregroundStyle(sort == option ? .primary : .secondary)
+        Button { sort = option } label: {
+            HStack(spacing: 2) {
+                Text(title)
+                // Name runs A to Z, the numbers run largest first.
+                if sort == option {
+                    Image(systemName: option == .name ? "chevron.up" : "chevron.down")
+                        .font(.caption2.weight(.bold))
+                        .imageScale(.small)
+                        .accessibilityHidden(true)
+                }
+            }
+        }
+        .accessibilityValue(sort == option ? (option == .name ? "Sorted ascending" : "Sorted descending") : "")
+        .accessibilityAddTraits(sort == option ? .isSelected : [])
+        .buttonStyle(.plain)
+        .fontWeight(sort == option ? .semibold : .regular)
+        .foregroundStyle(sort == option ? .primary : .secondary)
     }
 
     @ViewBuilder private func projectRows(_ project: ProjectGroup) -> some View {
         let isExpanded = binding(for: project.id, expandedByDefault: true)
         ResourceRow(level: 0, isExpanded: isExpanded) {
             Text(project.name)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
                 .textCase(.uppercase)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -314,13 +330,14 @@ private struct ResourceRow<Label: View, Metrics: View, Trailing: View>: View {
     @ViewBuilder let metrics: Metrics
     @ViewBuilder let trailing: Trailing
     @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 8) {
             HStack(spacing: 4) {
                 if let isExpanded {
                     Button {
-                        withAnimation(.snappy(duration: 0.2)) { isExpanded.wrappedValue.toggle() }
+                        withAnimation(reduceMotion ? nil : Motion.disclosure) { isExpanded.wrappedValue.toggle() }
                     } label: {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
@@ -351,7 +368,7 @@ private struct ResourceRow<Label: View, Metrics: View, Trailing: View>: View {
         .padding(.vertical, 5)
         .background(isHovered && action != nil ? AnyShapeStyle(.quaternary.opacity(0.5)) : AnyShapeStyle(.clear))
         .contentShape(.rect)
-        .onHover { isHovered = $0 }
+        .onHover { hovering in withAnimation(reduceMotion ? nil : Motion.hover) { isHovered = hovering } }
     }
 }
 
@@ -412,6 +429,7 @@ private struct ProcessRowView: View {
     let confirmsQuit: Bool
     let owner: String
     @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirming = false
 
     var body: some View {
@@ -446,7 +464,7 @@ private struct ProcessRowView: View {
             .help("Quit \(row.label)")
             .accessibilityLabel("Quit \(row.label)")
         }
-        .onHover { isHovered = $0 }
+        .onHover { hovering in withAnimation(reduceMotion ? nil : Motion.hover) { isHovered = hovering } }
         .confirmationDialog("Quit \(row.label)?", isPresented: $confirming) {
             Button("Quit", role: .destructive) { model.resources.quit([row.id]) }
         } message: {

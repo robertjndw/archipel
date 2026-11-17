@@ -1,4 +1,5 @@
 import SwiftUI
+import UISupport
 
 public struct InspectorView: View {
     private let root: URL?
@@ -74,7 +75,6 @@ public struct InspectorView: View {
 /// shape the island switcher has at the other end of the window. A segmented picker stays flat here.
 private struct InspectorTabSwitcher: View {
     @Binding var selection: InspectorView.Tab
-    @Namespace private var highlight
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -96,7 +96,7 @@ private struct InspectorTabSwitcher: View {
             ForEach(InspectorView.Tab.allCases) { tab in
                 let isSelected = tab == selection
                 Button {
-                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { selection = tab }
+                    withAnimation(reduceMotion ? nil : Motion.selection) { selection = tab }
                 } label: {
                     Group {
                         if showsTitle {
@@ -111,14 +111,7 @@ private struct InspectorTabSwitcher: View {
                     .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                     .padding(.horizontal, 8)
                     .frame(maxWidth: .infinity, minHeight: 22)
-                    .background {
-                        if isSelected {
-                            // A fill, not a second layer of glass on the capsule's glass.
-                            Capsule()
-                                .fill(.tint.opacity(0.18))
-                                .matchedGeometryEffect(id: "selection", in: highlight)
-                        }
-                    }
+                    .anchorPreference(key: SelectedTabBounds.self, value: .bounds) { isSelected ? $0 : nil }
                     .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
@@ -127,16 +120,47 @@ private struct InspectorTabSwitcher: View {
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
+        // One highlight behind the row, placed on the selected segment's frame, as in the island
+        // switcher. A matchedGeometryEffect would be declared in both ViewThatFits variants, and the
+        // two sources fight over the frame mid-animation.
+        .backgroundPreferenceValue(SelectedTabBounds.self) { anchor in
+            GeometryReader { proxy in
+                if let anchor {
+                    let rect = proxy[anchor]
+                    // A fill, not a second layer of glass on the capsule's glass.
+                    Capsule()
+                        .fill(.tint.opacity(0.18))
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
+                }
+            }
+        }
+    }
+}
+
+private struct SelectedTabBounds: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
 }
 
 /// Owns both models so switching tabs keeps the file tree's expansion and the last known status.
 private struct InspectorContent: View {
+    let root: URL
     let tab: InspectorView.Tab
     let actions: InspectorActions
+    let searchPATH: @MainActor () async -> String
     @Binding var focusCommitMessage: Bool
-    @State private var files: FileTreeModel
-    @State private var changes: ChangesModel
+    /// Made on appear rather than in init: the parent rebuilds this struct on every update, and a
+    /// model made in init would be allocated, along with its GitClient, each time and thrown away.
+    @State private var models: Models?
+
+    private struct Models {
+        let files: FileTreeModel
+        let changes: ChangesModel
+    }
 
     init(
         root: URL,
@@ -145,17 +169,27 @@ private struct InspectorContent: View {
         searchPATH: @escaping @MainActor () async -> String,
         focusCommitMessage: Binding<Bool>
     ) {
+        self.root = root
         self.tab = tab
         self.actions = actions
+        self.searchPATH = searchPATH
         _focusCommitMessage = focusCommitMessage
-        files = FileTreeModel(root: root)
-        changes = ChangesModel(root: root, searchPATH: searchPATH)
     }
 
     var body: some View {
-        switch tab {
-        case .files: FilesTab(model: files, actions: actions)
-        case .changes: ChangesTab(model: changes, actions: actions, focusCommitMessage: $focusCommitMessage)
+        Group {
+            if let models {
+                switch tab {
+                case .files: FilesTab(model: models.files, actions: actions)
+                case .changes: ChangesTab(model: models.changes, actions: actions, focusCommitMessage: $focusCommitMessage)
+                }
+            } else {
+                Color.clear
+            }
+        }
+        .onAppear {
+            guard models == nil else { return }
+            models = Models(files: FileTreeModel(root: root), changes: ChangesModel(root: root, searchPATH: searchPATH))
         }
     }
 }
@@ -197,6 +231,7 @@ struct InspectorHeader<Title: View, Accessory: View>: View {
                 .labelStyle(.iconOnly)
                 .symbolEffect(.rotate.clockwise.wholeSymbol, value: spins)
                 .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
                 .help("Refresh")
         }
         .font(.callout)

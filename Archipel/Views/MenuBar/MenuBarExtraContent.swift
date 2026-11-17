@@ -10,6 +10,8 @@ struct MenuBarEntry: Identifiable, Equatable {
 
     let id: Session.ID
     let kind: Kind
+    /// What the sidebar and tab bar call the session, so two sessions of one agent can be told apart.
+    let title: String
     let agentName: String
     let symbol: String
     let location: String
@@ -28,6 +30,7 @@ extension AppModel {
                     entries.append(MenuBarEntry(
                         id: session.id,
                         kind: kind,
+                        title: session.displayTitle,
                         agentName: definition.displayName,
                         symbol: definition.symbolName,
                         location: "\(project.name) / \(branch)",
@@ -68,7 +71,7 @@ struct MenuBarExtraLabel: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let summary = attentionSummary(of: model.workspace, activities: model.activities)
+        let summary = model.workspaceAttention
         let description = summary.accessibilityDescription
         Image(nsImage: Self.image(for: Self.color(for: summary)))
             .accessibilityLabel(description.isEmpty ? "Archipel" : "Archipel, \(description)")
@@ -109,7 +112,6 @@ struct MenuBarExtraLabel: View {
 
 struct MenuBarExtraContent: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let entries = model.menuBarEntries
@@ -125,21 +127,15 @@ struct MenuBarExtraContent: View {
                 }
             }
             Divider().padding(.vertical, 4)
-            MenuBarButton(title: "Open Archipel", systemImage: "macwindow") { showMainWindow() }
+            MenuBarButton(title: "Open Archipel", systemImage: "macwindow") { model.showMainWindow() }
             MenuBarButton(title: "Quit Archipel", systemImage: "power") { NSApp.terminate(nil) }
         }
         .padding(6)
         .frame(width: 300)
     }
 
-    private func showMainWindow() {
-        NSApp.activate()
-        // Does nothing visible while the window is open; brings it back after the user closed it.
-        openWindow(id: "main")
-    }
-
     private func show(_ id: Session.ID) {
-        showMainWindow()
+        model.showMainWindow()
         model.select(session: id)
     }
 }
@@ -154,9 +150,9 @@ private struct MenuBarRow: View {
                 Image(symbol: entry.symbol)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.agentName)
+                    Text(entry.title)
                         .lineLimit(1)
-                    Text(entry.location)
+                    Text("\(entry.agentName) · \(entry.location)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -190,6 +186,7 @@ private struct MenuBarButton: View {
 
 private struct MenuBarRowStyle: ButtonStyle {
     @State private var isHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -197,9 +194,9 @@ private struct MenuBarRowStyle: ButtonStyle {
             .padding(.vertical, 6)
             .background(
                 isHovering || configuration.isPressed ? Color.primary.opacity(0.1) : .clear,
-                in: .rect(cornerRadius: 6)
+                in: .rect(cornerRadius: 6, style: .continuous)
             )
-            .onHover { isHovering = $0 }
+            .onHover { hovering in withAnimation(reduceMotion ? nil : Motion.hover) { isHovering = hovering } }
     }
 }
 

@@ -62,4 +62,30 @@ struct DiffHunkTests {
         #expect(DiffHunks.leadRows(of: hunks, in: doc.sideBySide) == [5: 0])
         #expect(DiffHunks.leadRows(of: hunks, in: doc.unified) == [5: 0])
     }
+
+    @Test func leadRowsOfManyHunksMatchSearchingForEachOne() {
+        // Every way a hunk can start: an addition, a deletion, a replacement, and changes at both ends of the file.
+        let lines = [GitDiffLine(.added, "top")] + context(12)
+            + [GitDiffLine(.removed, "r")] + context(12)
+            + [GitDiffLine(.removed, "m"), GitDiffLine(.added, "M")] + context(12)
+            + [GitDiffLine(.added, "a1"), GitDiffLine(.added, "a2")] + context(12)
+            + [GitDiffLine(.removed, "end")]
+        let doc = document(lines)
+        let hunks = DiffHunks.hunks(in: doc)
+        #expect(hunks.count == 5)
+
+        for rows in [doc.unified, doc.sideBySide] {
+            var expected: [Int: Int] = [:]
+            for (hunkIndex, hunk) in hunks.enumerated() {
+                let match = rows.firstIndex { row in
+                    if let old = hunk.firstOld { return row.old == old }
+                    return row.old == nil && row.new == hunk.firstNew
+                }
+                if let match { expected[match] = hunkIndex }
+            }
+            #expect(expected.count == 5)
+            #expect(DiffHunks.leadRows(of: hunks, in: rows) == expected)
+        }
+        #expect(DiffHunks.leadRows(of: [], in: doc.unified).isEmpty)
+    }
 }

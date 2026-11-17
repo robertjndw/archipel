@@ -11,7 +11,13 @@ struct AgentSettingsView: View {
             Section {
                 Picker(selection: $settings.defaultAgentID) {
                     ForEach(AgentDefinition.builtIns) { agent in
-                        Label(agent.displayName, symbol: agent.symbolName).tag(agent.id)
+                        // Still selectable: the agent may be installed later, and its section below
+                        // says where it was looked for.
+                        Label(
+                            model.isInstalled(agent) ? agent.displayName : "\(agent.displayName) (Not Installed)",
+                            symbol: agent.symbolName
+                        )
+                        .tag(agent.id)
                     }
                 } label: {
                     Text("Default agent")

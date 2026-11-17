@@ -16,6 +16,8 @@ struct SwitchBranchSheet: View {
     @FocusState private var queryFocused: Bool
     @State private var current: String?
     @State private var local: [String] = []
+    /// `local` as a set, for the name checks that run on every keystroke. Set wherever `local` is.
+    @State private var localNames: Set<String> = []
     @State private var remote: [String] = []
     /// Branches checked out in other worktrees of the repository, with that worktree's folder. git
     /// refuses to check a branch out twice, so these are offered as a jump to that worktree instead.
@@ -31,11 +33,14 @@ struct SwitchBranchSheet: View {
     private static let visibleRows = 6
 
     var body: some View {
-        Form {
+        // Ranked once per evaluation; the rows, the selection and the toolbar all read the same list.
+        let rows = suggestions
+        let selected = rows.indices.contains(selection) ? rows[selection] : nil
+        return Form {
             if isRepository {
                 Section {
-                    searchField
-                    results
+                    searchField(rows: rows)
+                    results(rows: rows)
                 } header: {
                     currentBranchLabel
                 } footer: {
@@ -67,8 +72,8 @@ struct SwitchBranchSheet: View {
                 Button("Cancel") { dismiss() }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button(actionTitle) { Task { await perform() } }
-                    .disabled(!canPerform || isWorking)
+                Button(actionTitle(for: selected)) { Task { await perform() } }
+                    .disabled(!canPerform(selected) || isWorking)
             }
         }
         .task { if asksGit { await load() } }
@@ -109,7 +114,7 @@ struct SwitchBranchSheet: View {
 
     // MARK: Search field
 
-    private var searchField: some View {
+    private func searchField(rows: [Suggestion]) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
@@ -117,8 +122,8 @@ struct SwitchBranchSheet: View {
             TextField("Branch", text: $query, prompt: Text("Search branches or name a new one"))
                 .labelsHidden()
                 .focused($queryFocused)
-                .onKeyPress(.downArrow) { moveSelection(1); return .handled }
-                .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
+                .onKeyPress(.downArrow) { moveSelection(1, count: rows.count); return .handled }
+                .onKeyPress(.upArrow) { moveSelection(-1, count: rows.count); return .handled }
                 .onChange(of: query) {
                     selection = query.isEmpty ? -1 : 0
                     failure = nil
@@ -133,15 +138,14 @@ struct SwitchBranchSheet: View {
 
     // MARK: Results
 
-    private var results: some View {
-        let rows = suggestions
-        return ScrollViewReader { proxy in
+    private func results(rows: [Suggestion]) -> some View {
+        ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         SearchResultRow(
                             symbol: row.symbol,
-                            title: title(of: row, isSelected: index == selection),
+                            title: title(of: row),
                             detail: row.kind == .create && createNameInvalid ? "Not a valid branch name" : row.detail,
                             detailIsWarning: row.kind == .create && createNameInvalid,
                             isSelected: index == selection
@@ -154,6 +158,7 @@ struct SwitchBranchSheet: View {
                             Task { await perform() }
                         }
                         .onTapGesture { selection = index }
+                        .accessibilityAddTraits(index == selection ? [.isButton, .isSelected] : .isButton)
                         .help(row.help ?? "")
                     }
                 }
@@ -171,11 +176,11 @@ struct SwitchBranchSheet: View {
         }
     }
 
-    private func title(of row: Suggestion, isSelected: Bool) -> Text {
+    private func title(of row: Suggestion) -> Text {
         if row.kind == .create {
             return Text("Create Branch “\(row.title)”")
         }
-        return .highlighting(row.title, matches: row.matches, onAccent: isSelected)
+        return .highlighting(row.title, matches: row.matches)
     }
 
     @ViewBuilder
@@ -199,27 +204,26 @@ struct SwitchBranchSheet: View {
         return rows.indices.contains(selection) ? rows[selection] : nil
     }
 
-    private var actionTitle: String {
-        switch selectedSuggestion?.kind {
+    private func actionTitle(for selected: Suggestion?) -> String {
+        switch selected?.kind {
         case .create: "Create and Switch"
         case .elsewhere: "Go to Worktree"
         default: "Switch"
         }
     }
 
-    private var canPerform: Bool {
-        guard let row = selectedSuggestion, row.isActionable else { return false }
+    private func canPerform(_ selected: Suggestion?) -> Bool {
+        guard let row = selected, row.isActionable else { return false }
         return row.kind != .create || !createNameInvalid
     }
 
-    private func moveSelection(_ delta: Int) {
-        let count = suggestions.count
+    private func moveSelection(_ delta: Int, count: Int) {
         guard count > 0 else { return }
         selection = min(max(selection + delta, 0), count - 1)
     }
 
     private var createName: String? {
-        guard let name = model.newBranchName(fromTyped: query), !local.contains(name) else { return nil }
+        guard let name = model.newBranchName(fromTyped: query), !localNames.contains(name) else { return nil }
         return name
     }
 
@@ -248,7 +252,6 @@ struct SwitchBranchSheet: View {
                 candidates.append(Suggestion(kind: .local, title: branch, detail: "Branch"))
             }
         }
-        let localNames = Set(local)
         for branch in remote {
             // origin/feature is offered as feature, unless a local feature already exists.
             guard let slash = branch.firstIndex(of: "/") else { continue }
@@ -289,6 +292,11 @@ struct SwitchBranchSheet: View {
     private func load() async {
         defer { isLoaded = true }
         guard let project = model.project(ofWorktree: worktree.id) else { return }
+        // Every call below would bring up the system's install dialog.
+        guard model.isGitAvailable else {
+            failure = AppModel.gitMissingMessage
+            return
+        }
         isRepository = await model.git.isRepository(worktree.path)
         guard isRepository else { return }
         do {
@@ -303,11 +311,15 @@ struct SwitchBranchSheet: View {
         let own = worktree.path.standardizedFileURL.path
         var taken: [String: URL] = [:]
         for entry in try await model.git.worktrees(of: project.folderURL) {
-            guard let branch = entry.branch, entry.path.standardizedFileURL.path != own else { continue }
+            // The rule of `AppModel.checkedOutBranches(of:)`, applied here because the folders are
+            // needed too: switching to the branch of a worktree whose folder was deleted drops what
+            // is left of it, while one that is only out of reach still holds its branch.
+            guard let branch = entry.branch, !AppModel.isLeftover(entry), entry.path.standardizedFileURL.path != own else { continue }
             taken[branch] = entry.path
         }
         elsewhere = taken
         local = try await model.git.localBranches(in: project.folderURL)
+        localNames = Set(local)
         remote = try await model.git.remoteBranches(in: project.folderURL)
     }
 
@@ -326,7 +338,7 @@ struct SwitchBranchSheet: View {
     }
 
     private func perform() async {
-        guard canPerform, !isWorking, let suggestion = selectedSuggestion else { return }
+        guard let suggestion = selectedSuggestion, canPerform(suggestion), !isWorking else { return }
         isWorking = true
         defer { isWorking = false }
         do {
@@ -428,6 +440,7 @@ extension SwitchBranchSheet {
         _selection = State(initialValue: query.isEmpty ? -1 : 0)
         _current = State(initialValue: current ?? worktree.branch)
         _local = State(initialValue: local)
+        _localNames = State(initialValue: Set(local))
         _remote = State(initialValue: remote)
         _elsewhere = State(initialValue: elsewhere)
         _isLoaded = State(initialValue: true)

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import GitKit
 
@@ -111,6 +112,221 @@ final class GitClientTests {
         #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: []))
     }
 
+    @Test func discardUnstagedTrashesIntentToAddFilesInsteadOfEmptyingThem() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        try write("intended [1].txt", "not committed anywhere\n")
+        try write("kept.txt", "also intended\n")
+        try sh("add", "-N", "intended [1].txt", "kept.txt")
+
+        var status = try await git.status(in: repo)
+        let intended = GitFileChange(path: "intended [1].txt", kind: .added)
+        #expect(status.unstaged.contains(intended))
+
+        try await git.discardUnstaged([intended], in: repo)
+
+        // Gone from the folder and from the index, rather than left behind as an empty file.
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "intended [1].txt").path))
+        status = try await git.status(in: repo)
+        #expect(status == GitStatus(branch: "main", staged: [], unstaged: [GitFileChange(path: "kept.txt", kind: .added)]))
+        #expect(try String(contentsOf: repo.appending(path: "kept.txt"), encoding: .utf8) == "also intended\n")
+    }
+
+    @Test func discardUnstagedHandlesIntentToAddWithoutCommits() async throws {
+        try write("first.txt", "first\n")
+        try sh("add", "-N", "first.txt")
+
+        let status = try await git.status(in: repo)
+        try await git.discardUnstaged(status.unstaged, in: repo)
+
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "first.txt").path))
+        #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: []))
+    }
+
+    @Test func fileDiffFlagsConflictedFiles() async throws {
+        try write("both.txt", "one\ntwo\nthree\n")
+        try write("gone.txt", "one\n")
+        try commitAll()
+        try sh("switch", "-q", "-c", "other")
+        try write("both.txt", "one\ntheirs\nthree\n")
+        try sh("rm", "-q", "gone.txt")
+        try commitAll()
+        try sh("switch", "-q", "main")
+        try write("both.txt", "one\nours\nthree\n")
+        try write("gone.txt", "changed\n")
+        try commitAll()
+        #expect(throws: GitError.self) { try self.sh("merge", "-q", "other") }
+
+        let status = try await git.status(in: repo)
+        #expect(status.unstaged.map(\.kind) == [.conflicted, .conflicted])
+
+        // Both sides changed: a combined diff. Deleted on one side: only an "Unmerged path" line.
+        for path in ["both.txt", "gone.txt"] {
+            let diff = try #require(try await git.fileDiff(path: path, staged: false, in: repo))
+            #expect(diff.isConflicted)
+            #expect(diff.hunks.isEmpty)
+            #expect(diff.newPath == path)
+            #expect(try await git.fileDiff(path: path, staged: true, in: repo)?.isConflicted == true)
+        }
+    }
+
+    @Test func manyConcurrentRunsAllComplete() async throws {
+        // Far more than GCD's 64 threads: when each run held one while waiting for another, this hung forever.
+        let versions = await withTaskGroup(of: String?.self) { group in
+            for _ in 0..<300 {
+                group.addTask { [git, repo] in try? await git.run(["--version"], in: repo) }
+            }
+            var versions: [String] = []
+            for await version in group {
+                if let version { versions.append(version) }
+            }
+            return versions
+        }
+        #expect(versions.count == 300)
+        #expect(versions.allSatisfy { $0.hasPrefix("git version") })
+    }
+
+    @Test func collectsLargeStdoutAndStderrTogether() async throws {
+        // Both streams well past the 64 KB pipe buffer, written in turns so neither can be read to the end first.
+        let script = "i=0; while [ $i -lt 4000 ]; do printf '%0100d\\n' $i; printf '%0100d\\n' $i >&2; i=$((i+1)); done; exit 3"
+        let result = try await GitProcess.run(URL(filePath: "/bin/sh"), ["-c", script], in: repo, environment: [:])
+        #expect(result.status == 3)
+        #expect(result.stdout.utf8.count == 4000 * 101)
+        #expect(result.stderr.utf8.count == 4000 * 101)
+        #expect(result.stdout.hasSuffix(String(format: "%0100d\n", 3999)))
+        #expect(result.stderr == result.stdout)
+    }
+
+    @Test func returnsWhenAStragglerKeepsThePipesOpen() async throws {
+        // What an ssh ControlPersist master does: outlive the command while holding its stdout and stderr.
+        let clock = ContinuousClock()
+        let start = clock.now
+        let result = try await GitProcess.run(URL(filePath: "/bin/sh"), ["-c", "sleep 20 & echo done; echo warned >&2"], in: repo, environment: [:])
+        #expect(result.status == 0)
+        #expect(result.stdout == "done\n")
+        #expect(result.stderr == "warned\n")
+        #expect(clock.now - start < .seconds(5))
+    }
+
+    @Test func cancellingStopsANetworkProcessButNotALocalOne() async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let network = Task { [repo] in
+            try await GitProcess.run(URL(filePath: "/bin/sh"), ["-c", "exec sleep 20"], in: repo, environment: [:], lane: .network)
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        network.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await network.value }
+        #expect(clock.now - start < .seconds(5))
+
+        let local = Task { [repo] in
+            try await GitProcess.run(URL(filePath: "/bin/sh"), ["-c", "sleep 0.5; echo finished"], in: repo, environment: [:])
+        }
+        local.cancel()
+        #expect(try await local.value.stdout == "finished\n")
+    }
+
+    @Test func cancelledBeforeItsTurnNeverStarts() async throws {
+        let marker = base.appending(path: "started")
+        let task = Task { [repo] in
+            // So cancellation is already set when the runner is entered.
+            while !Task.isCancelled { await Task.yield() }
+            return try await GitProcess.run(URL(filePath: "/usr/bin/touch"), [marker.path], in: repo, environment: [:], lane: .lookup)
+        }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    @Test func nestedRepositoryIsReportedInsteadOfShowingNoChanges() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        let nested = repo.appending(path: "vendor/lib")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try shIn(nested, "init", "-q")
+        try write("vendor/lib/file.txt", "inside\n")
+
+        let status = try await git.status(in: repo)
+        #expect(status.unstaged == [GitFileChange(path: "vendor/lib/", kind: .untracked)])
+
+        do {
+            _ = try await git.fileDiff(path: "vendor/lib/", staged: false, in: repo)
+            Issue.record("expected the nested repository to be refused")
+        } catch let error as GitError {
+            #expect(error.message.contains("vendor/lib is a nested Git repository"))
+        }
+        await #expect(throws: GitError.self) {
+            _ = try await self.git.diff(path: "vendor/lib/", staged: false, in: self.repo)
+        }
+    }
+
+    @Test func stagedRenameUsesTheGivenOriginWithoutDetectingIt() async throws {
+        try write("keep.txt", "a\nb\n")
+        try write("other.txt", "x\n")
+        try commitAll()
+        try sh("mv", "keep.txt", "kept.txt")
+        try write("other.txt", "y\n")
+        try sh("add", "other.txt")
+
+        let status = try await git.status(in: repo)
+        let rename = try #require(status.staged.first { $0.kind == .renamed })
+        let fromChange = try #require(try await git.fileDiff(for: rename, staged: true, in: repo))
+        #expect(fromChange.status == .renamed)
+        #expect(fromChange.oldPath == "keep.txt")
+        #expect(fromChange == (try await git.fileDiff(path: "kept.txt", staged: true, originalPath: "keep.txt", in: repo)))
+        #expect(fromChange == (try await git.fileDiff(path: "kept.txt", staged: true, in: repo)))
+
+        let modified = try #require(status.staged.first { $0.path == "other.txt" })
+        #expect(try await git.fileDiff(for: modified, staged: true, in: repo)?.status == .modified)
+    }
+
+    @Test func bareRepositoryIsMarked() async throws {
+        let bare = base.appending(path: "bare.git")
+        try FileManager.default.createDirectory(at: bare, withIntermediateDirectories: true)
+        try shIn(bare, "init", "-q", "--bare")
+        #expect(try await git.worktrees(of: bare).map(\.isBare) == [true])
+
+        try write("a.txt", "a\n")
+        try commitAll()
+        #expect(try await git.worktrees(of: repo).map(\.isBare) == [false])
+    }
+
+    @Test func deletesAndSwitchesWithOptionTerminators() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        try sh("branch", "other")
+        try await git.switchBranch(to: .new("feat/x", base: "other"), in: repo)
+        #expect(await git.currentBranch(in: repo) == "feat/x")
+        try await git.switchBranch(to: .local("main"), in: repo)
+        #expect(try await git.deleteBranch("feat/x", in: repo) == .deleted)
+        // A name git would otherwise take for an option is refused as a ref, not acted on.
+        await #expect(throws: GitError.self) { try await self.git.switchBranch(to: .local("--detach"), in: self.repo) }
+        await #expect(throws: GitError.self) { _ = try await self.git.deleteBranch("--all", in: self.repo) }
+        #expect(await git.currentBranch(in: repo) == "main")
+        #expect(try await git.localBranches(in: repo) == ["main", "other"])
+    }
+
+    @Test func limiterNeverExceedsItsLimitAndServesEveryWaiter() async {
+        let limiter = ProcessLimiter(limit: 3)
+        let running = Mutex((now: 0, peak: 0))
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<200 {
+                group.addTask {
+                    await limiter.acquire()
+                    running.withLock {
+                        $0.now += 1
+                        $0.peak = max($0.peak, $0.now)
+                    }
+                    await Task.yield()
+                    running.withLock { $0.now -= 1 }
+                    limiter.release()
+                }
+            }
+        }
+        #expect(running.withLock { $0.peak } <= 3)
+        #expect(running.withLock { $0.now } == 0)
+    }
+
     @Test func discardStagedResetsToHeadAndRemovesAdditions() async throws {
         try write("a.txt", "a\n")
         try write("old.txt", "o\n")
@@ -169,6 +385,28 @@ final class GitClientTests {
 
         await #expect(throws: GitError.self) {
             try await self.git.addWorktree(repository: self.repo, path: self.base.appending(path: "dup"), branch: "main", createBranch: false)
+        }
+    }
+
+    @Test func worktreeOnARemoteOnlyBranchTracksIt() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        try sh("branch", "feature/remote")
+        let clone = base.appending(path: "clone")
+        try sh("clone", "-q", repo.path, clone.path)
+
+        #expect(try await git.localBranches(in: clone) == ["main"])
+        let path = base.appending(path: "wt remote")
+        try await git.addWorktree(repository: clone, path: path, branch: "feature/remote", tracking: "origin/feature/remote")
+
+        #expect(await git.currentBranch(in: path) == "feature/remote")
+        #expect(try await git.summary(in: path).upstream == "origin/feature/remote")
+
+        // The local branch exists now, so a second worktree for the same remote branch is refused.
+        await #expect(throws: GitError.self) {
+            try await self.git.addWorktree(
+                repository: clone, path: self.base.appending(path: "wt again"), branch: "feature/remote", tracking: "origin/feature/remote"
+            )
         }
     }
 

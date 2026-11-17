@@ -17,6 +17,7 @@ struct SidebarWorktreeRow: View {
     @Binding var removing: Worktree?
     @Binding var renaming: RenameTarget?
     @Environment(\.sidebarDensity) private var density
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     /// Icon column plus its gap, which is where the title and everything under it starts.
@@ -50,7 +51,11 @@ struct SidebarWorktreeRow: View {
                 if !density.showsSecondLine, !isMissing {
                     inlineMetadata
                 }
+                // Only a fade, and only in here. The slot is not reserved (the buttons are wider than
+                // the glyph, and a compact row's metadata needs that room), so the layout still
+                // switches at once and the two just dissolve into each other at the trailing edge.
                 trailing
+                    .animation(reduceMotion ? nil : Motion.hover, value: isHovered)
             }
             if !sessions.isEmpty {
                 VStack(spacing: 0) {
@@ -84,7 +89,7 @@ struct SidebarWorktreeRow: View {
                     .accessibilityHidden(true)
             }
         }
-        .font(.system(size: 13, weight: .medium))
+        .font(.body.weight(.medium))
         .foregroundStyle(tint)
     }
 
@@ -101,6 +106,8 @@ struct SidebarWorktreeRow: View {
         let variants = content.metadataVariants
         if !variants.isEmpty, !isHovered {
             ViewThatFits(in: .horizontal) {
+                // By position on purpose: the variants are a fixed fullest-to-sparsest ladder, and
+                // a rung is the same rung whatever it currently holds.
                 ForEach(variants.indices, id: \.self) { index in
                     SidebarMetadataLine(items: variants[index])
                 }
@@ -167,6 +174,7 @@ struct SidebarWorktreeRow: View {
             .menuStyle(.button)
             .imageScale(.small)
             .fixedSize()
+            .transition(.opacity)
         } else if case .status(let activity) = content.trailing {
             StatusGlyph(activity: activity)
         }
@@ -177,6 +185,7 @@ struct SidebarWorktreeRow: View {
 struct SidebarMetadataLine: View {
     let items: [WorktreeRowContent.MetadataItem]
     @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         // Baseline, not center: symbols are taller than the digits and hang below them, so a
@@ -211,10 +220,12 @@ struct SidebarMetadataLine: View {
                 if insertions > 0 {
                     Text(verbatim: "+\(insertions)")
                         .foregroundStyle(isProminent ? AnyShapeStyle(.secondary) : AnyShapeStyle(.green))
+                        .countTransition(insertions, reduceMotion: reduceMotion)
                 }
                 if deletions > 0 {
                     Text(verbatim: "-\(deletions)")
                         .foregroundStyle(isProminent ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
+                        .countTransition(deletions, reduceMotion: reduceMotion)
                 }
             }
             .fixedSize()
@@ -261,8 +272,18 @@ struct SidebarMetadataLine: View {
                 .imageScale(.small)
                 .foregroundStyle(.tertiary)
             Text(value, format: .number)
+                .countTransition(value, reduceMotion: reduceMotion)
         }
         .fixedSize()
+    }
+}
+
+private extension View {
+    /// Rolls the digits when a counter changes. The animation is keyed on the number and sits on
+    /// the text alone, so a new count does not also animate the rest of the row.
+    func countTransition(_ value: Int, reduceMotion: Bool) -> some View {
+        contentTransition(.numericText(value: Double(value)))
+            .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: value)
     }
 }
 
@@ -282,7 +303,7 @@ struct SidebarSessionRow: View {
         } label: {
             HStack(spacing: 7) {
                 Image(symbol: content.agent.definition.symbolName)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
                 Text(content.title)
@@ -339,7 +360,7 @@ struct SidebarWorktreeMenu: View {
         FolderActions(folder: worktree.path)
         if worktree.branch != nil || model.gitSummaries[worktree.id] != nil {
             Button("Switch Branch…", systemImage: "arrow.triangle.swap") { model.switchBranchWorktreeID = worktree.id }
-                .disabled(model.missingWorktrees.contains(worktree.id))
+                .disabled(!model.isGitAvailable || model.missingWorktrees.contains(worktree.id))
         }
         if let branch = worktree.branch {
             Button("Copy Branch Name", systemImage: "arrow.triangle.branch") { model.copyToPasteboard(branch) }

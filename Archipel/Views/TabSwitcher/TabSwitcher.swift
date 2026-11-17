@@ -12,19 +12,21 @@ struct TabSwitcher: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                if switcher.showsPanel, let gesture = switcher.gesture {
-                    // Swallows clicks so they never reach the terminal underneath.
-                    Color.clear
-                        .contentShape(.rect)
-                        .onTapGesture { switcher.cancel() }
+        ZStack {
+            if switcher.showsPanel, let gesture = switcher.gesture {
+                // Swallows clicks so they never reach the terminal underneath.
+                Color.clear
+                    .contentShape(.rect)
+                    .onTapGesture { switcher.cancel() }
+                // Inside the branch so the overlay measures nothing while the panel is closed.
+                GeometryReader { proxy in
                     SwitcherPanel(gesture: gesture, maxWidth: proxy.size.width - 64)
-                        .transition(transition)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .transition(transition)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Leaving is instant on purpose: once Control is up the user is already looking at the
         // tab they picked. Animating the removal at all, even with an identity transition,
         // keeps the panel up for the animation's length with its state already reset.
@@ -54,7 +56,7 @@ private struct SwitcherPanel: View {
                     .scrollIndicators(.never)
                     .onAppear { proxy.scrollTo(gesture.selectedID, anchor: .center) }
                     .onChange(of: gesture.selection) {
-                        withAnimation(.snappy) { proxy.scrollTo(gesture.selectedID, anchor: .center) }
+                        withAnimation(reduceMotion ? nil : .snappy) { proxy.scrollTo(gesture.selectedID, anchor: .center) }
                     }
             }
         }
@@ -91,7 +93,7 @@ private struct SwitcherPanel: View {
             }
         }
         .padding(SwitcherMetrics.panelPadding)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: gesture.selection)
+        .animation(reduceMotion ? nil : Motion.selection, value: gesture.selection)
     }
 }
 
@@ -359,6 +361,8 @@ private struct PreviewContent: View {
     /// when the text is too small to read.
     private func diff(_ lines: [DiffPreviewLine]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
+            // The offset is the identity on purpose: lines repeat (blank context lines, closing
+            // braces) and the preview has no line numbers to tell them apart.
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 Text(verbatim: line.text.isEmpty ? " " : line.text)
                     .font(Self.font)

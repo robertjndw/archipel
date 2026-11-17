@@ -53,6 +53,33 @@ struct WorkspaceStoreTests {
         #expect(try store.load().project(id: p.id)?.dismissedWorktreePaths == ["/tmp/p-gone"])
     }
 
+    @Test func sessionScriptDefaultsToNoneAndRoundTrips() throws {
+        let id = "576782B3-1F07-40B8-AED6-EE5CFAEFE199"
+        func session(_ extra: String) throws -> Session {
+            let json = #"{"id": "\#(id)", "title": "Run", "agent": "shell", "createdAt": 0\#(extra)}"#
+            return try JSONDecoder().decode(Session.self, from: Data(json.utf8))
+        }
+        // Files written before scripts were remembered have no such key.
+        #expect(try session("").script == nil)
+        #expect(try session(#", "script": "run""#).script == .run)
+        // A kind from a later version must not make the workspace unreadable.
+        #expect(try session(#", "script": "deploy""#).script == nil)
+
+        let url = tempFile()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent().deletingLastPathComponent()) }
+        let store = WorkspaceStore(fileURL: url)
+        var ws = Workspace()
+        let p = makeProject()
+        ws.addProject(p, to: ws.islands[0].id)
+        let run = Session(title: "Run", hasCustomTitle: true, agent: .shell, script: .run)
+        ws.addSession(run, to: p.worktrees[0].id)
+        ws.addSession(makeSession(), to: p.worktrees[0].id)
+        try store.save(ws)
+        let loaded = try store.load()
+        #expect(loaded.session(id: run.id)?.script == .run)
+        #expect(loaded.allSessions.map(\.script) == [.run, nil])
+    }
+
     @Test func missingFileGivesDefault() throws {
         let store = WorkspaceStore(fileURL: tempFile())
         let ws = try store.load()
@@ -66,13 +93,62 @@ struct WorkspaceStoreTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Data("{ not json".utf8).write(to: url)
 
-        let ws = try WorkspaceStore(fileURL: url).load()
-        #expect(ws.islands.count == 1)
+        let store = WorkspaceStore(fileURL: url)
+        let error = try #require(throws: WorkspaceStore.LoadError.self) { try store.load() }
+        guard case .quarantined(let backup) = error else {
+            Issue.record("Expected the file to be quarantined, got \(error)")
+            return
+        }
         #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(backup.deletingLastPathComponent().standardizedFileURL == dir.standardizedFileURL)
+        #expect(backup.lastPathComponent.hasPrefix("workspace.corrupt-") && backup.pathExtension == "json")
+        #expect(try String(contentsOf: backup, encoding: .utf8) == "{ not json")
 
-        let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-        let moved = try #require(names.first { $0.hasPrefix("workspace.corrupt-") && $0.hasSuffix(".json") })
-        #expect(try String(contentsOf: dir.appendingPathComponent(moved), encoding: .utf8) == "{ not json")
+        // With the damaged file out of the way the app starts over, and saving is safe again.
+        #expect(try store.load().islands.count == 1)
+    }
+
+    @Test func validJSONOfTheWrongShapeIsMovedAside() throws {
+        let url = tempFile()
+        let dir = url.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(#"{"schemaVersion": 3, "islands": "none"}"#.utf8).write(to: url)
+
+        #expect { try WorkspaceStore(fileURL: url).load() } throws: { error in
+            guard case WorkspaceStore.LoadError.quarantined = error else { return false }
+            return true
+        }
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test func newerSchemaIsRefusedAndLeftInPlace() throws {
+        let url = tempFile()
+        let dir = url.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
+        let store = WorkspaceStore(fileURL: url)
+
+        var ws = Workspace()
+        ws.addProject(makeProject(), to: ws.islands[0].id)
+        ws.schemaVersion = Workspace.currentSchemaVersion + 1
+        try store.save(ws)
+        let written = try Data(contentsOf: url)
+
+        #expect(throws: WorkspaceStore.LoadError.newerSchema(Workspace.currentSchemaVersion + 1)) { try store.load() }
+        #expect(try Data(contentsOf: url) == written)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["workspace.json"])
+    }
+
+    @Test func newerSchemaIsRefusedEvenWhenTheRestDoesNotDecode() throws {
+        let url = tempFile()
+        let dir = url.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // A later format is free to change any field, so only the version can be relied on.
+        try Data(#"{"schemaVersion": 99, "archipelagos": []}"#.utf8).write(to: url)
+
+        #expect(throws: WorkspaceStore.LoadError.newerSchema(99)) { try WorkspaceStore(fileURL: url).load() }
+        #expect(FileManager.default.fileExists(atPath: url.path))
     }
 
     @Test func migratesFirstFormat() throws {

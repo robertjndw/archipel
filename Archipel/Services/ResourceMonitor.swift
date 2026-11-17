@@ -8,7 +8,8 @@ import TerminalKit
 /// CPU and memory per terminal, and the processes that outlive the tab that started them.
 ///
 /// Every few seconds this reads the user's process table and attributes each process to the
-/// terminal it came from (see `ProcessAttribution`). When a tab closes or restarts, whatever of
+/// terminal it came from (see `ProcessAttribution`). With no terminal open and nothing left
+/// running there is nobody to attribute to, and only Archipel's own figures are read. When a tab closes or restarts, whatever of
 /// its processes is still alive a few seconds later is listed as left running. Nothing is shown
 /// in the status bar unless something stands out; the numbers live in a popover.
 @Observable
@@ -287,9 +288,11 @@ final class ResourceMonitor {
     }
 
     nonisolated private static func sample(owners: [ProcessAttribution.Owner<OwnerKey>], knownLabels: Set<ProcessIdentity>) -> Sample {
-        let processes = ProcessSampler.processes()
-        let attribution = ProcessAttribution.attribute(owners, among: processes)
         let ownPID = getpid()
+        // Reading the table costs a libproc call per process on the machine. Without owners nothing
+        // in it could be attributed, so only our own entry is needed.
+        let processes = owners.isEmpty ? [ProcessSampler.process(ownPID)].compactMap(\.self) : ProcessSampler.processes()
+        let attribution = ProcessAttribution.attribute(owners, among: processes)
         let own = processes.first { $0.pid == ownPID }
         let attributed = attribution.values.reduce(into: Set<ProcessIdentity>()) { $0.formUnion($1) }
         var entries: [ProcessIdentity: ProcessEntry] = [:]

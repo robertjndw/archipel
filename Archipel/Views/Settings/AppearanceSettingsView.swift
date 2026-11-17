@@ -85,7 +85,7 @@ struct AppearanceSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .animation(.default, value: settings.usageDisplay)
+        .animation(Motion.disclosure, value: settings.usageDisplay)
     }
 }
 

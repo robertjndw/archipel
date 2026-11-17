@@ -10,12 +10,11 @@ struct IslandSwitcher: View {
     @Environment(AppModel.self) private var model
     @State private var editor: IslandEditor.Mode?
     @State private var deleting: Island?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Room for the new island button on the trailing side, mirrored on the leading side so the
     /// capsule stays centered in the sidebar.
     private static let gutter: CGFloat = 34
-
-    static let selectionAnimation = Animation.spring(duration: 0.38, bounce: 0.12)
 
     var body: some View {
         let islands = model.workspace.islands
@@ -34,7 +33,7 @@ struct IslandSwitcher: View {
                 .scrollIndicators(.never)
                 .onChange(of: selectedID, initial: true) {
                     guard let selectedID else { return }
-                    withAnimation(.smooth) { proxy.scrollTo(selectedID, anchor: .center) }
+                    withAnimation(reduceMotion ? nil : .smooth) { proxy.scrollTo(selectedID, anchor: .center) }
                 }
             }
         }
@@ -50,7 +49,7 @@ struct IslandSwitcher: View {
                 .frame(width: Self.gutter)
         }
         .padding(.vertical, 8)
-        .animation(Self.selectionAnimation, value: selectedID)
+        .animation(reduceMotion ? nil : Motion.selection, value: selectedID)
         .onChange(of: selectedID) { Haptics.levelChange() }
         .sheet(item: $editor) { mode in
             IslandEditor(mode: mode)
@@ -107,7 +106,8 @@ struct IslandSwitcher: View {
         Button("Edit Island…", systemImage: "pencil") { editor = .edit(island) }
         Button("New Island…", systemImage: "plus") { editor = .create }
         Divider()
-        Button("Delete Island…", systemImage: "trash", role: .destructive) {
+        // The ellipsis promises a confirmation, which an empty island does not get.
+        Button(island.projects.isEmpty ? "Delete Island" : "Delete Island…", systemImage: "trash", role: .destructive) {
             // An empty island has nothing to lose, so it goes without asking.
             if island.projects.isEmpty { model.removeIsland(island.id) } else { deleting = island }
         }
@@ -122,6 +122,7 @@ private struct IslandButton: View {
     let shortcutIndex: Int?
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appearsActive) private var appearsActive
     /// Only bumped on selection. Keying the bounce on isSelected would also bounce the island you leave.
     @State private var arrivals = 0
 
@@ -139,7 +140,7 @@ private struct IslandButton: View {
                         .opacity(isSelected ? 1 : 0)
                 }
                 // A slow pulse on an island you are not looking at says agents are busy there.
-                .symbolEffect(.pulse, options: .repeating, isActive: summary.working > 0 && !isSelected)
+                .symbolEffect(.pulse, options: .repeating, isActive: summary.working > 0 && !isSelected && appearsActive)
                 .symbolEffect(.bounce, options: .nonRepeating, value: summary.needsAttention)
                 // Small bounce on the island you switch to. Plain scale keyframes rather than
                 // .symbolEffect(.bounce) to stay clear of symbol effect rendering mid-reflow.
@@ -165,12 +166,12 @@ private struct IslandButton: View {
                     .modifier(HorizontalReveal(progress: isSelected ? 1 : 0))
                     .accessibilityHidden(true)
             }
-            .font(.system(size: 11, weight: .semibold))
+            .font(.subheadline.weight(.semibold))
             .foregroundStyle(isSelected ? AnyShapeStyle(tint) : AnyShapeStyle(.secondary))
             .padding(.horizontal, isSelected ? 8 : 5)
             // Needed on top of the switcher's animation. On a mouse click the clicked button
             // otherwise skips it, so its name pops open at once and the next island slides over it.
-            .animation(IslandSwitcher.selectionAnimation, value: isSelected)
+            .animation(reduceMotion ? nil : Motion.selection, value: isSelected)
             .frame(height: 22)
             .anchorPreference(key: SelectedIslandBounds.self, value: .bounds) { isSelected ? $0 : nil }
             .overlay(alignment: .topTrailing) {
@@ -341,30 +342,7 @@ struct IslandEditor: View {
     }
 
     private var swatches: some View {
-        HStack(spacing: 0) {
-            ForEach(Tint.allCases, id: \.self) { candidate in
-                Button {
-                    tint = candidate
-                } label: {
-                    Circle()
-                        .fill(candidate.color.gradient)
-                        .frame(width: 20, height: 20)
-                        .padding(3)
-                        .overlay {
-                            if candidate == tint {
-                                Circle().strokeBorder(candidate.color, lineWidth: 2)
-                            }
-                        }
-                        .contentShape(.circle)
-                }
-                .buttonStyle(.plain)
-                .frame(maxWidth: .infinity)
-                .help(candidate.displayName)
-                .accessibilityLabel(candidate.displayName)
-                .accessibilityAddTraits(candidate == tint ? .isSelected : [])
-            }
-        }
-        .animation(.snappy(duration: 0.2), value: tint)
+        TintSwatchPicker(selection: Binding<Tint?>(get: { tint }, set: { if let newTint = $0 { tint = newTint } }))
     }
 
     private var isEditing: Bool {

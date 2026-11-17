@@ -14,31 +14,40 @@ struct ReviewCommentsButton: View {
     let root: URL
     let review: DiffReview
     @State private var isPresented = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let count = review.store.comments(in: root).count
-        if count > 0 {
-            Button {
-                isPresented.toggle()
-            } label: {
-                Label {
-                    Text(verbatim: "\(count)")
-                        .monospacedDigit()
-                } icon: {
-                    Image(systemName: "text.bubble")
-                        .foregroundStyle(.tint)
+        Group {
+            if count > 0 {
+                Button {
+                    isPresented.toggle()
+                } label: {
+                    Label {
+                        Text(verbatim: "\(count)")
+                            .monospacedDigit()
+                            .contentTransition(.numericText(value: Double(count)))
+                    } icon: {
+                        Image(systemName: "text.bubble")
+                            .foregroundStyle(.tint)
+                            // Keyed to a constant under Reduce Motion, so the bubble stays still.
+                            .symbolEffect(.bounce, value: reduceMotion ? 0 : count)
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .animation(reduceMotion ? nil : .smooth, value: count)
                 }
-                .labelStyle(.titleAndIcon)
-            }
-            // The only glass control in the diff header, so the comments stand out.
-            .buttonStyle(.glass)
-            .controlSize(.small)
-            .help("Review Comments")
-            .accessibilityLabel(count == 1 ? Text("1 review comment") : Text("\(count) review comments"))
-            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-                ReviewCommentsList(root: root, review: review) { isPresented = false }
+                // The only glass control in the diff header, so the comments stand out.
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .help("Review Comments")
+                .accessibilityLabel(count == 1 ? Text("1 review comment") : Text("\(count) review comments"))
+                .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                    ReviewCommentsList(root: root, review: review) { isPresented = false }
+                }
+                .transition(.opacity)
             }
         }
+        .animation(.easeOut(duration: 0.2), value: count > 0)
     }
 }
 
@@ -46,6 +55,7 @@ private struct ReviewCommentsList: View {
     let root: URL
     let review: DiffReview
     let dismiss: () -> Void
+    @State private var confirmsRemoveAll = false
 
     private struct FileGroup: Identifiable {
         var path: String
@@ -96,16 +106,19 @@ private struct ReviewCommentsList: View {
                     .textSelection(.enabled)
             }
             Spacer(minLength: 0)
-            Button {
+            Button("Delete Comment", systemImage: "trash") {
                 review.store.remove(comment.id, in: root)
-            } label: {
-                Image(systemName: "trash")
             }
+            .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
             .help("Delete Comment")
-            .accessibilityLabel("Delete Comment")
         }
+    }
+
+    private var removeAllTitle: String {
+        let count = review.store.comments(in: root).count
+        return count == 1 ? String(localized: "Remove 1 review comment?") : String(localized: "Remove all \(count) review comments?")
     }
 
     private func location(_ comment: ReviewComment) -> String {
@@ -117,10 +130,15 @@ private struct ReviewCommentsList: View {
     @ViewBuilder
     private var footer: some View {
         HStack(spacing: 8) {
-            Button("Remove All", role: .destructive) {
-                review.store.removeAll(in: root)
-                dismiss()
-            }
+            Button("Remove All", role: .destructive) { confirmsRemoveAll = true }
+                .confirmationDialog(removeAllTitle, isPresented: $confirmsRemoveAll) {
+                    Button("Remove All", role: .destructive) {
+                        review.store.removeAll(in: root)
+                        dismiss()
+                    }
+                } message: {
+                    Text("The comments haven't been sent to an agent. This can't be undone.")
+                }
             Spacer(minLength: 8)
             send
         }

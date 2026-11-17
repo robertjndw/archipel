@@ -18,13 +18,17 @@ public struct GitWorktreeEntry: Equatable, Sendable {
     public var isLocked: Bool
     /// Git still knows the worktree but its folder is gone; `git worktree prune` would drop it.
     public var isPrunable: Bool
+    /// The repository itself when it has no working tree. Its path is the git directory, with
+    /// nothing checked out to open or edit.
+    public var isBare: Bool
 
-    public init(path: URL, branch: String?, isMain: Bool, isLocked: Bool = false, isPrunable: Bool = false) {
+    public init(path: URL, branch: String?, isMain: Bool, isLocked: Bool = false, isPrunable: Bool = false, isBare: Bool = false) {
         self.path = path
         self.branch = branch
         self.isMain = isMain
         self.isLocked = isLocked
         self.isPrunable = isPrunable
+        self.isBare = isBare
     }
 }
 

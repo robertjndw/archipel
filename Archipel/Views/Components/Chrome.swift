@@ -11,6 +11,17 @@ enum Chrome {
     static let panelRadius: CGFloat = 20
 }
 
+/// The curves the chrome shares. The package has the same enum in UISupport, which the app target
+/// cannot import without a project change; keep the values in step.
+enum Motion {
+    /// A selection pill sliding between items. A slight bounce so it settles onto the new item.
+    static let selection = Animation.spring(duration: 0.35, bounce: 0.15)
+    /// Hover highlights and the reveal of hover-only controls.
+    static let hover = Animation.easeOut(duration: 0.15)
+    /// Expanding and collapsing a section in place.
+    static let disclosure = Animation.snappy(duration: 0.2)
+}
+
 /// Icon buttons sharing one glass capsule, the way a toolbar group looks in
 /// Xcode and Finder. The buttons themselves stay borderless: a glass button
 /// inside a glass group would stack glass on glass.
@@ -22,6 +33,8 @@ struct GlassToolbarGroup<Content: View>: View {
             content
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                // Monochrome like the buttons over the sidebar; the accent color stays with the content.
+                .foregroundStyle(.secondary)
                 .frame(width: Chrome.controlHeight + 4, height: Chrome.controlHeight)
                 .contentShape(.rect)
         }
@@ -55,7 +68,7 @@ private func previewToolbarGroups() -> some View {
             }
             .toolbarGroupMenu()
             Button("Run", systemImage: "play") {}
-            Button("Toggle Inspector", systemImage: "sidebar.trailing") {}
+            Button("Hide Inspector", systemImage: "sidebar.trailing") {}
         }
     }
     .padding(20)

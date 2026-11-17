@@ -55,7 +55,7 @@ private struct FileEditorContent: View {
         case .text:
             CodeTextView(buffer: buffer)
         case .preview:
-            QuickLookPreview(url: buffer.url, revision: buffer.revision)
+            QuickLookPreview(url: buffer.fileURL, revision: buffer.revision)
         case .missing:
             ContentUnavailableView(
                 "File Deleted",
@@ -84,7 +84,7 @@ private struct FileEditorContent: View {
     }
 
     private var openInDefaultApp: some View {
-        Button("Open in Default App") { NSWorkspace.shared.open(buffer.url) }
+        Button("Open in Default App") { NSWorkspace.shared.open(buffer.fileURL) }
             .buttonStyle(.glass)
     }
 }
@@ -94,10 +94,10 @@ private struct ConflictBar: View {
     let buffer: TextBuffer
 
     var body: some View {
-        InlineBar(systemImage: "exclamationmark.triangle.fill", tint: .yellow) {
+        InlineBar(systemImage: "exclamationmark.triangle.fill", tint: .orange) {
             Text(conflict == .deleted ? "This file was deleted on disk." : "This file changed on disk.")
         } actions: {
-            Button(conflict == .deleted ? "Close File" : "Reload") { buffer.discardChanges() }
+            Button(conflict == .deleted ? "Discard My Edits" : "Reload") { buffer.discardChanges() }
                 .buttonStyle(.glass)
                 .help(conflict == .deleted ? "Discard your edits" : "Discard your edits and load the version on disk")
             Button("Keep My Changes") { buffer.keepChanges() }

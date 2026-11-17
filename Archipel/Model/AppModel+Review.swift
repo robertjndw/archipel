@@ -33,7 +33,8 @@ extension AppModel {
     }
 
     /// Pastes every comment of the worktree into the session without pressing Return: the agent may be
-    /// mid-turn or showing a permission prompt, and the user should see the prompt before it is sent.
+    /// mid-turn, and the user should see the prompt before it is sent. A session that is showing a
+    /// permission prompt or another menu gets nothing, and the comments are kept.
     func sendReviewComments(in worktreeID: Worktree.ID, to sessionID: Session.ID) {
         guard let worktree = workspace.worktree(id: worktreeID), let session = workspace.session(id: sessionID),
               !reviewComments.comments(in: worktree.path).isEmpty
@@ -101,6 +102,13 @@ extension AppModel {
         pendingReviews[id] = nil
         let comments = reviewComments.comments(in: pending.root)
         guard !comments.isEmpty else { return }
+        // A menu takes pasted text as key presses: letters and digits pick rows, and the comments
+        // would be gone for nothing. The live grid, for the reason given in `answer(_:)`.
+        let showsMenu = terminal.readActiveScreenText().map { ApprovalPrompt.trailingMenu(in: $0) != nil } ?? false
+        if status == .needsAttention(.permission) || showsMenu {
+            problem = "\(session.displayTitle) is waiting for you to answer a prompt, so the review comments were not sent. Answer it and send them again; your comments are kept."
+            return
+        }
         terminal.sendText(ReviewPrompt.text(for: comments))
         reviewComments.removeAll(in: pending.root)
         // Selecting swapped tabs; the terminal view only accepts focus once SwiftUI has put it in the window.

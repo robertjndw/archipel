@@ -70,32 +70,46 @@ private struct PaneView: View {
     private var content: some View {
         switch pane.selectedTab?.content {
         case .session(let id):
-            SessionContent(sessionID: id)
+            if let tab = pane.selectedTab { SessionContent(sessionID: id, tabID: tab.id) }
         case .file(let url):
             FileEditor(url: url, store: model.documents)
         case .diff(let path, let staged):
-            DiffViewer(
-                root: worktree.path,
-                path: path,
-                staged: staged,
-                comments: model.reviewComments,
-                targets: model.reviewTargets(in: worktree),
-                onSend: { model.sendReviewComments(in: worktree.id, to: $0) }
-            )
+            if model.isGitAvailable {
+                DiffViewer(
+                    root: worktree.path,
+                    path: path,
+                    staged: staged,
+                    comments: model.reviewComments,
+                    targets: model.reviewTargets(in: worktree),
+                    onSend: { model.sendReviewComments(in: worktree.id, to: $0) }
+                )
+            } else {
+                // The viewer runs git of its own as soon as it is on screen, and a diff tab can be
+                // restored from the last launch. Without the developer tools every such call
+                // brings up the system's install dialog.
+                ContentUnavailableView {
+                    Label("Git Is Not Installed", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(AppModel.gitMissingMessage)
+                }
+            }
         case .web(let url):
             if let tab = pane.selectedTab { WebTabView(tabID: tab.id, url: url) }
         case nil:
             ContentUnavailableView {
                 Label("No Tabs", systemImage: "terminal")
             } description: {
-                Text("Start an agent or a shell in \(worktree.displayName), or open a file from the sidebar on the right.")
+                Text("Start an agent or a shell in \(worktree.displayName), or open a file from the inspector.")
             } actions: {
                 GlassEffectContainer {
                     HStack(spacing: 8) {
                         ForEach(AgentDefinition.builtIns) { agent in
+                            let canStart = model.canStartSession(with: agent)
                             Button(agent.displayName, symbol: agent.symbolName) {
                                 model.newSession(in: worktree.id, agent: agent, pane: pane.id)
                             }
+                            .disabled(!canStart)
+                            .help(canStart ? "" : agent.missingCommandHint)
                         }
                     }
                 }
@@ -108,10 +122,14 @@ private struct PaneView: View {
 
 private struct SessionContent: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let sessionID: Session.ID
+    let tabID: ArchipelCore.Tab.ID
 
     var body: some View {
         let activity = model.activity(for: sessionID)
+        let exitCode: Int32? = if case .exited(let code) = activity.status, model.terminals[sessionID] != nil { code } else { nil }
         Group {
             if let terminal = model.terminals[sessionID] {
                 TerminalView(session: terminal)
@@ -127,6 +145,12 @@ private struct SessionContent: View {
                     Button("Try Again") { model.restartSession(sessionID) }
                         .buttonStyle(.glassProminent)
                         .controlSize(.large)
+                    Button("Agent Settings…") {
+                        SettingsView.select(.agents)
+                        openSettings()
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.large)
                 }
             } else {
                 ProgressView()
@@ -134,9 +158,19 @@ private struct SessionContent: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if case .exited(let code) = activity.status, model.terminals[sessionID] != nil {
-                ExitedBar(code: code) { model.restartSession(sessionID) }
+            // The animation stays in here, so the bar fades in while the terminal above it takes
+            // its new height at once instead of reflowing its lines on every frame.
+            ZStack {
+                if let exitCode {
+                    ExitedBar(code: exitCode) {
+                        model.restartSession(sessionID)
+                    } close: {
+                        model.close(tab: tabID)
+                    }
+                    .transition(.opacity)
+                }
             }
+            .animation(reduceMotion ? nil : Motion.hover, value: exitCode)
         }
     }
 }
@@ -146,6 +180,7 @@ private struct SessionContent: View {
 private struct ExitedBar: View {
     let code: Int32
     let restart: () -> Void
+    let close: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -155,6 +190,8 @@ private struct ExitedBar: View {
             )
             .foregroundStyle(.secondary)
             Spacer(minLength: 0)
+            Button("Close", systemImage: "xmark", action: close)
+                .buttonStyle(.glass)
             Button("Restart", systemImage: "arrow.clockwise", action: restart)
                 .buttonStyle(.glassProminent)
         }
@@ -200,9 +237,9 @@ private struct ExitedBar: View {
 
 #Preview("Exited Bar") {
     VStack(spacing: 0) {
-        ExitedBar(code: 0) {}
-        ExitedBar(code: 1) {}
-        ExitedBar(code: 1) {}
+        ExitedBar(code: 0) {} close: {}
+        ExitedBar(code: 1) {} close: {}
+        ExitedBar(code: 1) {} close: {}
             .environment(\.colorScheme, .dark)
     }
     .frame(width: 600)

@@ -106,7 +106,7 @@ private struct ReviewCommentEditor: View {
             CommentTextEditor(text: $draft.text, onSubmit: submit, onCancel: { finish(nil) })
                 .frame(height: 84)
                 .clipShape(.rect(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.separator) }
                 .accessibilityLabel("Comment")
             HStack(spacing: 8) {
                 if isEditing {
@@ -119,7 +119,7 @@ private struct ReviewCommentEditor: View {
                     .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.glassProminent)
                     .disabled(!isEditing && draft.trimmedText.isEmpty)
-                    .help("Command-Return")
+                    .help(isEditing ? "Save (⌘↩)" : "Add Comment (⌘↩)")
             }
             .controlSize(.small)
         }

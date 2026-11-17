@@ -148,6 +148,10 @@ final class TabSwitcherModel {
     /// merged in one go rather than popping in one by one.
     private func loadStaticPreviews(for candidates: [ArchipelCore.Tab.ID], app: AppModel) async {
         var loaded: [ArchipelCore.Tab.ID: TabPreview] = [:]
+        // A staged diff has to know whether its file was renamed. A tab only stores the new path, so
+        // one status per worktree answers that for all its staged diffs; asked one by one, each
+        // would run a rename detection over the whole index.
+        var stagedChanges: [URL: Task<[GitFileChange]?, Never>] = [:]
         await withTaskGroup(of: (ArchipelCore.Tab.ID, TabPreview?).self) { group in
             for id in candidates {
                 guard let tab = app.workspace.tab(id: id) else { continue }
@@ -157,9 +161,15 @@ final class TabSwitcherModel {
                 case .file(let url):
                     group.addTask { (id, await Self.filePreview(url)) }
                 case .diff(let path, let staged):
-                    guard let root = app.workspace.worktree(containingTab: id)?.path else { continue }
+                    // Without git even a preview would bring up the system's install dialog.
+                    guard app.isGitAvailable, let root = app.workspace.worktree(containingTab: id)?.path else { continue }
                     let git = app.git
-                    group.addTask { (id, await Self.diffPreview(path: path, staged: staged, root: root, git: git)) }
+                    var changes: Task<[GitFileChange]?, Never>?
+                    if staged {
+                        changes = stagedChanges[root] ?? Task { try? await git.status(in: root).staged }
+                        stagedChanges[root] = changes
+                    }
+                    group.addTask { (id, await Self.diffPreview(path: path, staged: changes, root: root, git: git)) }
                 }
             }
             for await (id, preview) in group {
@@ -186,12 +196,25 @@ final class TabSwitcherModel {
         return .text(lines.map { String($0).replacingOccurrences(of: "\t", with: "    ") })
     }
 
-    nonisolated private static func diffPreview(path: String, staged: Bool, root: URL, git: GitClient) async -> TabPreview? {
+    /// `staged` is the worktree's staged changes for a staged diff, nil for an unstaged one.
+    nonisolated private static func diffPreview(
+        path: String,
+        staged: Task<[GitFileChange]?, Never>?,
+        root: URL,
+        git: GitClient
+    ) async -> TabPreview? {
         // Every line the preview can show lies within previewLines of the first change, so that much
         // context keeps them all in the first hunk without git emitting and us parsing the whole file.
-        guard let diff = try? await git.fileDiff(path: path, staged: staged, contextLines: previewLines, in: root),
-              !diff.isBinary
-        else { return nil }
+        let diff: GitFileDiff?
+        if let staged, let changes = await staged.value {
+            // No longer staged: nothing to show.
+            guard let change = changes.first(where: { $0.path == path }) else { return nil }
+            diff = try? await git.fileDiff(for: change, staged: true, contextLines: previewLines, in: root)
+        } else {
+            diff = try? await git.fileDiff(path: path, staged: staged != nil, contextLines: previewLines, in: root)
+        }
+        // A conflicted file comes back without hunks, which would show as an empty diff.
+        guard let diff, !diff.isBinary, !diff.isConflicted else { return nil }
         // Start just above the first change.
         let lines = diff.hunks.flatMap(\.lines)
         let firstChange = lines.firstIndex { $0.kind != .context } ?? 0

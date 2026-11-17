@@ -10,13 +10,13 @@
 		AA0000000000000000000101 /* ArchipelCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000201 /* ArchipelCore */; };
 		AA0000000000000000000102 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000202 /* AgentKit */; };
 		AA0000000000000000000103 /* TerminalKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000203 /* TerminalKit */; };
-		AA000000000000000000010A /* TerminalKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000203 /* TerminalKit */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AA0000000000000000000104 /* archipel-hook in Embed Helpers */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000302 /* archipel-hook */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		AA0000000000000000000105 /* ghostty in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000303 /* ghostty */; };
 		AA0000000000000000000106 /* terminfo in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000304 /* terminfo */; };
 		AA0000000000000000000107 /* GitKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000204 /* GitKit */; };
 		AA0000000000000000000108 /* InspectorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000205 /* InspectorUI */; };
 		AA0000000000000000000109 /* EditorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000206 /* EditorUI */; };
+		AA000000000000000000010A /* TerminalKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000203 /* TerminalKit */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AA000000000000000000010B /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000207 /* Sparkle */; };
 /* End PBXBuildFile section */
 
@@ -331,8 +331,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Archipel Dev";
 				INFOPLIST_FILE = Archipel/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Archipel Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MARKETING_VERSION = 0.1;

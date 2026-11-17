@@ -47,7 +47,7 @@ private struct StatusGlow: ViewModifier {
                 // in the list behind the rows (see BacklightHost).
                 Color.clear
                     .keyframeAnimator(initialValue: BacklightFrame(), trigger: plays) { view, frame in
-                        view.background(BacklightHost(frame: frame, tint: tint, still: reduceMotion))
+                        view.background { BacklightHost(frame: frame, tint: tint, still: reduceMotion) }
                     } keyframes: { _ in
                         KeyframeTrack(\.lap) {
                             LinearKeyframe(0, duration: 0.001)

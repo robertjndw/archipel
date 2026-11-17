@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// One comment on one line of a diff.
-public struct ReviewComment: Identifiable, Equatable, Sendable {
+public struct ReviewComment: Identifiable, Equatable, Codable, Sendable {
     public var id: UUID
     /// Repo-relative, as DiffViewer receives it.
     public var path: String
@@ -15,7 +15,7 @@ public struct ReviewComment: Identifiable, Equatable, Sendable {
     public var lineText: String
     public var body: String
 
-    public enum Side: String, Sendable {
+    public enum Side: String, Codable, Sendable {
         case old, new
     }
 
@@ -34,11 +34,33 @@ public struct ReviewComment: Identifiable, Equatable, Sendable {
 ///
 /// Comments are anchored to (side, line) and never re-anchored: when the agent rewrites the file the
 /// number may point elsewhere, which is why each comment carries a snapshot of the line it was made on.
+///
+/// With a file the comments survive a relaunch: a review is often written over a while, and losing
+/// it to a quit or a crash costs more than the few bytes it takes to keep.
 @MainActor @Observable
 public final class ReviewCommentStore {
-    private var commentsByRoot: [String: [ReviewComment]] = [:]
+    private var commentsByRoot: [String: [ReviewComment]] = [:] {
+        didSet { if commentsByRoot != oldValue { scheduleSave() } }
+    }
+    @ObservationIgnored private let fileURL: URL?
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+    static let saveDelay = Duration.milliseconds(400)
 
-    public init() {}
+    /// What is written to the file. Versioned so a later format can tell what it is reading.
+    private struct Archive: Codable {
+        var version = 1
+        var commentsByRoot: [String: [ReviewComment]]
+    }
+
+    /// Without a file nothing is read or written. A file that cannot be read gives an empty store;
+    /// it is replaced at the next change.
+    public init(fileURL: URL? = nil) {
+        self.fileURL = fileURL
+        if let fileURL, let data = try? Data(contentsOf: fileURL),
+           let archive = try? JSONDecoder().decode(Archive.self, from: data) {
+            commentsByRoot = archive.commentsByRoot.filter { !$0.value.isEmpty }
+        }
+    }
 
     /// Ordered by path, then line; comments on the same line keep the order they were added in.
     public func comments(in root: URL) -> [ReviewComment] {
@@ -70,6 +92,42 @@ public final class ReviewCommentStore {
 
     public func removeAll(in root: URL) {
         commentsByRoot[Self.key(root)] = nil
+    }
+
+    /// Drops the comments of every worktree not in `roots`: once a worktree is gone nothing shows
+    /// them, and no session is left to send them to.
+    public func retain(only roots: [URL]) {
+        guard !commentsByRoot.isEmpty else { return }
+        let keys = Set(roots.map(Self.key))
+        // Checked first so the common case, nothing to drop, does not write an observed property.
+        guard !commentsByRoot.keys.allSatisfy(keys.contains) else { return }
+        commentsByRoot = commentsByRoot.filter { keys.contains($0.key) }
+    }
+
+    /// Writes pending changes right away, for when the app is about to quit.
+    public func saveNow() {
+        guard saveTask != nil else { return }
+        saveTask?.cancel()
+        saveTask = nil
+        guard let fileURL else { return }
+        // Losing comments to a full disk is not worth an alert in the middle of a review; the next
+        // change tries again.
+        do {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            try encoder.encode(Archive(commentsByRoot: commentsByRoot)).write(to: fileURL, options: .atomic)
+        } catch {}
+    }
+
+    private func scheduleSave() {
+        guard fileURL != nil else { return }
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.saveDelay)
+            guard !Task.isCancelled else { return }
+            self?.saveNow()
+        }
     }
 
     private static func sortsBefore(_ lhs: ReviewComment, _ rhs: ReviewComment) -> Bool {

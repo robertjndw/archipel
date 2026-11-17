@@ -25,7 +25,7 @@ struct TabDropTarget: ViewModifier {
                         .transition(.opacity)
                 }
             }
-            .animation(.easeOut(duration: 0.15), value: isTargeted)
+            .animation(Motion.hover, value: isTargeted)
             .onDrop(
                 of: TabDropDelegate.types,
                 delegate: TabDropDelegate(model: model, tab: tab, targetChanged: targetChanged, moveTab: moveTab, isTargeted: $isTargeted)

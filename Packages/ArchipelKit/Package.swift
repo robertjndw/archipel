@@ -34,6 +34,7 @@ let package = Package(
         .testTarget(name: "AgentKitTests", dependencies: ["AgentKit"]),
         .testTarget(name: "GitKitTests", dependencies: ["GitKit"]),
         .testTarget(name: "EditorUITests", dependencies: ["EditorUI"]),
+        .testTarget(name: "InspectorUITests", dependencies: ["InspectorUI"]),
     ],
     swiftLanguageModes: [.v6]
 )

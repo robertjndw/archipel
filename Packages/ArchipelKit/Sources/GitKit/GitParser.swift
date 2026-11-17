@@ -70,6 +70,7 @@ enum GitParser {
         var branch: String?
         var isLocked = false
         var isPrunable = false
+        var isBare = false
 
         func flush() {
             if let path {
@@ -78,13 +79,15 @@ enum GitParser {
                     branch: branch,
                     isMain: entries.isEmpty,
                     isLocked: isLocked,
-                    isPrunable: isPrunable
+                    isPrunable: isPrunable,
+                    isBare: isBare
                 ))
             }
             path = nil
             branch = nil
             isLocked = false
             isPrunable = false
+            isBare = false
         }
 
         for line in output.unicodeScalars.split(separator: "\0", omittingEmptySubsequences: false) {
@@ -99,6 +102,8 @@ enum GitParser {
                 isLocked = true
             } else if line.elementsEqual("prunable".unicodeScalars) || line.dropPrefix("prunable ") != nil {
                 isPrunable = true
+            } else if line.elementsEqual("bare".unicodeScalars) {
+                isBare = true
             }
         }
         flush()

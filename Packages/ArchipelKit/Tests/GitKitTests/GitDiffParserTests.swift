@@ -138,6 +138,42 @@ struct GitDiffParserTests {
         #expect(diffs[3].hunks.isEmpty)
     }
 
+    @Test func conflictedFilesInCombinedFormat() {
+        // Real output of `git diff` during a merge: one file changed on both sides, one deleted on
+        // one side, then an ordinary change, which must still parse after the combined body.
+        let output = """
+        diff --cc f.txt
+        index e788115,42b8e7a..0000000
+        --- a/f.txt
+        +++ b/f.txt
+        @@@ -1,3 -1,3 +1,7 @@@
+          one
+        ++<<<<<<< HEAD
+         +ours
+        ++=======
+        + theirs
+        ++>>>>>>> other
+        --- not a header
+          three
+        * Unmerged path "dir/gone \"x\".txt"
+        diff --git a/plain.txt b/plain.txt
+        index 1111111..2222222 100644
+        --- a/plain.txt
+        +++ b/plain.txt
+        @@ -1 +1 @@
+        -old
+        +new
+
+        """
+        let diffs = GitParser.fileDiffs(output)
+        #expect(diffs.count == 3)
+        #expect(diffs[0] == GitFileDiff(oldPath: "f.txt", newPath: "f.txt", status: .modified, isConflicted: true))
+        #expect(diffs[1] == GitFileDiff(oldPath: "dir/gone \"x\".txt", newPath: "dir/gone \"x\".txt", status: .modified, isConflicted: true))
+        #expect(!diffs[2].isConflicted)
+        #expect(diffs[2].newPath == "plain.txt")
+        #expect(diffs[2].hunks.first?.lines == [GitDiffLine(.removed, "old"), GitDiffLine(.added, "new")])
+    }
+
     @Test func hunkHeaderDefaultsCountToOne() {
         #expect(GitParser.hunkHeader("-3 +4,0 @@") == GitDiffHunk(oldStart: 3, oldCount: 1, newStart: 4, newCount: 0))
         #expect(GitParser.hunkHeader("-1,2 +1,5 @@ func x()") == GitDiffHunk(oldStart: 1, oldCount: 2, newStart: 1, newCount: 5))

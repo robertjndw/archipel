@@ -34,6 +34,7 @@ struct CommandPalette: View {
 
 private struct PalettePanel: View {
     @Environment(CommandPaletteModel.self) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let rowHeight: CGFloat = 36
     private let maxVisibleRows = 10
@@ -65,11 +66,27 @@ private struct PalettePanel: View {
             Divider()
                 .padding(.horizontal, rowInset)
             results
+            footer
         }
+        .animation(reduceMotion ? nil : Motion.disclosure, value: palette.rows.count)
+        // Over a busy terminal, clear glass lets the text behind compete with the rows. A tinted
+        // backing fixes that, in light and dark mode.
+        .background(.background.opacity(0.5), in: .rect(cornerRadius: Chrome.panelRadius))
         .glassEffect(.regular, in: .rect(cornerRadius: Chrome.panelRadius))
         // A tap on the panel itself must not reach the dismissing backdrop.
         .contentShape(.rect(cornerRadius: Chrome.panelRadius))
         .onTapGesture {}
+    }
+
+    /// Only keys that are not obvious from the field itself.
+    private var footer: some View {
+        Text("↩ to open  ·  ↑ ↓ or ⌃N ⌃P to move  ·  > for commands only")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, rowInset)
+            .padding(.bottom, 8)
+            .padding(.top, 2)
     }
 
     @ViewBuilder
@@ -85,8 +102,11 @@ private struct PalettePanel: View {
                         ForEach(Array(palette.rows.enumerated()), id: \.element.id) { index, row in
                             PaletteRowView(row: row, isSelected: index == palette.selection, cornerRadius: Chrome.panelRadius - rowInset)
                                 .frame(height: rowHeight)
-                                .contentShape(Rectangle())
+                                .contentShape(.rect)
                                 .onTapGesture { palette.activate(index) }
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(row.subtitle.map { "\(row.title), \($0)" } ?? row.title)
+                                .accessibilityAddTraits(index == palette.selection ? [.isButton, .isSelected] : .isButton)
                                 .onContinuousHover { phase in
                                     if case .active = phase, palette.selection != index { palette.selection = index }
                                 }
@@ -123,11 +143,11 @@ private struct PaletteRowView: View {
             Image(symbol: row.symbol)
                 .frame(width: 20)
                 .foregroundStyle(isSelected ? .primary : .secondary)
-            highlighted(row.title, row.titleMatches)
+            Text.highlighting(row.title, matches: row.titleMatches)
                 .lineLimit(1)
                 .layoutPriority(1)
             if let subtitle = row.subtitle {
-                highlighted(subtitle, row.subtitleMatches)
+                Text.highlighting(subtitle, matches: row.subtitleMatches)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -150,32 +170,6 @@ private struct PaletteRowView: View {
             }
         }
     }
-
-    /// Matched characters are bold and tinted. Runs are built per stretch, not per character, to keep long lists cheap.
-    private func highlighted(_ string: String, _ matches: Set<Int>) -> Text {
-        guard !matches.isEmpty else { return Text(string) }
-        var result = AttributedString()
-        var run = ""
-        var runMatches = false
-        func flush() {
-            guard !run.isEmpty else { return }
-            var piece = AttributedString(run)
-            if runMatches {
-                piece.inlinePresentationIntent = .stronglyEmphasized
-                piece.foregroundColor = .accentColor
-            }
-            result += piece
-            run = ""
-        }
-        for (index, character) in string.enumerated() {
-            let isMatch = matches.contains(index)
-            if isMatch != runMatches { flush() }
-            runMatches = isMatch
-            run.append(character)
-        }
-        flush()
-        return Text(result)
-    }
 }
 
 /// Menu-style key glyphs: each key in its own fixed-width cell, so hints line
@@ -189,7 +183,8 @@ private struct ShortcutHint: View {
 
     var body: some View {
         HStack(spacing: 1) {
-            ForEach(Array(keys.enumerated()), id: \.offset) { _, key in
+            // A shortcut never repeats a key, so the key itself is a stable identity.
+            ForEach(keys, id: \.self) { key in
                 Text(verbatim: key)
                     .frame(minWidth: 13)
             }
@@ -281,7 +276,15 @@ final class FocusingTextField: NSTextField {
 private func previewPalette(_ query: String) -> some View {
     let model = AppModel.preview()
     let palette = CommandPaletteModel()
-    let commands = PaletteCommand.standard(model: model, addProject: {}, toggleInspector: {}, startCommit: {})
+    let actions = AppActions(
+        model: model,
+        palette: palette,
+        switcher: TabSwitcherModel(),
+        updater: Updater(),
+        isAddingProject: .constant(false),
+        openSettings: {}
+    )
+    let commands = PaletteCommand.standard(model: model, actions: actions)
     palette.present(.goTo, app: model, commands: commands)
     palette.setQuery(query)
     return CommandPalette()

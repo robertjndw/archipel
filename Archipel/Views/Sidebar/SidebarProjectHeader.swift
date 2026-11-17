@@ -8,7 +8,9 @@ struct SidebarProjectHeader: View {
     let project: Project
     @Binding var renaming: RenameTarget?
     @Environment(\.sidebarDensity) private var density
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
+    @State private var isConfirmingRemoval = false
 
     var body: some View {
         let summary = attentionSummary(of: project, activities: model.activities)
@@ -19,7 +21,7 @@ struct SidebarProjectHeader: View {
             // Primary, unlike a plain section title: the project is an item with an icon of its
             // own, the way a project or an account heads its group in Xcode and Mail.
             Text(project.name)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -31,17 +33,38 @@ struct SidebarProjectHeader: View {
         .padding(.leading, SidebarWorktreeRow.headerAlignmentInset)
         .contentShape(.rect)
         .onHover { isHovered = $0 }
-        .animation(.snappy(duration: 0.2), value: isHovered)
+        .animation(Motion.hover, value: isHovered)
         .animation(.smooth, value: summary)
         .accessibilityElement(children: .contain)
         .accessibilityValue(project.isExpanded ? "" : summary.accessibilityDescription)
         .contextMenu { menu }
+        .confirmationDialog("Remove the project \(project.name)?", isPresented: $isConfirmingRemoval) {
+            Button("Remove Project", role: .destructive) { model.removeProject(project) }
+        } message: {
+            Text(removalMessage)
+        }
     }
 
-    @ViewBuilder
+    private var removalMessage: String {
+        let sessions = project.worktrees.flatMap(\.sessions)
+        let working = sessions.count { model.activity(for: $0.id).isBusy || model.activity(for: $0.id).needsUser }
+        let closing = switch working {
+        case 0: sessions.isEmpty ? "" : " and its sessions are closed"
+        case 1: " and its sessions are closed, including an agent that is still running"
+        default: " and its sessions are closed, including \(working) agents that are still running"
+        }
+        return "The project is removed from Archipel\(closing). Nothing is deleted from disk."
+    }
+
+    /// Both states stay in the tree, stacked in one slot and cross-faded, so the project name does
+    /// not re-truncate under the pointer when the add button appears.
     private func trailing(summary: AttentionSummary) -> some View {
-        if isHovered {
+        ZStack(alignment: .trailing) {
+            collapsedSignal(summary: summary)
+                .opacity(isHovered ? 0 : 1)
             Button("Add Worktree", systemImage: "plus") { model.addWorktreeProjectID = project.id }
+                // Also while hidden: full keyboard access would otherwise stop on a button nobody can see.
+                .disabled(!model.isGitAvailable || !isHovered)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
                 // Drawn like the disclosure chevron beside it: same gray, same stroke weight, and a
@@ -50,14 +73,24 @@ struct SidebarProjectHeader: View {
                 .foregroundStyle(.secondary)
                 .padding(.trailing, 4)
                 .help("Add a worktree to \(project.name)")
-        } else if !project.isExpanded {
-            // Expanded, the rows say all of this themselves.
+                .opacity(isHovered ? 1 : 0)
+                .allowsHitTesting(isHovered)
+                .accessibilityHidden(!isHovered)
+        }
+    }
+
+    @ViewBuilder
+    private func collapsedSignal(summary: AttentionSummary) -> some View {
+        // Expanded, the rows say all of this themselves.
+        if !project.isExpanded {
             if let signal = summary.dominant {
                 SidebarAttentionBadge(signal: signal)
             } else if project.worktrees.count > 1 {
                 Text(project.worktrees.count, format: .number)
                     .font(.caption)
                     .monospacedDigit()
+                    .contentTransition(.numericText(value: Double(project.worktrees.count)))
+                    .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: project.worktrees.count)
                     .foregroundStyle(.tertiary)
                     .accessibilityLabel("\(project.worktrees.count) worktrees")
             }
@@ -67,6 +100,7 @@ struct SidebarProjectHeader: View {
     @ViewBuilder
     private var menu: some View {
         Button("Add Worktree…", systemImage: "plus") { model.addWorktreeProjectID = project.id }
+            .disabled(!model.isGitAvailable)
         if !project.dismissedWorktreePaths.isEmpty {
             Button("Show Dismissed Worktrees", systemImage: "eye") { model.restoreDismissedWorktrees(in: project.id) }
         }
@@ -89,7 +123,7 @@ struct SidebarProjectHeader: View {
             }
         }
         Divider()
-        Button("Remove Project", systemImage: "trash", role: .destructive) { model.removeProject(project) }
+        Button("Remove Project…", systemImage: "trash", role: .destructive) { isConfirmingRemoval = true }
     }
 }
 

@@ -44,7 +44,7 @@ struct SidebarView: View {
         }
         .environment(\.sidebarDensity, model.settings.sidebarDensity)
         .animation(.snappy, value: model.settings.sidebarDensity)
-        .background(SidebarPeekKeyMonitor(peek: peek, model: model))
+        .background { SidebarPeekKeyMonitor(peek: peek, model: model) }
         .environment(peek)
         .onChange(of: model.selectedIsland?.id) { peek.close() }
         // Before the swipe content, so an empty island's placeholder moves with the list.
@@ -113,8 +113,11 @@ private struct ProjectsDisclosureButton: View {
             collapses ? "Collapse All Projects" : "Expand All Projects",
             systemImage: collapses ? "rectangle.compress.vertical" : "rectangle.expand.vertical"
         ) {
-            withAnimation(reduceMotion ? nil : .snappy) { model.setAllProjects(expanded: !collapses) }
+            withAnimation(reduceMotion ? nil : Motion.disclosure) { model.setAllProjects(expanded: !collapses) }
         }
+        .contentTransition(.symbolEffect(.replace))
+        // Its own animation, since the state also flips when a single project is opened by hand.
+        .animation(reduceMotion ? nil : Motion.disclosure, value: collapses)
         .help(collapses ? "Collapse All Projects" : "Expand All Projects")
         .disabled(model.selectedIsland?.projects.isEmpty ?? true)
     }
@@ -124,6 +127,7 @@ private struct ProjectsDisclosureButton: View {
 /// and Finder's sidebar keep their controls up there.
 private struct SidebarHeader: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var isAddingProject: Bool
     let toggleSidebar: () -> Void
 
@@ -132,7 +136,7 @@ private struct SidebarHeader: View {
     private static let slotWidth: CGFloat = 22
 
     var body: some View {
-        let waiting = attentionSummary(of: model.workspace, activities: model.activities).needsAttention
+        let waiting = model.workspaceAttention.needsAttention
         HStack(spacing: 4) {
             // No title: the switcher at the bottom already names the island.
             Spacer(minLength: 0)
@@ -149,7 +153,7 @@ private struct SidebarHeader: View {
                 .help(waiting == 1 ? "1 session is waiting for you (⇧⌘U)" : "\(waiting) sessions are waiting for you (⇧⌘U)")
                 .accessibilityValue("\(waiting) waiting")
                 .frame(width: Self.slotWidth)
-                .transition(.scale.combined(with: .opacity))
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
             }
             ProjectsDisclosureButton()
                 .labelStyle(.iconOnly)
@@ -184,10 +188,20 @@ struct NewSessionButtons: View {
 
     var body: some View {
         ForEach(AgentDefinition.builtIns) { agent in
+            let canStart = model.canStartSession(with: agent)
             Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
                 model.newSession(in: worktree, agent: agent, pane: pane)
             }
+            .disabled(!canStart)
+            .help(canStart ? "" : agent.missingCommandHint)
         }
+    }
+}
+
+extension AgentDefinition {
+    /// The tooltip on a start button that is disabled because the agent's executable is missing.
+    var missingCommandHint: String {
+        "The \"\(executableName)\" command was not found on your PATH"
     }
 }
 

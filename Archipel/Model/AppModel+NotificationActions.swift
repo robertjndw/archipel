@@ -94,7 +94,7 @@ extension AppModel {
     }
 
     private func bringForward(_ id: Session.ID) {
-        NSApp.activate()
+        showMainWindow()
         select(session: id)
     }
 

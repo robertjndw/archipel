@@ -13,10 +13,9 @@ struct SearchResultRow: View {
         HStack(spacing: 8) {
             Image(systemName: symbol)
                 .frame(width: 18)
-                .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 .accessibilityHidden(true)
             title
-                .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(1)
@@ -32,22 +31,22 @@ struct SearchResultRow: View {
         .frame(maxHeight: .infinity)
         .background {
             if isSelected {
-                // Full accent like Open Quickly, since this is the row Return acts on.
-                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.tint)
+                // The same soft accent as the command palette. A solid fill needs white text, which
+                // is unreadable on a light accent such as yellow.
+                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.tint.opacity(0.22))
             }
         }
     }
 
     private var detailStyle: AnyShapeStyle {
-        if isSelected { return AnyShapeStyle(.white.opacity(0.85)) }
-        return detailIsWarning ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary)
+        detailIsWarning ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary)
     }
 }
 
 extension Text {
     /// Bolds and tints the characters a fuzzy match hit. Built per run so long names don't create one
-    /// Text per letter. `onAccent` skips the tint, which would disappear on a selected row's accent fill.
-    static func highlighting(_ string: String, matches: [Int], onAccent: Bool) -> Text {
+    /// Text per letter.
+    static func highlighting(_ string: String, matches: some Collection<Int>) -> Text {
         let matches = Set(matches)
         guard !matches.isEmpty else { return Text(string) }
         var result = AttributedString()
@@ -58,7 +57,7 @@ extension Text {
             var piece = AttributedString(run)
             if runMatches {
                 piece.inlinePresentationIntent = .stronglyEmphasized
-                if !onAccent { piece.foregroundColor = .accentColor }
+                piece.foregroundColor = .accentColor
             }
             result += piece
             run = ""

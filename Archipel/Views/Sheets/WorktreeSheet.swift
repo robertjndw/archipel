@@ -2,8 +2,8 @@ import ArchipelCore
 import GitKit
 import SwiftUI
 
-/// Adds a worktree to a project from one search field: it finds existing branches and worktrees
-/// as you type, and offers to create a new branch from whatever was typed.
+/// Adds a worktree to a project from one search field: it finds existing branches, local and
+/// remote, and worktrees as you type, and offers to create a new branch from whatever was typed.
 struct WorktreeSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -17,13 +17,25 @@ struct WorktreeSheet: View {
     @FocusState private var queryFocused: Bool
     @State private var branches: [String] = []
     @State private var allBranches: Set<String> = []
+    /// Remote branches without a local branch of their name, as `origin/name`. Adding one creates
+    /// that local branch, tracking it.
+    @State private var remoteBranches: [String] = []
+    /// What the local branches of `remoteBranches` would be called. Set wherever that is.
+    @State private var remoteOnlyNames: Set<String> = []
     @State private var worktrees: [GitWorktreeEntry] = []
     @State private var isLoaded = false
     @State private var isRepository = true
     @State private var isWorking = false
+    /// What the spinner is for, so a slow create does not look like a hang.
+    @State private var workingLabel = "Creating Worktree…"
+    /// Held so Cancel and closing the sheet stop a create that is still running.
+    @State private var addTask: Task<Void, Never>?
     /// Where a new branch starts when the project names no base branch. Nil means HEAD.
     @State private var remoteDefaultBranch: String?
     @State private var failure: String?
+    /// Something to tell the user about a worktree that was created all the same. Shown instead of
+    /// the search, with Done as the only way on.
+    @State private var note: String?
     /// Off only for previews, which fill the sheet themselves and have no repository to ask.
     private var asksGit = true
 
@@ -31,11 +43,17 @@ struct WorktreeSheet: View {
     private static let visibleRows = 6
 
     var body: some View {
-        Form {
-            if isRepository {
+        // Ranked once per evaluation; the rows, the selection and the toolbar all read the same list.
+        let rows = suggestions
+        let selected = rows.indices.contains(selection) ? rows[selection] : nil
+        return Form {
+            if let note {
+                Label(note, systemImage: "info.circle")
+                    .textSelection(.enabled)
+            } else if isRepository {
                 Section {
-                    searchField
-                    results
+                    searchField(rows: rows)
+                    results(rows: rows)
                 } footer: {
                     // Replaces the hint instead of adding a row, so the sheet height stays about the same.
                     if let failure {
@@ -53,20 +71,30 @@ struct WorktreeSheet: View {
         .frame(width: 460)
         .navigationTitle("Add Worktree")
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button(actionTitle) { Task { await add() } }
-                    .disabled(!canAdd || isWorking)
+            if note != nil {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            } else {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        addTask?.cancel()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(actionTitle(for: selected)) { startAdd() }
+                        .disabled(!canAdd(selected) || isWorking)
+                }
             }
         }
         .task { if asksGit { await load() } }
+        .onDisappear { addTask?.cancel() }
     }
 
     // MARK: Search field
 
-    private var searchField: some View {
+    private func searchField(rows: [Suggestion]) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
@@ -75,8 +103,8 @@ struct WorktreeSheet: View {
                 .labelsHidden()
                 .focused($queryFocused)
                 .help("Type to find an existing branch or worktree. A name that does not exist yet becomes a new branch.")
-                .onKeyPress(.downArrow) { moveSelection(1); return .handled }
-                .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
+                .onKeyPress(.downArrow) { moveSelection(1, count: rows.count); return .handled }
+                .onKeyPress(.upArrow) { moveSelection(-1, count: rows.count); return .handled }
                 .onChange(of: query) {
                     selection = query.isEmpty ? -1 : 0
                     failure = nil
@@ -84,6 +112,9 @@ struct WorktreeSheet: View {
                 .task(id: createName) { if asksGit { await checkCreateName() } }
                 .onAppear { queryFocused = true }
             if isWorking {
+                Text(workingLabel)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 ProgressView().controlSize(.small)
             }
             filterMenu
@@ -123,9 +154,8 @@ struct WorktreeSheet: View {
 
     // MARK: Results
 
-    private var results: some View {
-        let rows = suggestions
-        return ScrollViewReader { proxy in
+    private func results(rows: [Suggestion]) -> some View {
+        ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
@@ -138,9 +168,10 @@ struct WorktreeSheet: View {
                         .contentShape(.rect)
                         .onTapGesture(count: 2) {
                             selection = index
-                            Task { await add() }
+                            startAdd()
                         }
                         .onTapGesture { selection = index }
+                        .accessibilityAddTraits(index == selection ? [.isButton, .isSelected] : .isButton)
                         .help(row.help ?? "")
                     }
                 }
@@ -179,32 +210,39 @@ struct WorktreeSheet: View {
         return rows.indices.contains(selection) ? rows[selection] : nil
     }
 
-    private var actionTitle: String {
-        switch selectedSuggestion?.kind {
+    private func actionTitle(for selected: Suggestion?) -> String {
+        switch selected?.kind {
         case .create: "Create"
         case .open: "Open"
         default: "Add"
         }
     }
 
-    private var canAdd: Bool {
-        switch selectedSuggestion?.kind {
+    private func canAdd(_ selected: Suggestion?) -> Bool {
+        switch selected?.kind {
         case nil: false
         case .create: !createNameInvalid
         default: true
         }
     }
 
-    private func moveSelection(_ delta: Int) {
-        let count = suggestions.count
+    private func moveSelection(_ delta: Int, count: Int) {
         guard count > 0 else { return }
         selection = min(max(selection + delta, 0), count - 1)
     }
 
-    /// What typing would create, or nil when that branch already exists.
+    /// What typing would create, or nil when that branch already exists. A remote branch counts as
+    /// existing, with or without the configured prefix: someone who types its name means that
+    /// branch, not a new and unrelated one off the base.
     private var createName: String? {
-        guard let name = model.newBranchName(fromTyped: query) else { return nil }
-        return allBranches.contains(name) ? nil : name
+        guard let name = model.newBranchName(fromTyped: query), !allBranches.contains(name) else { return nil }
+        let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return remoteOnlyNames.contains(name) || remoteOnlyNames.contains(typed) ? nil : name
+    }
+
+    /// `origin/feature` is offered as the local branch `feature`.
+    private static func localName(ofRemoteBranch branch: String) -> String? {
+        branch.firstIndex(of: "/").map { String(branch[branch.index(after: $0)...]) }
     }
 
     private var suggestions: [Suggestion] {
@@ -224,6 +262,15 @@ struct WorktreeSheet: View {
         }
         if filter.includes(.branch) {
             candidates += branches.map { Suggestion(kind: .branch, title: $0, detail: "Branch") }
+            candidates += remoteBranches.map { branch in
+                let name = Self.localName(ofRemoteBranch: branch) ?? branch
+                return Suggestion(
+                    kind: .remoteBranch,
+                    title: branch,
+                    detail: "Remote",
+                    help: "Creates \(name) tracking \(branch)"
+                )
+            }
         }
         if filter.includes(.open) {
             candidates += current.worktrees.map {
@@ -258,6 +305,11 @@ struct WorktreeSheet: View {
 
     private func load() async {
         defer { isLoaded = true }
+        // Every call below would bring up the system's install dialog.
+        guard model.isGitAvailable else {
+            failure = AppModel.gitMissingMessage
+            return
+        }
         isRepository = await model.git.isRepository(project.folderURL)
         guard isRepository else { return }
         remoteDefaultBranch = await model.git.remoteDefaultBranch(in: project.folderURL)
@@ -270,11 +322,16 @@ struct WorktreeSheet: View {
     }
 
     private func loadBranches() async throws {
-        let all = try await model.git.worktrees(of: project.folderURL)
-        let checkedOut = Set(all.compactMap(\.branch))
+        let checkedOut = try await model.checkedOutBranches(of: project)
         let local = try await model.git.localBranches(in: project.folderURL)
-        allBranches = Set(local)
+        let localNames = Set(local)
+        let remote = try await model.git.remoteBranches(in: project.folderURL).filter { branch in
+            Self.localName(ofRemoteBranch: branch).map { !localNames.contains($0) } ?? false
+        }
+        allBranches = localNames
         branches = local.filter { !checkedOut.contains($0) }
+        remoteBranches = remote
+        remoteOnlyNames = Set(remote.compactMap(Self.localName(ofRemoteBranch:)))
     }
 
     /// Checked while typing, so a bad name shows up in the list instead of as a git error after Return.
@@ -293,23 +350,42 @@ struct WorktreeSheet: View {
         createNameInvalid = !isValid
     }
 
+    private func startAdd() {
+        guard !isWorking else { return }
+        addTask = Task { await add() }
+    }
+
     private func add() async {
-        guard canAdd, !isWorking, let suggestion = selectedSuggestion else { return }
+        guard let suggestion = selectedSuggestion, canAdd(suggestion), !isWorking else { return }
+        workingLabel = switch suggestion.kind {
+        case .create, .branch, .remoteBranch: "Creating Worktree…"
+        case .worktree, .open: "Adding Worktree…"
+        }
         isWorking = true
         defer { isWorking = false }
         do {
+            var creation: AppModel.WorktreeCreation?
             switch suggestion.kind {
             case .create:
-                try await model.createWorktree(in: project, branch: suggestion.title, createBranch: true)
+                creation = try await model.createWorktree(in: project, branch: suggestion.title, createBranch: true)
             case .branch:
-                try await model.createWorktree(in: project, branch: suggestion.title, createBranch: false)
+                creation = try await model.createWorktree(in: project, branch: suggestion.title, createBranch: false)
+            case .remoteBranch:
+                creation = try await model.createWorktree(in: project, tracking: suggestion.title)
             case .worktree(let path):
                 guard let entry = worktrees.first(where: { $0.path == path }) else { return }
                 model.addExistingWorktrees([entry], to: project.id)
             case .open(let id):
                 model.select(worktree: id)
             }
-            dismiss()
+            if let fetchFailure = creation?.baseFetchFailure {
+                // The worktree exists and is selected behind the sheet; this only says what it is based on.
+                note = "The worktree was created, but its starting point could not be fetched first, so it starts from what the last fetch brought.\n\n\(fetchFailure)"
+            } else {
+                dismiss()
+            }
+        } catch is CancellationError {
+            // Cancel was pressed, or the project went away meanwhile. Nothing to report either way.
         } catch {
             failure = error.localizedDescription
         }
@@ -384,6 +460,8 @@ extension WorktreeSheet {
         enum Kind: Equatable {
             case create
             case branch
+            /// Only on a remote so far; the title is `origin/name`.
+            case remoteBranch
             case worktree(URL)
             case open(Worktree.ID)
         }
@@ -401,6 +479,7 @@ extension WorktreeSheet {
             switch kind {
             case .create: "create"
             case .branch: "branch:\(title)"
+            case .remoteBranch: "remote:\(title)"
             case .worktree(let path): "worktree:\(path.path)"
             case .open(let id): "open:\(id)"
             }
@@ -410,6 +489,7 @@ extension WorktreeSheet {
             switch kind {
             case .create: "plus.circle"
             case .branch: "arrow.triangle.branch"
+            case .remoteBranch: "cloud"
             case .worktree: "folder"
             case .open: "arrow.forward.circle"
             }
@@ -438,7 +518,7 @@ private struct SuggestionRow: View {
         if suggestion.kind == .create {
             return Text("Create Branch “\(suggestion.title)”")
         }
-        return .highlighting(suggestion.title, matches: suggestion.matches, onAccent: isSelected)
+        return .highlighting(suggestion.title, matches: suggestion.matches)
     }
 }
 
@@ -450,10 +530,12 @@ extension WorktreeSheet {
         filter: Filter = .all,
         createNameInvalid: Bool = false,
         branches: [String] = [],
+        remoteBranches: [String] = [],
         worktrees: [GitWorktreeEntry] = [],
         isLoaded: Bool = true,
         isRepository: Bool = true,
-        failure: String? = nil
+        failure: String? = nil,
+        note: String? = nil
     ) {
         self.project = project
         asksGit = false
@@ -463,10 +545,13 @@ extension WorktreeSheet {
         _createNameInvalid = State(initialValue: createNameInvalid)
         _branches = State(initialValue: branches)
         _allBranches = State(initialValue: Set(branches))
+        _remoteBranches = State(initialValue: remoteBranches)
+        _remoteOnlyNames = State(initialValue: Set(remoteBranches.compactMap(Self.localName(ofRemoteBranch:))))
         _worktrees = State(initialValue: worktrees)
         _isLoaded = State(initialValue: isLoaded)
         _isRepository = State(initialValue: isRepository)
         _failure = State(initialValue: failure)
+        _note = State(initialValue: note)
     }
 }
 
@@ -483,6 +568,24 @@ private let previewWorktrees = [
 #Preview("Typing") {
     WorktreeSheet(previewing: PreviewFixtures.appProject, query: "rel", branches: previewBranches, worktrees: previewWorktrees)
         .environment(AppModel.preview())
+}
+
+#Preview("Remote branch") {
+    WorktreeSheet(
+        previewing: PreviewFixtures.appProject,
+        query: "sync",
+        branches: previewBranches,
+        remoteBranches: ["origin/feat/sync-status", "origin/sync"]
+    )
+    .environment(AppModel.preview())
+}
+
+#Preview("Created without fetching") {
+    WorktreeSheet(
+        previewing: PreviewFixtures.appProject,
+        note: "The worktree was created, but its starting point could not be fetched first, so it starts from what the last fetch brought.\n\nCould not resolve host: github.com"
+    )
+    .environment(AppModel.preview())
 }
 
 #Preview("Filtered to branches") {

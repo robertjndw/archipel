@@ -7,6 +7,7 @@ struct TilePicker<Value: Hashable, Preview: View>: View {
     let options: [Value]
     let title: (Value) -> String
     @ViewBuilder let preview: (Value) -> Preview
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -17,16 +18,16 @@ struct TilePicker<Value: Hashable, Preview: View>: View {
                 } label: {
                     VStack(spacing: 4) {
                         preview(option)
-                            .clipShape(.rect(cornerRadius: 5))
+                            .clipShape(.rect(cornerRadius: 5, style: .continuous))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 5)
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
                                     .strokeBorder(.separator, lineWidth: 0.5)
                             }
                             // Gap between picture and ring so a dark preview doesn't swallow it.
                             // Outer radius = inner radius + padding.
                             .padding(3)
                             .overlay {
-                                RoundedRectangle(cornerRadius: 8)
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .strokeBorder(Color.accentColor, lineWidth: 3)
                                     .opacity(isSelected ? 1 : 0)
                             }
@@ -39,7 +40,7 @@ struct TilePicker<Value: Hashable, Preview: View>: View {
                 .buttonStyle(.plain)
             }
         }
-        .animation(.snappy(duration: 0.15), value: selection)
+        .animation(reduceMotion ? nil : Motion.selection, value: selection)
         // Without this VoiceOver reads every tile as the row's label instead of its own title.
         .accessibilityRepresentation {
             Picker("", selection: $selection) {

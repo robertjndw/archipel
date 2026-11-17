@@ -17,13 +17,13 @@ nonisolated enum ProcessSampler {
         let uid = getuid()
         return allPIDs().compactMap { pid in
             guard let info = bsdInfo(pid), info.pbi_uid == uid else { return nil }
-            return ProcessEntry(
-                identity: identity(pid, info),
-                parentPID: Int32(info.pbi_ppid),
-                unixSessionID: getsid(pid),
-                processGroupID: Int32(info.pbi_pgid)
-            )
+            return entry(pid, info)
         }
+    }
+
+    /// One process by pid, without reading the whole table.
+    static func process(_ pid: Int32) -> ProcessEntry? {
+        bsdInfo(pid).map { entry(pid, $0) }
     }
 
     static func usage(of pid: Int32) -> Usage? {
@@ -78,6 +78,15 @@ nonisolated enum ProcessSampler {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size ? info : nil
+    }
+
+    private static func entry(_ pid: Int32, _ info: proc_bsdinfo) -> ProcessEntry {
+        ProcessEntry(
+            identity: identity(pid, info),
+            parentPID: Int32(info.pbi_ppid),
+            unixSessionID: getsid(pid),
+            processGroupID: Int32(info.pbi_pgid)
+        )
     }
 
     private static func identity(_ pid: Int32, _ info: proc_bsdinfo) -> ProcessIdentity {

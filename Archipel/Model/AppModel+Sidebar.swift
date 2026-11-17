@@ -15,6 +15,19 @@ extension AppModel {
         return [defaultAgent] + AgentDefinition.builtIns.filter { $0.id != defaultAgent.id }
     }
 
+    /// False for an agent that is not installed. The default agent is let through regardless: ⌘T
+    /// should never be a dead key, and the session it opens says what is missing.
+    func canStartSession(with agent: AgentDefinition) -> Bool {
+        isInstalled(agent) || agent.id == defaultAgent.id
+    }
+
+    /// The island before or after the selected one, wrapping around.
+    func selectAdjacentIsland(offset: Int) {
+        let islands = workspace.islands
+        guard islands.count > 1, let index = islands.firstIndex(where: { $0.id == workspace.selectedIslandID }) else { return }
+        select(island: islands[(index + offset + islands.count) % islands.count].id)
+    }
+
     /// True while at least one project of the selected island shows its worktrees.
     var hasExpandedProjects: Bool {
         selectedIsland?.projects.contains(where: \.isExpanded) ?? false
@@ -25,10 +38,12 @@ extension AppModel {
         mutate { workspace in
             for id in ids { workspace.updateProject(id: id) { $0.isExpanded = expanded } }
         }
+        // The status poll skipped the projects that were collapsed.
+        if expanded { refreshGitStatus(lookingUpPullRequests: true) }
     }
 
     func islandSummaries() -> [Island.ID: AttentionSummary] {
-        Dictionary(uniqueKeysWithValues: workspace.islands.map { ($0.id, attentionSummary(of: $0, activities: activities)) })
+        islandAttention
     }
 
     func sessionRows(for worktree: Worktree) -> [SessionRowContent] {

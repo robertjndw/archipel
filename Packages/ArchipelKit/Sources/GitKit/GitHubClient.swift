@@ -60,7 +60,7 @@ public struct GitHubClient: Sendable {
             "GH_PROMPT_DISABLED": "1",
             "NO_COLOR": "1",
             "GIT_TERMINAL_PROMPT": "0",
-        ])
+        ], lane: .lookup)
     }
 }
 

@@ -9,7 +9,7 @@ import SwiftUI
 /// controls that would otherwise sit in a toolbar.
 struct PaneTabBar: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("showInspector") private var showInspector = true
+    @AppStorage(LayoutDefaults.showsInspector) private var showInspector = true
     let worktree: Worktree
     let pane: Pane
     let isFocused: Bool
@@ -21,8 +21,6 @@ struct PaneTabBar: View {
     @State private var dropSlot: Int?
 
     static let height: CGFloat = 36
-    /// Slight bounce so the selection settles onto the new tab, close to Safari.
-    private static let motion = Animation.spring(duration: 0.35, bounce: 0.18)
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -46,12 +44,9 @@ struct PaneTabBar: View {
                         ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
                             TabButton(
                                 tab: tab,
-                                label: label(for: tab),
+                                session: session(of: tab),
                                 isSelected: tab.id == pane.selectedTab?.id,
-                                isActive: isActive,
-                                select: { model.select(tab: tab.id) },
-                                pin: { model.pin(tab: tab.id) },
-                                close: { model.close(tab: tab.id) }
+                                isActive: isActive
                             )
                             .anchorPreference(key: TabFrames.self, value: .bounds) { [tab.id: $0] }
                             .transition(reduceMotion ? .opacity : .tab)
@@ -82,8 +77,8 @@ struct PaneTabBar: View {
                         }
                     }
                     // The model mutates tabs without animation, so the row animates them itself.
-                    .animation(reduceMotion ? nil : Self.motion, value: pane.tabs.map(\.id))
-                    .animation(reduceMotion ? nil : Self.motion, value: pane.selectedTab?.id)
+                    .animation(reduceMotion ? nil : Motion.selection, value: pane.tabs.map(\.id))
+                    .animation(reduceMotion ? nil : Motion.selection, value: pane.selectedTab?.id)
                     .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isActive)
                     // The scroll view clips, so the glass shadow needs room inside it.
                     .padding(.vertical, 4)
@@ -91,11 +86,12 @@ struct PaneTabBar: View {
                 }
                 // .hidden still shows a scroller when the system is set to always show them.
                 .scrollIndicators(.never)
+                .tabRowEdgeFade()
                 // Selecting a tab from elsewhere (Ctrl-Tab, the palette, a notification) can pick one
                 // scrolled out of view; without this the bar shows no selection at all.
                 .onChange(of: pane.selectedTab?.id) { _, id in
                     guard let id else { return }
-                    withAnimation(reduceMotion ? nil : Self.motion) { proxy.scrollTo(id) }
+                    withAnimation(reduceMotion ? nil : Motion.selection) { proxy.scrollTo(id) }
                 }
                 .onAppear {
                     // On appear the row has not been laid out yet and scrolling does nothing.
@@ -116,8 +112,8 @@ struct PaneTabBar: View {
                     Image(systemName: "plus")
                 }
                 .toolbarGroupMenu()
-                .help("New session")
-                .accessibilityLabel("New session")
+                .help("New Session")
+                .accessibilityLabel("New Session")
 
                 if pane.id == worktree.panes.last?.id {
                     // Only once there is something to run. Setting a script up is rare and lives in
@@ -126,8 +122,10 @@ struct PaneTabBar: View {
                         Button("Run", systemImage: "play") { model.runProject(in: worktree.id) }
                             .help("Run this project's run script (⌘R)")
                     }
-                    Button("Toggle Inspector", systemImage: "sidebar.trailing") { showInspector.toggle() }
-                        .help("Show or hide files and changes")
+                    Button(showInspector ? "Hide Inspector" : "Show Inspector", systemImage: "sidebar.trailing") { showInspector.toggle() }
+                        // The one tinted button in the group: it is a toggle, and the tint is its "on".
+                        .foregroundStyle(showInspector ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                        .help(showInspector ? "Hide Inspector (⌥⌘0)" : "Show Inspector (⌥⌘0)")
                 }
             }
             .padding(.trailing, 8)
@@ -144,10 +142,80 @@ struct PaneTabBar: View {
         return true
     }
 
-    private func label(for tab: ArchipelCore.Tab) -> TabLabel {
+    /// Sessions come from the worktree the bar already holds, so a tab does not have to read the
+    /// whole workspace for its title.
+    private func session(of tab: ArchipelCore.Tab) -> Session? {
+        guard case .session(let id) = tab.content else { return nil }
+        return worktree.sessions.first { $0.id == id }
+    }
+
+    @ViewBuilder
+    private func tabMenu(_ tab: ArchipelCore.Tab) -> some View {
+        Button("Split Right", systemImage: "rectangle.split.2x1") { model.split(tab: tab.id) }
+            .disabled(pane.tabs.count < 2)
+        if tab.isPreview {
+            Button("Keep Open", systemImage: "pin") { model.pin(tab: tab.id) }
+        }
+        if case .session(let id) = tab.content, let session = worktree.sessions.first(where: { $0.id == id }) {
+            Divider()
+            Button("Rename Session…", systemImage: "pencil") {
+                renaming = RenameTarget(kind: .session(id), name: session.displayTitle)
+            }
+            Button("Restart Session", systemImage: "arrow.clockwise") { model.restartSession(id) }
+            if session.agentSessionID != nil {
+                Button("Restart with a New Conversation", systemImage: "plus.bubble") {
+                    model.restartSession(id, fresh: true)
+                }
+            }
+        }
+        if case .file(let url) = tab.content {
+            Divider()
+            Button("Show in Finder", systemImage: "folder") { model.revealInFinder(url) }
+            if let editor = model.preferredEditor {
+                Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(url) }
+            }
+            Button("Open in Default App", systemImage: "arrow.up.forward.app") { NSWorkspace.shared.open(url) }
+        }
+        if case .web(let url) = tab.content {
+            Divider()
+            Button("Open in Browser", systemImage: "safari") { NSWorkspace.shared.open(url) }
+            Button("Copy URL", systemImage: "document.on.document") { model.copyToPasteboard(url.absoluteString) }
+        }
+        Divider()
+        Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
+    }
+}
+
+struct TabLabel: Equatable {
+    var title: String
+    var symbol: String
+    /// Shown as the tooltip.
+    var detail: String?
+    var activity: SessionActivity?
+    var hasUnsavedChanges = false
+    var devServers: [DevServerLink] = []
+}
+
+/// Reads the model for this tab alone. The bar above it stays out of activity, dev servers, unsaved
+/// state and page titles, so a tick in one session re-evaluates only these few lookups, and
+/// `TabButtonContent` is skipped unless its own label came out different.
+private struct TabButton: View {
+    @Environment(AppModel.self) private var model
+    let tab: ArchipelCore.Tab
+    /// The session a session tab shows; nil for every other kind of tab.
+    let session: Session?
+    let isSelected: Bool
+    /// Whether this tab's pane has focus; only then does the selection get glass.
+    let isActive: Bool
+
+    var body: some View {
+        TabButtonContent(tab: tab, label: label, isSelected: isSelected, isActive: isActive)
+            .equatable()
+    }
+
+    private var label: TabLabel {
         switch tab.content {
         case .session(let id):
-            let session = worktree.sessions.first { $0.id == id }
             return TabLabel(
                 title: session?.displayTitle ?? "Session",
                 symbol: (session?.agent.definition ?? .shell).symbolName,
@@ -181,65 +249,23 @@ struct PaneTabBar: View {
             )
         }
     }
-
-    @ViewBuilder
-    private func tabMenu(_ tab: ArchipelCore.Tab) -> some View {
-        Button("Split Right", systemImage: "rectangle.split.2x1") { model.split(tab: tab.id) }
-            .disabled(pane.tabs.count < 2)
-        if tab.isPreview {
-            Button("Keep Open", systemImage: "pin") { model.pin(tab: tab.id) }
-        }
-        if case .session(let id) = tab.content, let session = worktree.sessions.first(where: { $0.id == id }) {
-            Divider()
-            Button("Rename…", systemImage: "pencil") {
-                renaming = RenameTarget(kind: .session(id), name: session.displayTitle)
-            }
-            Button("Restart", systemImage: "arrow.clockwise") { model.restartSession(id) }
-            if session.agentSessionID != nil {
-                Button("Restart with a New Conversation", systemImage: "plus.bubble") {
-                    model.restartSession(id, fresh: true)
-                }
-            }
-        }
-        if case .file(let url) = tab.content {
-            Divider()
-            Button("Show in Finder", systemImage: "folder") { model.revealInFinder(url) }
-            if let editor = model.preferredEditor {
-                Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(url) }
-            }
-            Button("Open in Default App", systemImage: "arrow.up.forward.app") { NSWorkspace.shared.open(url) }
-        }
-        if case .web(let url) = tab.content {
-            Divider()
-            Button("Open in Browser", systemImage: "safari") { NSWorkspace.shared.open(url) }
-            Button("Copy URL", systemImage: "document.on.document") { model.copyToPasteboard(url.absoluteString) }
-        }
-        Divider()
-        Button("Close Tab", systemImage: "xmark", role: .destructive) { model.close(tab: tab.id) }
-    }
 }
 
-struct TabLabel {
-    var title: String
-    var symbol: String
-    /// Shown as the tooltip.
-    var detail: String?
-    var activity: SessionActivity?
-    var hasUnsavedChanges = false
-    var devServers: [DevServerLink] = []
-}
-
-private struct TabButton: View {
+/// Everything a tab draws, from values only. No closures come in: they never compare equal, and one
+/// would make every tab redraw whenever the bar does. The actions go to the model directly.
+private struct TabButtonContent: View, Equatable {
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let tab: ArchipelCore.Tab
     let label: TabLabel
     let isSelected: Bool
-    /// Whether this tab's pane has focus; only then does the selection get glass.
     let isActive: Bool
-    let select: () -> Void
-    let pin: () -> Void
-    let close: () -> Void
-    @State private var isHovering = false
+    @State private var isHovered = false
     @State private var isOverClose = false
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.tab == rhs.tab && lhs.label == rhs.label && lhs.isSelected == rhs.isSelected && lhs.isActive == rhs.isActive
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -269,39 +295,95 @@ private struct TabButton: View {
                             .accessibilityLabel("Unsaved changes")
                     }
                 }
-                .opacity(isHovering ? 0 : 1)
-                Button("Close Tab", systemImage: "xmark", action: close)
+                .opacity(isHovered ? 0 : 1)
+                Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
                     .imageScale(.small)
-                    .opacity(isHovering ? 1 : 0)
+                    .opacity(isHovered ? 1 : 0)
                     .onHover { isOverClose = $0 }
             }
             .frame(width: 18)
         }
         .animation(.snappy(duration: 0.25), value: label.devServers)
         .animation(.snappy(duration: 0.25), value: label.activity?.subagents.count)
+        // The same curve the sidebar row uses for this change, so a session's two glyphs move together.
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.status)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.unread)
         .padding(.leading, 12)
         .padding(.trailing, 6)
         .frame(minWidth: 96, maxWidth: 220, minHeight: Chrome.controlHeight)
         .background {
-            if isHovering && !isSelected {
+            if isHovered && !isSelected {
                 Capsule().fill(.quinary)
             }
         }
-        .animation(.easeOut(duration: 0.15), value: isHovering)
+        .animation(Motion.hover, value: isHovered)
         .contentShape(.capsule)
         // The tab-wide taps also fire for a click on the close button, which would select the tab
         // being closed and make closing it pick a neighbour. A background tap target would not
         // work instead: the title and icon sit on top of it and swallow the click.
-        .gesture(TapGesture(count: 2).onEnded { if !isOverClose { pin() } })
-        .simultaneousGesture(TapGesture().onEnded { if !isOverClose { select() } })
-        .onHover { isHovering = $0 }
+        .gesture(TapGesture(count: 2).onEnded { if !isOverClose { model.pin(tab: tab.id) } })
+        .simultaneousGesture(TapGesture().onEnded { if !isOverClose { model.select(tab: tab.id) } })
+        .onHover { isHovered = $0 }
         .help(label.detail ?? label.title)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label.title)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction(.default, select)
+        .accessibilityAction(.default) { model.select(tab: tab.id) }
+    }
+}
+
+/// Fades the leading or trailing edge of the tab row while tabs are cut off there, the way the
+/// inspector's lists fade (`scrollEdgeFade` in InspectorUI, which is vertical only and uses the
+/// inspector's background).
+private struct TabRowEdgeFade: ViewModifier {
+    @State private var clipped = ClippedEdges()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let width: CGFloat = 24
+
+    struct ClippedEdges: Equatable {
+        var leading = false
+        var trailing = false
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: ClippedEdges.self) { geometry in
+                // Half a point of slack so rubber-banding and rounding do not flicker the fade.
+                let leading = geometry.contentOffset.x + geometry.contentInsets.leading > 0.5
+                let trailing = geometry.visibleRect.maxX < geometry.contentSize.width - 0.5
+                return ClippedEdges(leading: leading, trailing: trailing)
+            } action: { _, edges in
+                withAnimation(reduceMotion ? nil : Motion.hover) { clipped = edges }
+            }
+            // An overlay rather than a mask: a mask would also cut into the selected tab's glass.
+            .overlay(alignment: .leading) { fade(from: .leading).opacity(clipped.leading ? 1 : 0) }
+            .overlay(alignment: .trailing) { fade(from: .trailing).opacity(clipped.trailing ? 1 : 0) }
+    }
+
+    private func fade(from edge: HorizontalEdge) -> some View {
+        // What the bar itself is filled with (`.windowBackground`), as a color a gradient can fade.
+        let background = Color(nsColor: .windowBackgroundColor)
+        return LinearGradient(
+            stops: [
+                .init(color: background, location: 0),
+                .init(color: background, location: 0.3),
+                .init(color: background.opacity(0), location: 1),
+            ],
+            startPoint: edge == .leading ? .leading : .trailing,
+            endPoint: edge == .leading ? .trailing : .leading
+        )
+        .frame(width: Self.width)
+        .allowsHitTesting(false)
+    }
+}
+
+private extension View {
+    func tabRowEdgeFade() -> some View {
+        modifier(TabRowEdgeFade())
     }
 }
 
@@ -462,9 +544,10 @@ private func previewTabBars() -> some View {
     var unsaved = label
     unsaved.hasUnsavedChanges = true
     return HStack(spacing: 4) {
-        TabButton(tab: tab, label: label, isSelected: false, isActive: true, select: {}, pin: {}, close: {})
-        TabButton(tab: tab, label: unsaved, isSelected: false, isActive: true, select: {}, pin: {}, close: {})
+        TabButtonContent(tab: tab, label: label, isSelected: false, isActive: true)
+        TabButtonContent(tab: tab, label: unsaved, isSelected: false, isActive: true)
     }
     .padding()
+    .environment(AppModel.preview())
 }
 #endif

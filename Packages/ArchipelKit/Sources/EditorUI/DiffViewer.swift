@@ -36,7 +36,7 @@ public struct DiffViewer: View {
     }
 
     public var body: some View {
-        DiffViewerContent(root: root, path: path, staged: staged, review: review)
+        DiffViewerHost(root: root, path: path, staged: staged, review: review)
             .id(DiffKey(root: root, path: path, staged: staged))
     }
 
@@ -47,23 +47,42 @@ public struct DiffViewer: View {
     }
 }
 
-private struct DiffViewerContent: View {
-    @State private var model: DiffViewerModel
-    @AppStorage("EditorUI.diffPresentation") private var presentation: DiffPresentation = .sideBySide
-    @State private var showsAllLines = false
+/// Holds the model for one diff. It is made on appear rather than in init because the parent rebuilds
+/// this struct on every update, and a model made in init would be allocated each time and discarded.
+private struct DiffViewerHost: View {
+    let root: URL
+    let path: String
+    let staged: Bool
     let review: DiffReview?
+    @State private var model: DiffViewerModel?
 
     init(root: URL, path: String, staged: Bool, review: DiffReview?) {
-        _model = State(initialValue: DiffViewerModel(root: root, path: path, staged: staged))
+        self.root = root
+        self.path = path
+        self.staged = staged
         self.review = review
     }
 
-#if DEBUG
-    init(model: DiffViewerModel, review: DiffReview?) {
-        _model = State(initialValue: model)
-        self.review = review
+    var body: some View {
+        Group {
+            if let model {
+                DiffViewerContent(model: model, review: review)
+            } else {
+                Color(nsColor: .textBackgroundColor)
+            }
+        }
+        .onAppear {
+            guard model == nil else { return }
+            model = DiffViewerModel(root: root, path: path, staged: staged)
+        }
     }
-#endif
+}
+
+private struct DiffViewerContent: View {
+    let model: DiffViewerModel
+    let review: DiffReview?
+    @AppStorage("EditorUI.diffPresentation") private var presentation: DiffPresentation = .sideBySide
+    @State private var showsAllLines = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,6 +122,12 @@ private struct DiffViewerContent: View {
             ContentUnavailableView("Binary File", systemImage: "doc.zipper", description: Text("Binary files can't be compared as text."))
         case .contentUnchanged:
             ContentUnavailableView("No Content Changes", systemImage: "doc.on.doc", description: Text("Only the file's name or permissions changed."))
+        case .conflicted:
+            ContentUnavailableView(
+                "Merge Conflict",
+                systemImage: "arrow.triangle.merge",
+                description: Text("This file has merge conflicts, which can't be shown as a comparison. Open it in the editor to resolve them, then stage it.")
+            )
         case .failed(let message):
             ContentUnavailableView("Can't Show Changes", systemImage: "exclamationmark.triangle", description: Text(message))
         }
@@ -120,6 +145,7 @@ private struct DiffHeader: View {
     let review: DiffReview?
     @Binding var presentation: DiffPresentation
     @Binding var showsAllLines: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 8) {
@@ -127,7 +153,8 @@ private struct DiffHeader: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(1)
-            Text(model.staged ? "Staged" : "Unstaged")
+            // Named like the diff's tab in the app.
+            Text(model.staged ? "Staged" : "Working Tree")
                 .foregroundStyle(.secondary)
             if let document = model.document, model.phase == .ready {
                 counts(document)
@@ -145,6 +172,7 @@ private struct DiffHeader: View {
                 .toggleStyle(.button)
                 .buttonStyle(.borderless)
                 .labelStyle(.iconOnly)
+                .contentTransition(.symbolEffect(.replace))
                 .help(showsAllLines ? "Collapse Unchanged Lines" : "Show Unchanged Lines")
 
                 Picker("Presentation", selection: $presentation) {
@@ -168,7 +196,7 @@ private struct DiffHeader: View {
     private var title: some View {
         let name = (model.path as NSString).lastPathComponent
         HStack(spacing: 4) {
-            Image(systemName: "doc.text")
+            Image(systemName: FileSymbol.name(for: name))
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             if let original = model.renamedFrom {
@@ -196,13 +224,17 @@ private struct DiffHeader: View {
             if document.additions > 0 {
                 Text(verbatim: "+\(document.additions)")
                     .foregroundStyle(.green)
+                    .contentTransition(.numericText(value: Double(document.additions)))
             }
             if document.deletions > 0 {
                 Text(verbatim: "-\(document.deletions)")
                     .foregroundStyle(.red)
+                    .contentTransition(.numericText(value: Double(document.deletions)))
             }
         }
         .monospacedDigit()
+        .animation(reduceMotion ? nil : .smooth, value: document.additions)
+        .animation(reduceMotion ? nil : .smooth, value: document.deletions)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(document.additions) lines added, \(document.deletions) lines removed")
     }
@@ -225,7 +257,7 @@ private struct DiffHeader: View {
 @MainActor @Observable
 final class DiffViewerModel {
     enum Phase: Equatable {
-        case loading, ready, noDifferences, binary, contentUnchanged
+        case loading, ready, noDifferences, binary, contentUnchanged, conflicted
         case failed(String)
 
         /// Whether `diff` describes what is on screen, so identical output can be skipped.
@@ -274,15 +306,23 @@ final class DiffViewerModel {
             guard current == generation else { return }
             // Unchanged output leaves the view alone, so scroll position and expanded folds survive the poll.
             if phase.isSettled, diff == self.diff { return }
-            self.diff = diff
-            renamedFrom = diff?.status == .renamed && diff?.oldPath != path ? diff?.oldPath : nil
 
-            guard let diff else { return show(.noDifferences) }
-            if diff.isBinary { return show(.binary) }
-            if diff.hunks.isEmpty { return show(.contentUnchanged) }
+            guard let diff else {
+                settle(on: nil)
+                return show(.noDifferences)
+            }
+            let placeholder: Phase? = if diff.isConflicted { .conflicted }
+                else if diff.isBinary { .binary }
+                else if diff.hunks.isEmpty { .contentUnchanged }
+                else { nil }
+            if let placeholder {
+                settle(on: diff)
+                return show(placeholder)
+            }
 
             let document = await Self.makeDocument(diff)
             guard current == generation else { return }
+            settle(on: diff)
             self.document = document
             documentVersion += 1
             phase = .ready
@@ -292,6 +332,15 @@ final class DiffViewerModel {
             self.diff = nil
             show(.failed(error.localizedDescription))
         }
+    }
+
+    /// `diff` is written only together with what goes on screen. Written earlier, a refresh that
+    /// overlaps one still building its document would take the new diff as already shown and stop,
+    /// and the first one would then be dropped by the generation check, leaving a stale document.
+    private func settle(on diff: GitFileDiff?) {
+        self.diff = diff
+        let renamedFrom = diff?.status == .renamed && diff?.oldPath != path ? diff?.oldPath : nil
+        if self.renamedFrom != renamedFrom { self.renamedFrom = renamedFrom }
     }
 
     private func show(_ phase: Phase) {
@@ -363,6 +412,10 @@ private func previewViewer(
 
 #Preview("Renamed Without Changes") {
     previewViewer(.success(PreviewSamples.renamedOnly), path: "Sources/Util/StringHelpers.swift", staged: true)
+}
+
+#Preview("Merge Conflict") {
+    previewViewer(.success(PreviewSamples.conflicted), path: PreviewSamples.mixedPath)
 }
 
 #Preview("No Changes") {

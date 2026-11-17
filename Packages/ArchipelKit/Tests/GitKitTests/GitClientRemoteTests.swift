@@ -291,6 +291,41 @@ final class GitClientRemoteTests {
         }
     }
 
+    @Test func ownSSHOptionsGiveWayToTheUsersCommand() {
+        let ours = GitClient.sshEnvironment(batchMode: true, inherited: [:], configuredCommand: nil)
+        #expect(ours["GIT_SSH_COMMAND"]?.hasPrefix("ssh -o BatchMode=yes -o ConnectTimeout=") == true)
+        #expect(GitClient.sshEnvironment(batchMode: false, inherited: ["PATH": "/usr/bin"], configuredCommand: "")["GIT_SSH_COMMAND"]?.contains("BatchMode") == false)
+
+        // git would run ours instead of any of these, and with it another key or account.
+        #expect(GitClient.sshEnvironment(batchMode: true, inherited: ["GIT_SSH_COMMAND": "ssh -i key"], configuredCommand: nil).isEmpty)
+        #expect(GitClient.sshEnvironment(batchMode: true, inherited: ["GIT_SSH": "/usr/local/bin/ssh"], configuredCommand: nil).isEmpty)
+        #expect(GitClient.sshEnvironment(batchMode: false, inherited: [:], configuredCommand: "ssh -i ~/.ssh/work_key").isEmpty)
+    }
+
+    @Test func pushAndFetchRunTheConfiguredSSHCommand() async throws {
+        // Stands in for `ssh -i ~/.ssh/work_key`: notes that it was the one git ran, then fails.
+        let marker = base.appending(path: "ssh-ran")
+        let script = base.appending(path: "work-ssh")
+        try "#!/bin/sh\necho \"$@\" >> '\(marker.path)'\nexit 1\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        try sh("config", "core.sshCommand", script.path)
+        try sh("remote", "add", "origin", "ssh://git@example.invalid/repo.git")
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "first", in: repo)
+
+        await #expect(throws: GitError.self) { try await self.git.push(in: self.repo) }
+        #expect(try String(contentsOf: marker, encoding: .utf8).contains("git-receive-pack"))
+
+        try FileManager.default.removeItem(at: marker)
+        await #expect(throws: GitError.self) { try await self.git.fetch(in: self.repo) }
+        #expect(try String(contentsOf: marker, encoding: .utf8).contains("git-upload-pack"))
+
+        try FileManager.default.removeItem(at: marker)
+        await #expect(throws: GitError.self) { try await self.git.fetch(branch: "main", from: "origin", in: self.repo) }
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+    }
+
     // MARK: Helpers
 
     /// A second clone of the remote, standing in for a teammate who pushes.

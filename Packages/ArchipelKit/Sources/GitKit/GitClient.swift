@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 public struct GitClient: Sendable {
     public init() {}
@@ -43,10 +44,11 @@ public struct GitClient: Sendable {
     public func switchBranch(to target: GitSwitchTarget, in folder: URL) async throws {
         let args = switch target {
         // --no-guess so a typo never quietly creates a tracking branch from a remote of that name.
-        case .local(let branch): ["switch", "--no-guess", branch]
-        case .remote(let remoteBranch): ["switch", "--track", remoteBranch]
+        // The `--` keeps a ref that starts with a dash from being read as an option.
+        case .local(let branch): ["switch", "--no-guess", "--", branch]
+        case .remote(let remoteBranch): ["switch", "--track", "--", remoteBranch]
         // --no-track for the same reason as in addWorktree: a remote base must not become the upstream.
-        case .new(let branch, let base): ["switch", "-c", branch] + (base.map { ["--no-track", $0] } ?? [])
+        case .new(let branch, let base): ["switch", "-c", branch] + (base.map { ["--no-track", "--", $0] } ?? [])
         }
         let result = try await GitProcess.run(args, in: folder, readOnly: false)
         guard result.status != 0 else { return }
@@ -60,6 +62,16 @@ public struct GitClient: Sendable {
         let args = createBranch
             ? ["worktree", "add", "-b", branch] + (base == nil ? [] : ["--no-track"]) + ["--", path.path] + (base.map { [$0] } ?? [])
             : ["worktree", "add", "--", path.path, branch]
+        let result = try await GitProcess.run(args, in: repository, readOnly: false)
+        guard result.status != 0 else { return }
+        throw GitError(worktreeAddFailure: result)
+    }
+
+    /// A worktree on a new local branch that starts at and tracks `remoteBranch` (`origin/feature`),
+    /// for a branch that so far only exists on the remote. Unlike a new branch off a base, the
+    /// remote branch is meant to be the upstream here. Fails when `branch` already exists locally.
+    public func addWorktree(repository: URL, path: URL, branch: String, tracking remoteBranch: String) async throws {
+        let args = ["worktree", "add", "--track", "-b", branch, "--", path.path, remoteBranch]
         let result = try await GitProcess.run(args, in: repository, readOnly: false)
         guard result.status != 0 else { return }
         throw GitError(worktreeAddFailure: result)
@@ -100,9 +112,10 @@ public struct GitClient: Sendable {
     public func fetch(branch: String, from remote: String, in repository: URL) async throws {
         let args = [
             "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=15",
-            "fetch", "--quiet", "--no-tags", remote, "refs/heads/\(branch)",
+            "fetch", "--quiet", "--no-tags", "--", remote, "refs/heads/\(branch)",
         ]
-        let result = try await GitProcess.run(args, in: repository, readOnly: false, environment: Self.unattendedEnvironment)
+        let environment = await sshEnvironment(batchMode: true, in: repository)
+        let result = try await GitProcess.run(args, in: repository, readOnly: false, environment: environment, lane: .network)
         guard result.status == 0 else { throw GitError(command: "git fetch", output: result) }
     }
 
@@ -128,7 +141,7 @@ public struct GitClient: Sendable {
     /// Safe delete with `-d`: a branch not merged into HEAD (or its upstream) is kept, not thrown away.
     public func deleteBranch(_ branch: String, in repository: URL) async throws -> GitBranchDeletion {
         // C locale so the message below is not translated.
-        let result = try await GitProcess.run(["branch", "-d", branch], in: repository, readOnly: false, environment: ["LC_ALL": "C"])
+        let result = try await GitProcess.run(["branch", "-d", "--", branch], in: repository, readOnly: false, environment: ["LC_ALL": "C"])
         if result.status == 0 { return .deleted }
         // git has no dedicated exit code for this, so the message is the only way to tell it apart
         // from a missing branch or one checked out elsewhere.
@@ -168,34 +181,74 @@ public struct GitClient: Sendable {
     /// Plain `git push` when the branch tracks something, otherwise publishes it to `origin` and sets the
     /// upstream. Nothing here can prompt: stdin is /dev/null, `GIT_TERMINAL_PROMPT=0` is set, and the
     /// app has no controlling terminal for ssh or credential helpers to open.
+    ///
+    /// No BatchMode, unlike the fetches: a push is something the user asked for, so an askpass
+    /// helper they set up for their key may still show its window.
     public func push(in folder: URL) async throws {
         let summary = try await summary(in: folder)
         guard summary.branch != nil else {
             throw GitError(message: "HEAD is detached. Check out a branch before pushing.")
         }
         if summary.upstream != nil {
-            try await run(["push"], in: folder, readOnly: false)
+            try await runPush(["push"], in: folder)
             return
         }
         let remotes = try await run(["remote"], in: folder).split(whereSeparator: \.isNewline)
         guard remotes.contains("origin") else {
             throw GitError(message: "This branch has no upstream and the repository has no remote named origin.")
         }
-        try await run(["push", "-u", "origin", "HEAD"], in: folder, readOnly: false)
+        try await runPush(["push", "-u", "origin", "HEAD"], in: folder)
+    }
+
+    private func runPush(_ arguments: [String], in folder: URL) async throws {
+        let result = try await GitProcess.run(
+            Self.stallOptions + arguments, in: folder, readOnly: false,
+            environment: await sshEnvironment(batchMode: false, in: folder), lane: .network
+        )
+        guard result.status == 0 else { throw GitError(command: "git push", output: result) }
     }
 
     /// Updates the remote-tracking refs so ahead/behind counts are current. Meant to run unattended:
     /// ssh gets BatchMode so an unknown host key or a locked key fails at once instead of waiting
-    /// for a prompt nobody can answer. A GIT_SSH_COMMAND the user set is left alone.
+    /// for a prompt nobody can answer. An ssh command the user chose is left alone, see `sshEnvironment`.
     public func fetch(in folder: URL) async throws {
-        let result = try await GitProcess.run(["fetch", "--quiet", "--prune"], in: folder, readOnly: false, environment: Self.unattendedEnvironment)
+        let result = try await GitProcess.run(
+            Self.stallOptions + ["fetch", "--quiet", "--prune"], in: folder, readOnly: false,
+            environment: await sshEnvironment(batchMode: true, in: folder), lane: .network
+        )
         guard result.status == 0 else { throw GitError(command: "git fetch", output: result) }
     }
 
-    private static var unattendedEnvironment: [String: String] {
-        guard ProcessInfo.processInfo.environment["GIT_SSH_COMMAND"] == nil else { return [:] }
-        return ["GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=10"]
+    private func sshEnvironment(batchMode: Bool, in folder: URL) async -> [String: String] {
+        let configured = try? await run(["config", "--get", "core.sshCommand"], in: folder)
+        return Self.sshEnvironment(
+            batchMode: batchMode,
+            inherited: ProcessInfo.processInfo.environment,
+            configuredCommand: configured?.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
+
+    /// ConnectTimeout only covers the handshake. The keepalives are what end a connection that died
+    /// later: ssh gives up after three unanswered ones, where it would otherwise wait on the dead
+    /// socket for as long as TCP lets it.
+    ///
+    /// Empty when the user chose their own ssh, in the environment or as `core.sshCommand` (in the
+    /// repository or any config it includes). git ranks GIT_SSH_COMMAND above both `core.sshCommand`
+    /// and GIT_SSH, so setting it would replace their command, and with it the key or account it
+    /// selects, by plain `ssh`. Their command then runs without our timeouts.
+    static func sshEnvironment(batchMode: Bool, inherited: [String: String], configuredCommand: String?) -> [String: String] {
+        guard inherited["GIT_SSH_COMMAND"] == nil, inherited["GIT_SSH"] == nil, configuredCommand?.isEmpty != false else { return [:] }
+        let options = (batchMode ? ["-o BatchMode=yes"] : [])
+            + ["-o ConnectTimeout=10", "-o ServerAliveInterval=15", "-o ServerAliveCountMax=3"]
+        return ["GIT_SSH_COMMAND": (["ssh"] + options).joined(separator: " ")]
+    }
+
+    /// The HTTP counterpart: a transfer that moves nothing at all for a minute is aborted.
+    ///
+    /// Deliberately more patient than `fetch(branch:)`. While a server packs objects or runs its
+    /// receive hooks, all that arrives is a few keepalive bytes every five seconds, and a limit of
+    /// 1000 bytes per second would cut off a slow but healthy push or a fetch of a large repository.
+    private static let stallOptions = ["-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=60"]
 
     /// Fetches, then fast-forwards the branch to its upstream. Never merges or rebases. A diverged
     /// branch is refused with an explanation, since sorting that out needs someone in a terminal.
@@ -254,10 +307,20 @@ public struct GitClient: Sendable {
     public func discardUnstaged(_ changes: [GitFileChange], in folder: URL) async throws {
         let changes = changes.filter { $0.kind != .conflicted }
         let top = try await topLevel(of: folder)
-        for change in changes where change.kind == .untracked {
+        // An unstaged addition is an intent-to-add entry (`git add -N`). Its index entry is empty, so
+        // `restore --worktree` would "restore" the file to zero bytes and report success. The only
+        // copy is the one on disk, exactly as for an untracked file.
+        let unversioned = changes.filter { $0.kind == .untracked || $0.kind == .added }
+        // Index first: if the entry outlived a trashed file it would read as a deletion, and
+        // discarding that restores the empty file after all. Failing here leaves everything in place.
+        let intended = unversioned.filter { $0.kind == .added }.map(\.path)
+        if !intended.isEmpty {
+            try await unstage(intended, in: folder)
+        }
+        for change in unversioned {
             try trash(top.appending(path: change.path))
         }
-        let tracked = changes.filter { $0.kind != .untracked }.map(\.path)
+        let tracked = changes.filter { $0.kind != .untracked && $0.kind != .added }.map(\.path)
         guard !tracked.isEmpty else { return }
         try await run(["restore", "--worktree", "--"] + pathspecs(tracked), in: folder, readOnly: false)
     }
@@ -309,9 +372,25 @@ public struct GitClient: Sendable {
             return try await run(base + ["--"] + pathspecs([path]), in: folder)
         }
         // --no-index takes real file paths, not pathspecs, and exits 1 whenever the files differ.
-        let top = try await run(["rev-parse", "--show-toplevel"], in: folder)
-            .trimmingCharacters(in: .newlines)
-        return try await run(base + ["--no-index", "--", "/dev/null", path], in: URL(filePath: top), acceptedExitCodes: [0, 1])
+        let top = try await topLevel(of: folder)
+        try refuseFolder(path, in: top)
+        return try await run(base + ["--no-index", "--", "/dev/null", path], in: top, acceptedExitCodes: [0, 1])
+    }
+
+    /// Status lists every untracked file on its own, so the one folder it can report is a repository
+    /// nested in this one, which git will not look into. `diff --no-index` against a folder fails
+    /// with exit code 1, the same code it uses for "the files differ", so this has to be caught
+    /// before it runs or the folder reads as having no changes.
+    private func refuseFolder(_ path: String, in top: URL) throws {
+        let folder = top.appending(path: path)
+        // lstat, so a symlink to a folder still diffs as the link it is.
+        let type = try? FileManager.default.attributesOfItem(atPath: folder.path)[.type] as? FileAttributeType
+        guard type == .typeDirectory else { return }
+        let name = path.hasSuffix("/") ? String(path.dropLast()) : path
+        let isRepository = FileManager.default.fileExists(atPath: folder.appending(path: ".git").path)
+        throw GitError(message: isRepository
+            ? "\(name) is a nested Git repository. Open it as its own project to see its changes."
+            : "\(name) is a folder, not a file.")
     }
 
     /// The whole file as one hunk, for showing a full comparison, unless `contextLines` asks for less. Staged compares HEAD with the index,
@@ -320,22 +399,52 @@ public struct GitClient: Sendable {
     ///
     /// One git call yields both sides, so they always come from the same moment even while an agent
     /// keeps writing.
-    public func fileDiff(path: String, staged: Bool, contextLines: Int? = nil, in folder: URL) async throws -> GitFileDiff? {
+    ///
+    /// `originalPath` is the old name of a staged rename, as status reports it. Passing it saves the
+    /// rename detection over the whole index that is otherwise needed to find it.
+    public func fileDiff(
+        path: String,
+        staged: Bool,
+        contextLines: Int? = nil,
+        originalPath: String? = nil,
+        in folder: URL
+    ) async throws -> GitFileDiff? {
+        try await fileDiff(path: path, staged: staged, contextLines: contextLines, origin: originalPath.map { .known($0) } ?? .detect, in: folder)
+    }
+
+    /// For a change that came from `status(in:)`, which has already settled whether it is a rename,
+    /// so no staged diff needs to detect that again.
+    public func fileDiff(for change: GitFileChange, staged: Bool, contextLines: Int? = nil, in folder: URL) async throws -> GitFileDiff? {
+        try await fileDiff(path: change.path, staged: staged, contextLines: contextLines, origin: .known(change.originalPath), in: folder)
+    }
+
+    private enum RenameOrigin {
+        case detect
+        case known(String?)
+    }
+
+    private func fileDiff(path: String, staged: Bool, contextLines: Int?, origin: RenameOrigin, in folder: URL) async throws -> GitFileDiff? {
         // Explicit prefixes and no textconv keep the output parseable whatever the user's diff config says.
         let base = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
                     "--unified=\(contextLines ?? Self.wholeFileContext)"]
         let output: String
         if staged {
-            // A pathspec of just the new name would hide the rename, so look for its source first.
-            let renames = try await run(["diff", "--cached", "--name-status", "-z", "-M", "--diff-filter=R"], in: folder)
-            let origin = GitParser.renameOrigin(of: path, in: renames)
-            output = try await run(base + ["--cached", "-M", "--"] + pathspecs([path] + [origin].compactMap(\.self)), in: folder)
+            // A pathspec of just the new name would hide the rename, so its source has to be named too.
+            let source: String?
+            switch origin {
+            case .known(let original):
+                source = original
+            case .detect:
+                let renames = try await run(["diff", "--cached", "--name-status", "-z", "-M", "--diff-filter=R"], in: folder)
+                source = GitParser.renameOrigin(of: path, in: renames)
+            }
+            output = try await run(base + ["--cached", "-M", "--"] + pathspecs([path] + [source].compactMap(\.self)), in: folder)
         } else if try await !run(["ls-files", "--"] + pathspecs([path]), in: folder).isEmpty {
             output = try await run(base + ["--"] + pathspecs([path]), in: folder)
         } else {
-            let top = try await run(["rev-parse", "--show-toplevel"], in: folder).trimmingCharacters(in: .newlines)
-            let topURL = URL(filePath: top, directoryHint: .isDirectory)
+            let topURL = try await topLevel(of: folder)
             guard FileManager.default.fileExists(atPath: topURL.appending(path: path).path) else { return nil }
+            try refuseFolder(path, in: topURL)
             output = try await run(base + ["--no-index", "--", "/dev/null", path], in: topURL, acceptedExitCodes: [0, 1])
         }
         return GitParser.fileDiffs(output).first
@@ -351,8 +460,14 @@ public struct GitClient: Sendable {
     }
 
     @discardableResult
-    func run(_ arguments: [String], in folder: URL, readOnly: Bool = true, acceptedExitCodes: Set<Int32> = [0]) async throws -> String {
-        let result = try await GitProcess.run(arguments, in: folder, readOnly: readOnly)
+    func run(
+        _ arguments: [String],
+        in folder: URL,
+        readOnly: Bool = true,
+        acceptedExitCodes: Set<Int32> = [0],
+        lane: GitProcess.Lane = .local
+    ) async throws -> String {
+        let result = try await GitProcess.run(arguments, in: folder, readOnly: readOnly, lane: lane)
         guard acceptedExitCodes.contains(result.status) else {
             throw GitError(command: "git \(arguments.first ?? "")", output: result)
         }
@@ -414,28 +529,85 @@ enum GitProcess {
 
     static let gitExecutable = URL(filePath: "/usr/bin/git")
 
+    /// Which queue a process waits in. Fetches and pushes can sit on a dead connection for many
+    /// seconds; in a lane of their own they cannot use up the slots that status polls and the
+    /// user's stage or commit need. Pull request lookups run one per worktree in the background,
+    /// so they get their own lane too and a push never queues behind them.
+    enum Lane: Sendable {
+        case local, network, lookup
+
+        fileprivate var limiter: ProcessLimiter {
+            switch self {
+            case .local: GitProcess.localLimiter
+            case .network: GitProcess.networkLimiter
+            case .lookup: GitProcess.lookupLimiter
+            }
+        }
+    }
+
+    private static let localLimiter = ProcessLimiter(limit: 8)
+    private static let networkLimiter = ProcessLimiter(limit: 4)
+    private static let lookupLimiter = ProcessLimiter(limit: 4)
+
     /// `environment` is layered over the defaults below.
-    static func run(_ arguments: [String], in folder: URL, readOnly: Bool, environment extra: [String: String] = [:]) async throws -> Output {
+    static func run(
+        _ arguments: [String],
+        in folder: URL,
+        readOnly: Bool,
+        environment extra: [String: String] = [:],
+        lane: Lane = .local
+    ) async throws -> Output {
         var environment = ["GIT_TERMINAL_PROMPT": "0"].merging(extra) { _, new in new }
         if readOnly {
             // Keeps status from taking index.lock to refresh the index, which would race an agent's own git commands.
             environment["GIT_OPTIONAL_LOCKS"] = "0"
         }
         // Without core.quotepath=false, diff headers escape non-ASCII file names as octal.
-        return try await run(gitExecutable, ["-c", "core.quotepath=false"] + arguments, in: folder, environment: environment)
+        return try await run(gitExecutable, ["-c", "core.quotepath=false"] + arguments, in: folder, environment: environment, lane: lane)
     }
 
     /// Runs on a GCD thread so the blocking reads never tie up the caller or the cooperative pool.
     /// `environment` is layered over the app's own environment.
-    static func run(_ executable: URL, _ arguments: [String], in folder: URL, environment: [String: String]) async throws -> Output {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(with: Result { try runBlocking(executable, arguments, in: folder, environment: environment) })
+    ///
+    /// Callers wait for a slot in their lane before a thread is taken. Every worktree polls on its
+    /// own, so a burst of a few hundred calls is normal, and letting each one block a thread
+    /// exhausts the GCD pool (64 threads), along with the process's file descriptors.
+    ///
+    /// Cancelling the calling task stops a process that talks to the network, and the call throws
+    /// `CancellationError`. Local commands run to the end regardless: they are quick, half of them
+    /// write to the repository, and the views that poll them are cancelled every time the app
+    /// leaves the foreground, where a killed status or diff would only surface as an error.
+    static func run(
+        _ executable: URL,
+        _ arguments: [String],
+        in folder: URL,
+        environment: [String: String],
+        lane: Lane = .local
+    ) async throws -> Output {
+        let limiter = lane.limiter
+        await limiter.acquire()
+        let child = Child()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let result = Result { try runBlocking(executable, arguments, in: folder, environment: environment, child: child) }
+                    // Before resuming, so the slot is never held by a call whose caller is already running again.
+                    limiter.release()
+                    continuation.resume(with: result)
+                }
             }
+        } onCancel: {
+            if lane != .local { child.cancel() }
         }
     }
 
-    private static func runBlocking(_ executable: URL, _ arguments: [String], in folder: URL, environment overrides: [String: String]) throws -> Output {
+    private static func runBlocking(
+        _ executable: URL,
+        _ arguments: [String],
+        in folder: URL,
+        environment overrides: [String: String],
+        child: Child
+    ) throws -> Output {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
@@ -448,30 +620,148 @@ enum GitProcess {
         process.standardOutput = stdout
         process.standardError = stderr
 
+        // Cancelled while it waited for its slot: no point in starting at all.
+        guard !child.isCancelled else { throw CancellationError() }
         do {
             try process.run()
         } catch {
             throw GitError(message: error.localizedDescription)
         }
+        child.started(process)
 
-        // Drain stderr concurrently: if the child fills one pipe while we block reading the other, both sides hang.
-        let errorData = DataBox()
-        let group = DispatchGroup()
-        DispatchQueue.global(qos: .userInitiated).async(group: group) {
-            errorData.value = stderr.fileHandleForReading.readDataToEndOfFile()
-        }
-        let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-        group.wait()
+        let (outputData, errorData) = collect(stdout.fileHandleForReading, stderr.fileHandleForReading, of: process)
         process.waitUntilExit()
+        if child.finished() { throw CancellationError() }
 
         return Output(
             status: process.terminationStatus,
             stdout: String(decoding: outputData, as: UTF8.self),
-            stderr: String(decoding: errorData.value, as: UTF8.self)
+            stderr: String(decoding: errorData, as: UTF8.self)
         )
     }
 
-    private final class DataBox: @unchecked Sendable {
-        var value = Data()
+    /// Reads both pipes until they close, or until the process is gone and they have fallen silent.
+    ///
+    /// Both in one `poll` loop: if the child fills one pipe while we block reading the other, both
+    /// sides hang. And not simply to end of file, because that only comes once every process
+    /// holding the pipe has exited. An ssh ControlPersist master or a credential helper daemon
+    /// started by git inherits it and lives on for minutes after git itself is done.
+    private static func collect(_ stdout: FileHandle, _ stderr: FileHandle, of process: Process) -> (stdout: Data, stderr: Data) {
+        var descriptors = [stdout, stderr].map { pollfd(fd: $0.fileDescriptor, events: Int16(POLLIN), revents: 0) }
+        var collected = [Data(), Data()]
+        var scratch = [UInt8](repeating: 0, count: 64 * 1024)
+        // Set once the process is seen to have exited. Whatever it wrote is in the pipes by then,
+        // so the deadline only bounds how long a straggler that keeps writing can hold us up.
+        //
+        // Not a continuous clock: that one keeps counting while the Mac sleeps, and waking up
+        // would look like a second of silence.
+        var deadline: SuspendingClock.Instant?
+        let clock = SuspendingClock()
+
+        while descriptors.contains(where: { $0.fd >= 0 }) {
+            if deadline == nil, !process.isRunning { deadline = clock.now + .seconds(1) }
+            let ready = poll(&descriptors, nfds_t(descriptors.count), 50)
+            if ready < 0, errno != EINTR { break }
+            if deadline != nil, ready == 0 { break }
+            guard ready > 0 else { continue }
+            // Decided before reading but acted on after it. A deadline that passed while we were
+            // stalled says nothing about the pipes, which can still hold the end of git's own
+            // output; one read takes all of it, a pipe never buffering more than `scratch` holds.
+            let isOverdue = deadline.map { clock.now >= $0 } ?? false
+
+            for index in descriptors.indices where descriptors[index].revents != 0 {
+                let count = scratch.withUnsafeMutableBytes { read(descriptors[index].fd, $0.baseAddress, $0.count) }
+                if count > 0 {
+                    collected[index].append(contentsOf: scratch[..<count])
+                } else if count == 0 || (errno != EINTR && errno != EAGAIN) {
+                    // poll skips negative descriptors, which is how a closed pipe leaves the set.
+                    descriptors[index].fd = -1
+                }
+            }
+            if isOverdue { break }
+        }
+        return (collected[0], collected[1])
+    }
+
+    /// Lets the cancellation handler, which runs on whatever thread cancels the task, reach the
+    /// process that a GCD thread is running.
+    private final class Child: @unchecked Sendable {
+        private let lock = NSLock()
+        private var process: Process?
+        private var cancelled = false
+        private var terminated = false
+
+        var isCancelled: Bool { lock.withLock { cancelled } }
+
+        func started(_ process: Process) {
+            lock.withLock {
+                self.process = process
+                // The cancellation came between the check and the launch.
+                if cancelled { terminate(process) }
+            }
+        }
+
+        func cancel() {
+            lock.withLock {
+                cancelled = true
+                if let process { terminate(process) }
+            }
+        }
+
+        private func terminate(_ process: Process) {
+            guard process.isRunning else { return }
+            process.terminate()
+            terminated = true
+        }
+
+        /// True when the process was told to stop while it ran. Its output is then cut short and
+        /// not worth returning. A cancellation that only arrives once git has exited changes
+        /// nothing about what git did, and reporting it would turn a finished push into an error.
+        func finished() -> Bool {
+            lock.withLock {
+                process = nil
+                return terminated
+            }
+        }
+    }
+}
+
+/// A counting semaphore whose waiters suspend instead of blocking a thread. First come, first served.
+final class ProcessLimiter: Sendable {
+    private struct State {
+        var available: Int
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state: Mutex<State>
+
+    init(limit: Int) {
+        state = Mutex(State(available: limit))
+    }
+
+    func acquire() async {
+        await withCheckedContinuation { continuation in
+            let acquired = state.withLock { state in
+                guard state.available > 0 else {
+                    state.waiters.append(continuation)
+                    return false
+                }
+                state.available -= 1
+                return true
+            }
+            if acquired { continuation.resume() }
+        }
+    }
+
+    /// Hands the slot straight to the longest waiter, so it never shows as free in between.
+    func release() {
+        let next = state.withLock { state -> CheckedContinuation<Void, Never>? in
+            guard !state.waiters.isEmpty else {
+                state.available += 1
+                return nil
+            }
+            return state.waiters.removeFirst()
+        }
+        next?.resume()
     }
 }

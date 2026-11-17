@@ -24,14 +24,14 @@ private struct FolderDropModifier: ViewModifier {
             .overlay {
                 if isTargeted {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.tint.opacity(0.08))
                         .strokeBorder(.tint, lineWidth: 2)
-                        .background(.tint.opacity(0.08), in: .rect(cornerRadius: 10))
                         .padding(4)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
             }
-            .animation(.easeOut(duration: 0.15), value: isTargeted)
+            .animation(Motion.hover, value: isTargeted)
     }
 }
 
