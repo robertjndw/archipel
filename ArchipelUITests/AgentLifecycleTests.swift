@@ -180,6 +180,43 @@ final class AgentLifecycleTests: ArchipelUITestCase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
+    func testBackgroundTasksShowABadgeAndGuardTheSession() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let stub = try sandbox.installRecordingAgentStub(named: "claude")
+        try launch(with: repository.workspace(sessions: [.claude()]))
+
+        let started = try waitForLaunch(1, recordedIn: stub.launches)
+        let conversation = try XCTUnwrap(started.argument(after: "--session-id"))
+        let hook = hookHelper.path
+        let shell: [String: Any] = ["id": "b1", "type": "shell", "status": "running", "description": "Dev server", "command": "npm run dev"]
+        func endTurn(leaving tasks: [[String: Any]]) throws {
+            try sendHook(["hook_event_name": "UserPromptSubmit", "session_id": conversation], hook: hook, launch: started)
+            try sendHook(
+                ["hook_event_name": "Stop", "session_id": conversation, "last_assistant_message": "Done.", "background_tasks": tasks],
+                hook: hook, launch: started
+            )
+        }
+        // The tab is one element, so it reads its badge out as its value.
+        let session = tab("Claude Code")
+
+        try sendHook(["hook_event_name": "SessionStart", "session_id": conversation], hook: hook, launch: started)
+        try endTurn(leaving: [shell])
+        waitUntil("the tab says a background task is running") { session.value as? String == "1 background task running" }
+        // The shell may be a server that never exits, so the turn is announced all the same.
+        XCTAssertEqual(agentsStatus, "1 unread")
+
+        chooseMenu("File", "Close Tab")
+        let question = sheet.staticTexts
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "running a background task", "running a background task"))
+            .element(boundBy: 0)
+        assertExists(question, "Closing would stop the shell too, so the app should ask first.")
+        sheet.buttons["Cancel"].click()
+        assertExists(session, "Cancel should leave the session open.")
+
+        try endTurn(leaving: [])
+        waitUntil("the tab no longer says so") { session.value as? String != "1 background task running" }
+    }
+
     func testMarkAsReadKeepsARequestNobodyAnswered() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         let stub = try sandbox.installAskingAgentStub(named: "codex")

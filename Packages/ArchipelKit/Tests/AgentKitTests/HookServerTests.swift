@@ -243,6 +243,8 @@ struct HookServerTests {
         let payload: [String: Any] = [
             "session_id": Fixtures.claudeSessionID, "hook_event_name": "Stop",
             "last_assistant_message": "Done. " + String(repeating: "\u{e9}", count: 3 << 20),
+            // Not a string like the rest of what the helper keeps, so easy to drop while trimming.
+            "background_tasks": [["id": "b1", "type": "shell", "status": "running", "description": "build"]],
         ]
         let sessionID = UUID()
         _ = try runHook(
@@ -250,12 +252,13 @@ struct HookServerTests {
             stdin: String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
         )
         let message = try #require(await collect(1, from: server).first)
-        guard case .turnFinished(let text?, _) = message.event else {
+        guard case .turnFinished(let text?, let backgroundTasks) = message.event else {
             Issue.record("expected a finished turn with its message, got \(String(describing: message.event))")
             return
         }
         #expect(text.hasPrefix("Done. \u{e9}"))
         #expect(text.utf8.count < 64 << 10)
+        #expect(backgroundTasks == 1)
     }
 
     @Test func rejectsOverlongPath() {

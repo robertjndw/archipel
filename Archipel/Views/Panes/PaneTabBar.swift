@@ -333,11 +333,21 @@ private struct TabButtonContent: View, Equatable {
         .help(label.detail ?? label.title)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label.title)
-        // The label above replaces what the children would say, the dot's included.
-        .accessibilityValue(label.hasUnsavedChanges ? Text("Unsaved changes") : Text(""))
+        // The label above replaces what the children would say, the dot's and the badges' included.
+        .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("pane.tab")
         .accessibilityAction(.default) { model.select(tab: tab.id) }
+    }
+
+    private var accessibilityValue: String {
+        if label.hasUnsavedChanges { return "Unsaved changes" }
+        let tasks = label.activity?.backgroundTasks ?? 0
+        let subagents = label.activity?.subagents.count ?? 0
+        return [
+            tasks > 0 ? BackgroundTaskBadge.description(tasks) : nil,
+            subagents > 0 ? SubagentBadge.description(subagents) : nil,
+        ].compactMap(\.self).joined(separator: ", ")
     }
 }
 
