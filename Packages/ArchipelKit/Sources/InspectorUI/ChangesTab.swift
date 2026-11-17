@@ -130,10 +130,23 @@ final class ChangesModel {
         perform { try await $0.unstageAll(in: $1) }
     }
 
-    func discard(_ change: GitFileChange, staged: Bool) {
+    /// What the files of some changes look like on disk right now, to hand back to `discard` or
+    /// `discardAll` once the user has answered.
+    func stamps(of changes: [GitFileChange]) -> [String: FileStamp] {
+        Dictionary(changes.map { ($0.path, FileStamp(of: root.appending(path: $0.path))) }) { first, _ in first }
+    }
+
+    /// An agent can rewrite a file while the confirmation is open without its entry changing at
+    /// all, and what it wrote was never agreed to.
+    private func isUntouched(_ change: GitFileChange, since seen: [String: FileStamp]?) -> Bool {
+        guard let seen else { return true }
+        return seen[change.path] == FileStamp(of: root.appending(path: change.path))
+    }
+
+    func discard(_ change: GitFileChange, staged: Bool, seen: [String: FileStamp]? = nil) {
         // The poll keeps running while the confirmation is open. An entry that has since gone or
         // changed kind is not the one that was agreed to, as in `discardAll`.
-        guard (staged ? status.staged : status.unstaged).contains(change) else { return }
+        guard (staged ? status.staged : status.unstaged).contains(change), isUntouched(change, since: seen) else { return }
         let changes = [change]
         perform { git, root in
             if staged {
@@ -148,10 +161,11 @@ final class ChangesModel {
     ///
     /// `confirmed` is the list the dialog asked about. The poll keeps running while the dialog is
     /// open, so the section may have grown since; anything new was never agreed to. Entries that
-    /// went away or changed kind in the meantime are dropped rather than discarded blind.
-    func discardAll(_ confirmed: [GitFileChange]) {
+    /// went away or changed kind in the meantime are dropped rather than discarded blind, and so
+    /// are files written to since `seen` was taken.
+    func discardAll(_ confirmed: [GitFileChange], seen: [String: FileStamp]? = nil) {
         let current = Dictionary(status.unstaged.map { ($0.path, $0) }) { first, _ in first }
-        let changes = confirmed.filter { $0.isDiscardable && current[$0.path] == $0 }
+        let changes = confirmed.filter { $0.isDiscardable && current[$0.path] == $0 && isUntouched($0, since: seen) }
         guard !changes.isEmpty else { return }
         perform { try await $0.discardUnstaged(changes, in: $1) }
     }
@@ -218,7 +232,7 @@ final class ChangesModel {
 
     func fetch() {
         guard syncState.canFetch else { return }
-        run(.fetch) { [git, root] in try await git.fetch(in: root) } onSuccess: {}
+        run(.fetch) { [git, root] in try await git.fetch(in: root, userInitiated: true) } onSuccess: {}
     }
 
     /// Network and process work that changes slowly: the remote list and the branch's pull request.
@@ -354,12 +368,31 @@ extension GitFileChange {
     var isDiscardable: Bool { kind != .conflicted }
 }
 
+/// Enough of a file's state on disk to notice that it was written to. A missing file has neither.
+struct FileStamp: Equatable {
+    var modified: Date?
+    var size: Int?
+
+    init(of url: URL) {
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        modified = values?.contentModificationDate
+        size = values?.fileSize
+    }
+}
+
 /// What the confirmation dialog is asking about. Lives on the model so rows, menus and the
 /// section header can all raise the one dialog.
 enum DiscardRequest: Equatable {
     case file(GitFileChange, staged: Bool)
     /// The discardable unstaged entries as they were when the dialog was raised.
     case allUnstaged([GitFileChange])
+
+    var changes: [GitFileChange] {
+        switch self {
+        case .file(let change, _): [change]
+        case .allUnstaged(let changes): changes
+        }
+    }
 
     var title: String {
         switch self {
@@ -389,6 +422,8 @@ struct ChangesTab: View {
     @State private var showsStaged = true
     @State private var showsUnstaged = true
     @State private var discardRequest: DiscardRequest?
+    /// The files of `discardRequest` as they were when the question was asked.
+    @State private var discardStamps: [String: FileStamp] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -422,12 +457,15 @@ struct ChangesTab: View {
         ) { request in
             Button("Discard", role: .destructive) {
                 switch request {
-                case .file(let change, let staged): model.discard(change, staged: staged)
-                case .allUnstaged(let changes): model.discardAll(changes)
+                case .file(let change, let staged): model.discard(change, staged: staged, seen: discardStamps)
+                case .allUnstaged(let changes): model.discardAll(changes, seen: discardStamps)
                 }
             }
         } message: { request in
             Text(request.message)
+        }
+        .onChange(of: discardRequest) { _, request in
+            if let request { discardStamps = model.stamps(of: request.changes) }
         }
     }
 

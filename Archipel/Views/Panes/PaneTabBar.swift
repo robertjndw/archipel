@@ -331,6 +331,8 @@ private struct TabButtonContent: View, Equatable {
         .help(label.detail ?? label.title)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label.title)
+        // The label above replaces what the children would say, the dot's included.
+        .accessibilityValue(label.hasUnsavedChanges ? Text("Unsaved changes") : Text(""))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("pane.tab")
         .accessibilityAction(.default) { model.select(tab: tab.id) }

@@ -345,14 +345,13 @@ private struct SyncMenuItems: View {
 
     var body: some View {
         let id = model.selectedWorktree?.id
-        let canSync = model.canSync(id)
         let publishes = model.pushPublishes(id)
         Button("Pull", systemImage: "arrow.down") { actions.sync(.pull) }
-            .disabled(!canSync)
+            .disabled(!model.canSync(.pull, id))
         Button(publishes ? "Publish Branch" : "Push", systemImage: publishes ? "icloud.and.arrow.up" : "arrow.up") { actions.sync(.push) }
-            .disabled(!canSync)
+            .disabled(!model.canSync(.push, id))
         Button("Fetch", systemImage: "arrow.triangle.2.circlepath") { actions.sync(.fetch) }
-            .disabled(!canSync)
+            .disabled(!model.canSync(.fetch, id))
     }
 }
 

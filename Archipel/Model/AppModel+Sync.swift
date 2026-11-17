@@ -18,11 +18,18 @@ enum SyncAction {
 /// Push, pull and fetch without the inspector. Same git calls as the Changes panel, so the rules are
 /// the same too: a push publishes a branch that has no upstream yet, and a pull only fast-forwards.
 extension AppModel {
-    /// False while the worktree is already syncing, without git, or for a folder that is not a
-    /// repository as far as the last status poll could tell.
-    func canSync(_ id: Worktree.ID?) -> Bool {
-        guard let id, isGitAvailable, syncsInFlight[id] == nil else { return false }
-        return gitSummaries[id] != nil
+    /// False while the worktree is already syncing, without git, for a folder that is not a
+    /// repository as far as the last status poll could tell, and when the action could only fail:
+    /// nothing to pull from, nowhere to publish to, no remote to fetch. The Changes tab's sync menu
+    /// draws the same lines, except that this Push stays available with nothing ahead.
+    func canSync(_ action: SyncAction, _ id: Worktree.ID?) -> Bool {
+        guard let id, isGitAvailable, syncsInFlight[id] == nil, let summary = gitSummaries[id] else { return false }
+        let hasRemote = summary.upstream != nil || worktreesWithRemote.contains(id)
+        switch action {
+        case .pull: return summary.branch != nil && summary.upstream != nil
+        case .push: return summary.branch != nil && hasRemote
+        case .fetch: return hasRemote
+        }
     }
 
     /// A push publishes a branch that has no upstream yet, and the menu should say so.
@@ -42,7 +49,7 @@ extension AppModel {
                 switch action {
                 case .push: try await git.push(in: folder)
                 case .pull: try await git.pull(in: folder)
-                case .fetch: try await git.fetch(in: folder)
+                case .fetch: try await git.fetch(in: folder, userInitiated: true)
                 }
             } catch is CancellationError {
                 // Nobody is waiting for an answer any more.

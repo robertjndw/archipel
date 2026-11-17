@@ -117,6 +117,25 @@ final class ChangesModelTests {
         #expect(model.status.unstaged.map(\.path) == ["b.txt", "c.txt"])
     }
 
+    @Test func discardLeavesAFileRewrittenBehindTheDialog() async throws {
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        let confirmed = model.status.unstaged
+        #expect(confirmed.map(\.path) == ["a.txt", "b.txt"])
+        let seen = model.stamps(of: confirmed)
+
+        // Still a modification of a.txt as far as status goes, but not the one that was asked about.
+        try write("a.txt", "written while the dialog was open\n")
+        await model.refresh()
+        #expect(model.status.unstaged == confirmed)
+
+        model.discard(confirmed[0], staged: false, seen: seen)
+        model.discardAll(confirmed, seen: seen)
+        try await until { model.status.unstaged.map(\.path) == ["a.txt"] }
+
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "written while the dialog was open\n")
+    }
+
     @Test func commitAllStagesEverythingWhenNothingIsStaged() async throws {
         let model = ChangesModel(root: repo, searchPATH: { "" })
         await model.refresh()

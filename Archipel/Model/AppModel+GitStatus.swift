@@ -66,6 +66,7 @@ extension AppModel {
         if !pullRequests.keys.allSatisfy(existing.contains) {
             pullRequests = pullRequests.filter { existing.contains($0.key) }
         }
+        if !worktreesWithRemote.isSubset(of: existing) { worktreesWithRemote.formIntersection(existing) }
         pruneRemovedState(keeping: existing)
         // A collapsed project shows none of its rows, so only the selected worktree, which the
         // inspector and the tab bar still draw from, is worth a git call there. Expanding the
@@ -190,6 +191,9 @@ extension AppModel {
                     countedLines = true
                 }
             }
+            // An upstream already says there is a remote, so only a branch without one costs the call.
+            var hasRemote = false
+            if let summary, summary.upstream == nil { hasRemote = await git.hasRemote(in: worktree.path) }
             guard let self else { return }
             if countedLines { self.gitRefresh.diffStatCheckedAt[id] = .now }
             self.gitRefresh.summariesInFlight.remove(id)
@@ -197,9 +201,13 @@ extension AppModel {
                 self.gitRefresh.queued[id] = nil
                 self.gitSummaries[id] = nil
                 self.pullRequests[id] = nil
+                self.worktreesWithRemote.remove(id)
                 return
             }
             if self.gitSummaries[id] != summary { self.gitSummaries[id] = summary }
+            if hasRemote != self.worktreesWithRemote.contains(id) {
+                if hasRemote { self.worktreesWithRemote.insert(id) } else { self.worktreesWithRemote.remove(id) }
+            }
             // Not when the branch was switched in the app since this status was read: the name
             // written then is newer, and the refresh the switch queued brings the matching status.
             if let summary, current.branch != summary.branch, branchGeneration == self.branchGenerations[id] {

@@ -5,51 +5,6 @@ import XCTest
 /// configured, the agent runs the helper on every event, and the helper reports to the app's socket.
 /// A script stands in for Claude Code here; everything after it is the real thing.
 final class AgentTests: ArchipelUITestCase {
-    private struct AgentLaunch {
-        var sessionID = ""
-        var socket = ""
-        var workingDirectory = ""
-        var arguments: [String] = []
-
-        init(contentsOf record: URL) throws {
-            for line in try String(contentsOf: record, encoding: .utf8).split(separator: "\n") {
-                guard let separator = line.firstIndex(of: "=") else { continue }
-                let value = String(line[line.index(after: separator)...])
-                switch line[..<separator] {
-                case "session": sessionID = value
-                case "socket": socket = value
-                case "cwd": workingDirectory = value
-                case "argument": arguments.append(value)
-                default: break
-                }
-            }
-        }
-    }
-
-    /// The status bar's summary of every session, which is also what VoiceOver reads there.
-    private var agentsSummary: XCUIElement { mainWindow.buttons["Agents"] }
-    private var agentsStatus: String { agentsSummary.value as? String ?? "" }
-
-    /// Runs the hook helper the way Claude Code does: the event as JSON on standard input.
-    private func sendHook(_ event: [String: Any], hook: String, launch: AgentLaunch) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: hook)
-        var environment = ProcessInfo.processInfo.environment
-        environment["ARCHIPEL_SESSION_ID"] = launch.sessionID
-        environment["ARCHIPEL_SOCKET"] = launch.socket
-        environment["HOME"] = sandbox.home.path
-        process.environment = environment
-        let input = Pipe()
-        process.standardInput = input
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        try input.fileHandleForWriting.write(contentsOf: JSONSerialization.data(withJSONObject: event))
-        try input.fileHandleForWriting.close()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0, "The hook helper must never fail the agent's hook.")
-    }
-
     func testAgentStatusReachesTheWindowThroughTheHook() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         let record = try sandbox.installAgentStub(named: "claude")

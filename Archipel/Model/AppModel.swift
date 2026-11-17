@@ -119,6 +119,9 @@ final class AppModel {
 
     /// Transient repository state for the sidebar rows of the selected island.
     var gitSummaries: [Worktree.ID: GitSummary] = [:]
+    /// Worktrees without an upstream whose repository has a remote all the same, which is what
+    /// tells a branch that can be published from one that has nowhere to go.
+    var worktreesWithRemote: Set<Worktree.ID> = []
     var pullRequests: [Worktree.ID: PullRequestLookup] = [:]
     /// Everything `git worktree list` reported per project at the last refresh. Suggestions are
     /// derived from it on read, so adding or dismissing one updates the sidebar without a git call.
@@ -508,19 +511,30 @@ final class AppModel {
     private func markViewed(_ id: Session.ID) {
         // Without hooks nothing tells us that the user dealt with a request,
         // so looking at the session has to count as dealing with it.
-        if workspace.session(id: id)?.agent.definition.reportsLifecycleThroughHooks == false,
-           activities[id]?.needsUser == true {
+        if hasUnreportedRequest(id), let before = activities[id]?.status {
             activities[id]?.status = .finished
+            sessionStatusChanged(id, from: before, to: .finished)
         }
+        clearUnread(id)
+    }
+
+    /// A request from an agent that will not say when it was answered.
+    private func hasUnreportedRequest(_ id: Session.ID) -> Bool {
+        activities[id]?.needsUser == true
+            && workspace.session(id: id)?.agent.definition.reportsLifecycleThroughHooks == false
+    }
+
+    private func clearUnread(_ id: Session.ID) {
         // Observers fire on every write, equal or not, and this runs on every selection change.
         if activities[id]?.unread == true { activities[id]?.markViewed() }
         notifier.clear(sessionID: id)
         refreshDockBadge()
     }
 
-    /// Clears the unread state of a worktree's sessions without opening them.
+    /// Clears the unread state of a worktree's sessions without opening them. Pending requests
+    /// are left alone, since nobody looked at the session to answer them.
     func markRead(worktree id: Worktree.ID) {
-        for session in workspace.worktree(id: id)?.sessions ?? [] { markViewed(session.id) }
+        for session in workspace.worktree(id: id)?.sessions ?? [] { clearUnread(session.id) }
     }
 
     private func isBeingViewed(_ id: Session.ID) -> Bool {
@@ -1621,8 +1635,8 @@ final class AppModel {
             return event
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Runs on every key press. Skip the view walk when nothing is unread.
-            if let self, self.activities.values.contains(where: \.unread),
+            // Runs on every key press. Skip the view walk when nothing is unread or waiting.
+            if let self, self.activities.values.contains(where: { $0.unread || $0.needsUser }),
                let responder = event.window?.firstResponder as? NSView,
                let id = self.terminals.first(where: { responder.isDescendant(of: $0.value.view) })?.key {
                 self.acknowledge(id)
@@ -1631,9 +1645,10 @@ final class AppModel {
         }
     }
 
-    /// Cheap enough for every key press: only an unread session does any work.
+    /// Cheap enough for every key press: only an unread session does any work, or one whose request
+    /// was marked as read without being answered.
     private func acknowledge(_ id: Session.ID) {
-        guard activities[id]?.unread == true else { return }
+        guard activities[id]?.unread == true || hasUnreportedRequest(id) else { return }
         markViewed(id)
     }
 

@@ -182,7 +182,7 @@ public struct GitClient: Sendable {
     /// upstream. Nothing here can prompt: stdin is /dev/null, `GIT_TERMINAL_PROMPT=0` is set, and the
     /// app has no controlling terminal for ssh or credential helpers to open.
     ///
-    /// No BatchMode, unlike the fetches: a push is something the user asked for, so an askpass
+    /// No BatchMode, unlike the unattended fetches: a push is something the user asked for, so an askpass
     /// helper they set up for their key may still show its window.
     public func push(in folder: URL) async throws {
         let summary = try await summary(in: folder)
@@ -208,13 +208,14 @@ public struct GitClient: Sendable {
         guard result.status == 0 else { throw GitError(command: "git push", output: result) }
     }
 
-    /// Updates the remote-tracking refs so ahead/behind counts are current. Meant to run unattended:
-    /// ssh gets BatchMode so an unknown host key or a locked key fails at once instead of waiting
-    /// for a prompt nobody can answer. An ssh command the user chose is left alone, see `sshEnvironment`.
-    public func fetch(in folder: URL) async throws {
+    /// Updates the remote-tracking refs so ahead/behind counts are current. Unattended unless
+    /// `userInitiated`: ssh gets BatchMode so an unknown host key or a locked key fails at once
+    /// instead of waiting for a prompt nobody can answer. A fetch the user asked for is treated like
+    /// a push, see there. An ssh command the user chose is left alone, see `sshEnvironment`.
+    public func fetch(in folder: URL, userInitiated: Bool = false) async throws {
         let result = try await GitProcess.run(
             Self.stallOptions + ["fetch", "--quiet", "--prune"], in: folder, readOnly: false,
-            environment: await sshEnvironment(batchMode: true, in: folder), lane: .network
+            environment: await sshEnvironment(batchMode: !userInitiated, in: folder), lane: .network
         )
         guard result.status == 0 else { throw GitError(command: "git fetch", output: result) }
     }
@@ -260,7 +261,8 @@ public struct GitClient: Sendable {
         guard let upstream = before.upstream else {
             throw GitError(message: "This branch has no upstream to pull from.")
         }
-        try await fetch(in: folder)
+        // Only ever asked for by the user.
+        try await fetch(in: folder, userInitiated: true)
         let after = try await summary(in: folder)
         guard after.behind > 0 else { return }
         guard after.ahead == 0 else {

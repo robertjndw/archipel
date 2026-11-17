@@ -34,7 +34,6 @@ struct PaletteCommand: Identifiable {
         let hasSelection = worktreeID != nil
         let project = model.project(ofWorktree: worktreeID)
         let session = actions.focusedSession
-        let canSync = model.canSync(worktreeID)
         let publishes = model.pushPublishes(worktreeID)
 
         let newSessions = zip(model.agentsInMenuOrder, ["⌘T", "⌥⌘T", "⇧⌘T"]).map { agent, hint in
@@ -151,14 +150,14 @@ struct PaletteCommand: Identifiable {
                 isAvailable: actions.canCommit,
                 refocusesTab: false
             ) { actions.startCommit() },
-            PaletteCommand(id: "pull", title: "Pull", symbol: "arrow.down", isAvailable: canSync) { actions.sync(.pull) },
+            PaletteCommand(id: "pull", title: "Pull", symbol: "arrow.down", isAvailable: model.canSync(.pull, worktreeID)) { actions.sync(.pull) },
             PaletteCommand(
                 id: "push",
                 title: publishes ? "Publish Branch" : "Push",
                 symbol: publishes ? "icloud.and.arrow.up" : "arrow.up",
-                isAvailable: canSync
+                isAvailable: model.canSync(.push, worktreeID)
             ) { actions.sync(.push) },
-            PaletteCommand(id: "fetch", title: "Fetch", symbol: "arrow.triangle.2.circlepath", isAvailable: canSync) { actions.sync(.fetch) },
+            PaletteCommand(id: "fetch", title: "Fetch", symbol: "arrow.triangle.2.circlepath", isAvailable: model.canSync(.fetch, worktreeID)) { actions.sync(.fetch) },
             PaletteCommand(
                 id: "open-in-editor",
                 title: model.preferredEditor.map { "Open in \($0.name)" } ?? "Open in Editor",
