@@ -28,7 +28,7 @@ struct ArchipelApp: App {
                 .environment(model)
                 .environment(palette)
                 .environment(switcher)
-                .frame(minWidth: 720, minHeight: 420)
+                .frame(minWidth: RootView.minimumWindowWidth, minHeight: 420)
                 .onAppear {
                     delegate.model = model
                     model.applyAppearance()

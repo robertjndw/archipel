@@ -21,51 +21,7 @@ struct RootView: View {
 
     var body: some View {
         @Bindable var model = model
-        NavigationSplitView(columnVisibility: columns) {
-            SidebarView(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
-                // The column width below is not enough on its own: with no saved split positions
-                // (a first launch) the sidebar came up about 160 points wide, well under its minimum.
-                .frame(minWidth: 220)
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 400)
-                .toolbar(removing: .sidebarToggle)
-                .ignoresSafeArea(.container, edges: .top)
-        } detail: {
-            // Not a bottom safeAreaInset: the panes sit in an NSSplitView that ignores it,
-            // so the terminal would extend under the status bar and hide its last row.
-            VStack(spacing: 0) {
-                WorktreeContentView(isSidebarCollapsed: isSidebarCollapsed, toggleSidebar: toggleSidebar)
-                    // The tab row replaces the title bar, so the content has to
-                    // reach the top edge of the window.
-                    .ignoresSafeArea(edges: .top)
-                StatusBar()
-            }
-        }
-        .inspector(isPresented: $showInspector) {
-            Group {
-                if model.isGitAvailable {
-                    InspectorView(
-                        root: model.selectedWorktree?.path,
-                        searchPATH: { await model.toolSearchPATH() },
-                        focusCommitMessage: $model.focusCommitMessageRequest,
-                        onOpenFile: { url, preview in model.openFile(url, preview: preview) },
-                        onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) },
-                        onSwitchBranch: {
-                            if let worktree = model.selectedWorktree { model.switchBranchWorktreeID = worktree.id }
-                        }
-                    )
-                } else {
-                    // The inspector starts git as soon as it is on screen, and without the developer
-                    // tools every git call brings up the system's install dialog.
-                    ContentUnavailableView {
-                        Label("Git Is Not Installed", systemImage: "exclamationmark.triangle")
-                    } description: {
-                        Text(AppModel.gitMissingMessage)
-                    }
-                }
-            }
-            .inspectorColumnWidth(min: 220, ideal: 280, max: 420)
-            .ignoresSafeArea(.container, edges: .top)
-        }
+        layout
         .overlay { CommandPalette() }
         .overlay { TabSwitcher() }
         .background {
@@ -125,8 +81,93 @@ struct RootView: View {
         .tint(model.selectedIsland?.tint.color)
     }
 
+    /// The sidebar and the content with the inspector next to them.
+    ///
+    /// Before macOS 27.2 the inspector is a plain pane of a fixed width. A system inspector beside
+    /// a NavigationSplitView sends AppKit into an endless round of constraint updates there, and
+    /// the app goes down with "more Update Constraints in Window passes than there are views in the
+    /// window" once a worktree is on screen. 27.0.1 does it and 27.2.1 does not; 27.1 was never
+    /// tried, so it gets the pane too.
+    @ViewBuilder
+    private var layout: some View {
+        if #available(macOS 27.2, *) {
+            columns
+                .inspector(isPresented: $showInspector) {
+                    inspector
+                        .inspectorColumnWidth(min: 220, ideal: RootView.inspectorWidth, max: 420)
+                        .ignoresSafeArea(.container, edges: .top)
+                }
+        } else {
+            HStack(spacing: 0) {
+                columns
+                if showInspector {
+                    Divider()
+                        .ignoresSafeArea(.container, edges: .top)
+                    inspector
+                        .frame(width: RootView.inspectorWidth)
+                        .ignoresSafeArea(.container, edges: .top)
+                }
+            }
+        }
+    }
+
+    static let inspectorWidth: CGFloat = 280
+
+    /// Room for the sidebar, one pane and the inspector at their narrowest. The pane that stands in
+    /// for the inspector before macOS 27.2 cannot shrink, so the window has to stay wider there.
+    static var minimumWindowWidth: CGFloat {
+        if #available(macOS 27.2, *) { 720 } else { 780 }
+    }
+
+    private var columns: some View {
+        NavigationSplitView(columnVisibility: columnVisibility) {
+            SidebarView(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
+                // The column width below is not enough on its own: with no saved split positions
+                // (a first launch) the sidebar came up about 160 points wide, well under its minimum.
+                .frame(minWidth: 220)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 400)
+                .toolbar(removing: .sidebarToggle)
+                .ignoresSafeArea(.container, edges: .top)
+        } detail: {
+            // Not a bottom safeAreaInset: the panes sit in an NSSplitView that ignores it,
+            // so the terminal would extend under the status bar and hide its last row.
+            VStack(spacing: 0) {
+                WorktreeContentView(isSidebarCollapsed: isSidebarCollapsed, toggleSidebar: toggleSidebar)
+                    // The tab row replaces the title bar, so the content has to
+                    // reach the top edge of the window.
+                    .ignoresSafeArea(edges: .top)
+                StatusBar()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var inspector: some View {
+        @Bindable var model = model
+        if model.isGitAvailable {
+            InspectorView(
+                root: model.selectedWorktree?.path,
+                searchPATH: { await model.toolSearchPATH() },
+                focusCommitMessage: $model.focusCommitMessageRequest,
+                onOpenFile: { url, preview in model.openFile(url, preview: preview) },
+                onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) },
+                onSwitchBranch: {
+                    if let worktree = model.selectedWorktree { model.switchBranchWorktreeID = worktree.id }
+                }
+            )
+        } else {
+            // The inspector starts git as soon as it is on screen, and without the developer
+            // tools every git call brings up the system's install dialog.
+            ContentUnavailableView {
+                Label("Git Is Not Installed", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(AppModel.gitMissingMessage)
+            }
+        }
+    }
+
     /// Stored as a flag, like the inspector's, so the sidebar comes back the way it was left.
-    private var columns: Binding<NavigationSplitViewVisibility> {
+    private var columnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
             get: { isSidebarCollapsed ? .detailOnly : .all },
             set: { isSidebarCollapsed = $0 == .detailOnly }
