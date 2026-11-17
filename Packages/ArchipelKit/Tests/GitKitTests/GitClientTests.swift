@@ -201,23 +201,26 @@ final class GitClientTests {
         // What an ssh ControlPersist master does: outlive the command while holding its stdout and stderr.
         let clock = ContinuousClock()
         let start = clock.now
-        let result = try await GitProcess.run(URL(filePath: "/bin/sh"), ["-c", "sleep 20 & echo done; echo warned >&2"], in: repo, environment: [:])
+        let result = try await GitProcess.run(URL(filePath: "/bin/sh"), ["-c", "sleep 120 & echo done; echo warned >&2"], in: repo, environment: [:])
         #expect(result.status == 0)
         #expect(result.stdout == "done\n")
         #expect(result.stderr == "warned\n")
-        #expect(clock.now - start < .seconds(5))
+        // Only has to tell "returned" from "waited for the straggler". The call itself takes about
+        // a second, but on a CI runner it has queued for ten behind the other tests' processes.
+        #expect(clock.now - start < .seconds(60))
     }
 
     @Test func cancellingStopsANetworkProcessButNotALocalOne() async throws {
         let clock = ContinuousClock()
         let start = clock.now
         let network = Task { [repo] in
-            try await GitProcess.run(URL(filePath: "/bin/sh"), ["-c", "exec sleep 20"], in: repo, environment: [:], lane: .network)
+            try await GitProcess.run(URL(filePath: "/bin/sh"), ["-c", "exec sleep 120"], in: repo, environment: [:], lane: .network)
         }
         try await Task.sleep(for: .milliseconds(300))
         network.cancel()
         await #expect(throws: CancellationError.self) { _ = try await network.value }
-        #expect(clock.now - start < .seconds(5))
+        // Far from both ends for the same reason as above: a busy runner took fifteen seconds here.
+        #expect(clock.now - start < .seconds(60))
 
         let local = Task { [repo] in
             try await GitProcess.run(URL(filePath: "/bin/sh"), ["-c", "sleep 0.5; echo finished"], in: repo, environment: [:])
