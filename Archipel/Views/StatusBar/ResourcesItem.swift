@@ -232,6 +232,7 @@ private struct ResourcesPopover: View {
                 Text(entry.session.displayTitle)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                BackgroundTaskBadge(count: model.activity(for: entry.id).backgroundTasks)
                 SubagentBadge(count: model.activity(for: entry.id).subagents.count)
             }
         } metrics: {

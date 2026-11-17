@@ -74,6 +74,9 @@ func slimmed(_ payload: Any, rawSize: Int) -> Any {
             slim[key] = value
         }
     }
+    // Not a string, so the loop above skips it. Each entry is capped by Claude, and without the
+    // list the app could not tell that the agent left something running.
+    if let tasks = object["background_tasks"] as? [Any] { slim["background_tasks"] = tasks }
     return slim
 }
 

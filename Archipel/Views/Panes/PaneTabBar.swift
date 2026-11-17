@@ -281,6 +281,7 @@ private struct TabButtonContent: View, Equatable {
                 DevServerPill(links: label.devServers)
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
+            BackgroundTaskBadge(count: label.activity?.backgroundTasks ?? 0)
             SubagentBadge(count: label.activity?.subagents.count ?? 0)
             // The close button takes the status glyph's place on hover, so
             // tabs do not change width under the pointer.
@@ -309,6 +310,7 @@ private struct TabButtonContent: View, Equatable {
         }
         .animation(.snappy(duration: 0.25), value: label.devServers)
         .animation(.snappy(duration: 0.25), value: label.activity?.subagents.count)
+        .animation(.snappy(duration: 0.25), value: label.activity?.backgroundTasks)
         // The same curve the sidebar row uses for this change, so a session's two glyphs move together.
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.status)
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.unread)

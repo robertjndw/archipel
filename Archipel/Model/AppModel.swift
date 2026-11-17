@@ -1165,13 +1165,20 @@ final class AppModel {
         }
     }
 
-    /// Stopping a session that is working or waiting on an answer throws that turn away, so those
-    /// ask first. Nil for idle, finished and exited sessions, which have nothing in flight.
+    /// Stopping a session that is working or waiting on an answer throws that turn away, and one
+    /// with background tasks takes those down with it, so those ask first. Nil for idle, finished
+    /// and exited sessions, which have nothing in flight.
     private func interruption(of id: Session.ID, by action: SessionInterruption.Action) -> SessionInterruption? {
         guard let session = workspace.session(id: id), let activity = activities[id],
-              activity.isBusy || activity.needsUser
+              activity.hasWorkInFlight
         else { return nil }
-        let state = activity.needsUser ? "waiting for you" : "working"
+        let state = if activity.needsUser {
+            "waiting for you"
+        } else if activity.isBusy {
+            "working"
+        } else {
+            activity.backgroundTasks == 1 ? "running a background task" : "running background tasks"
+        }
         // A script or a shell has no conversation to lose or to come back to.
         let isAgent = scriptSessions[id] == nil && session.agent.definition.acceptsPrompts
         let title: String

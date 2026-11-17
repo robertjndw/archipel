@@ -316,6 +316,7 @@ struct SidebarSessionRow: View {
                 Spacer(minLength: 4)
                 // A session that was never started has nothing to report; a glyph on every such
                 // line would only be noise.
+                BackgroundTaskBadge(count: content.activity.backgroundTasks)
                 SubagentBadge(count: content.activity.subagents.count)
                 if content.activity.status != .notStarted {
                     StatusGlyph(activity: content.activity)
@@ -325,6 +326,7 @@ struct SidebarSessionRow: View {
             }
             .frame(height: density.sessionRowHeight)
             .animation(.snappy(duration: 0.25), value: content.activity.subagents.count)
+            .animation(.snappy(duration: 0.25), value: content.activity.backgroundTasks)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)

@@ -35,7 +35,9 @@ public enum AgentEvent: Equatable, Sendable {
     /// Tool use or other proof that the agent is busy.
     case activity
     case attentionRequested(AttentionReason, message: String?)
-    case turnFinished(message: String?)
+    /// `backgroundTasks` is how many shells, monitors and the like the agent left running, or nil
+    /// when the agent does not say. Subagents are not among them: they report themselves.
+    case turnFinished(message: String?, backgroundTasks: Int? = nil)
     /// OSC 9 / OSC 777 desktop notification from the terminal.
     case terminalNotification(title: String, body: String)
     case bell

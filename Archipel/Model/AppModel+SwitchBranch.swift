@@ -41,6 +41,6 @@ extension AppModel {
     /// is waiting for an answer. The sheets warn about these since a switch changes files under
     /// them and a removal stops them.
     func busySessionCount(in id: Worktree.ID) -> Int {
-        workspace.worktree(id: id)?.sessions.count { activity(for: $0.id).isBusy || activity(for: $0.id).needsUser } ?? 0
+        workspace.worktree(id: id)?.sessions.count { activity(for: $0.id).hasWorkInFlight } ?? 0
     }
 }

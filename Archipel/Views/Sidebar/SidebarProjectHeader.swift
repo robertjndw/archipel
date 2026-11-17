@@ -48,7 +48,7 @@ struct SidebarProjectHeader: View {
 
     private var removalMessage: String {
         let sessions = project.worktrees.flatMap(\.sessions)
-        let working = sessions.count { model.activity(for: $0.id).isBusy || model.activity(for: $0.id).needsUser }
+        let working = sessions.count { model.activity(for: $0.id).hasWorkInFlight }
         let closing = switch working {
         case 0: sessions.isEmpty ? "" : " and its sessions are closed"
         case 1: " and its sessions are closed, including an agent that is still running"

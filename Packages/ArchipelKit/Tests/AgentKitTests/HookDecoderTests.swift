@@ -39,7 +39,7 @@ struct HookDecoderTests {
         (Fixtures.notification("elicitation_dialog"), .attentionRequested(.question, message: "Claude needs your permission")),
         (Fixtures.notification("elicitation_url_dialog"), .attentionRequested(.question, message: "Claude needs your permission")),
         (Fixtures.notification("agent_needs_input"), .attentionRequested(.question, message: "Claude needs your permission")),
-        (Fixtures.stop, .turnFinished(message: "I've completed the refactoring.")),
+        (Fixtures.stop, .turnFinished(message: "I've completed the refactoring.", backgroundTasks: 0)),
         (Fixtures.stopFailure, .turnFinished(message: "API Error: Rate limit reached")),
     ])
     func claudeEvents(json: String, expected: AgentEvent) {
@@ -64,6 +64,17 @@ struct HookDecoderTests {
     @Test func stopWithoutMessage() {
         let result = claude(#"{"session_id": "abc", "hook_event_name": "Stop"}"#)
         #expect(result.event == .turnFinished(message: nil))
+    }
+
+    @Test func stopCountsBackgroundTasksExceptSubagents() {
+        let result = claude(#"""
+        {"session_id": "abc", "hook_event_name": "Stop", "background_tasks": [
+            {"id": "b1", "type": "shell", "status": "running", "description": "build", "command": "make"},
+            {"id": "m1", "type": "monitor", "status": "running", "description": "ci"},
+            {"id": "a1", "type": "subagent", "status": "running", "description": "explore", "agent_type": "Explore"}
+        ]}
+        """#)
+        #expect(result.event == .turnFinished(message: nil, backgroundTasks: 2))
     }
 
     @Test(arguments: [
