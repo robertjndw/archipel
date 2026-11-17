@@ -310,19 +310,46 @@ public struct GitClient: Sendable {
         // An unstaged addition is an intent-to-add entry (`git add -N`). Its index entry is empty, so
         // `restore --worktree` would "restore" the file to zero bytes and report success. The only
         // copy is the one on disk, exactly as for an untracked file.
-        let unversioned = changes.filter { $0.kind == .untracked || $0.kind == .added }
+        //
+        // An unstaged rename or copy is one too: the working tree only has a name the index lacks
+        // after `git add -N`, which status then pairs with a file that went missing or changed.
+        let unversionedKinds: [GitChangeKind] = [.untracked, .added, .renamed, .copied]
+        let unversioned = changes.filter { unversionedKinds.contains($0.kind) }
         // Index first: if the entry outlived a trashed file it would read as a deletion, and
         // discarding that restores the empty file after all. Failing here leaves everything in place.
-        let intended = unversioned.filter { $0.kind == .added }.map(\.path)
+        var intended = unversioned.filter { $0.kind != .untracked }.map(\.path)
+        // An intent-to-add file that was then deleted reads as a plain deletion. Restoring it would
+        // bring back a file that never had content in git, empty. Dropping the entry is all there is to undo.
+        let abandoned = try await intentToAddEntries(among: changes.filter { $0.kind == .deleted }.map(\.path), top: top)
+        intended += abandoned
         if !intended.isEmpty {
             try await unstage(intended, in: folder)
         }
         for change in unversioned {
             try trash(top.appending(path: change.path))
         }
-        let tracked = changes.filter { $0.kind != .untracked && $0.kind != .added }.map(\.path)
+        // A rename also took the old name away, which is tracked and comes back like any deletion.
+        let tracked: [String] = changes.compactMap { change in
+            switch change.kind {
+            case .untracked, .added, .copied: return nil
+            case .renamed: return change.originalPath
+            default: return abandoned.contains(change.path) ? nil : change.path
+            }
+        }
         guard !tracked.isEmpty else { return }
         try await run(["restore", "--worktree", "--"] + pathspecs(tracked), in: folder, readOnly: false)
+    }
+
+    /// Which of these paths the index holds only as an intent to add (`git add -N`). Status does
+    /// not say: it reports such an entry with the mode and the empty blob of a real one. What gives
+    /// it away is that HEAD has no such file and the index has no addition staged for it.
+    private func intentToAddEntries(among paths: [String], top: URL) async throws -> Set<String> {
+        guard !paths.isEmpty else { return [] }
+        // Fails on a branch without commits, where nothing is in HEAD.
+        let committed = (try? await run(["ls-tree", "-r", "-z", "--name-only", "HEAD", "--"] + paths, in: top)) ?? ""
+        let staged = try await run(["diff", "--cached", "--name-only", "-z", "--diff-filter=A", "--"] + pathspecs(paths), in: top)
+        let known = Set((committed + staged).split(separator: "\0").map(String.init))
+        return Set(paths).subtracting(known)
     }
 
     /// Resets staged entries to HEAD in both index and working tree. Files HEAD has never seen
@@ -373,8 +400,45 @@ public struct GitClient: Sendable {
         }
         // --no-index takes real file paths, not pathspecs, and exits 1 whenever the files differ.
         let top = try await topLevel(of: folder)
+        if let link = untrackedLinkDiff(path, in: top) { return link }
         try refuseFolder(path, in: top)
         return try await run(base + ["--no-index", "--", "/dev/null", path], in: top, acceptedExitCodes: [0, 1])
+    }
+
+    /// The diff of an untracked symlink, written the way git shows a tracked one: a new file whose
+    /// only line is where the link points. `diff --no-index` cannot be asked, because it follows
+    /// the link. For one that leads to a folder it then fails with exit code 1, the code it also
+    /// uses for "the files differ", and the link reads as having no changes.
+    private func untrackedLinkDiff(_ path: String, in top: URL) -> String? {
+        guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: top.appending(path: path).path) else { return nil }
+        return """
+            diff --git \(Self.quotedForDiffHeader("a/" + path)) \(Self.quotedForDiffHeader("b/" + path))
+            new file mode 120000
+            --- /dev/null
+            +++ \(Self.quotedForDiffHeader("b/" + path))
+            @@ -0,0 +1 @@
+            +\(target)
+            \\ No newline at end of file
+
+            """
+    }
+
+    /// git puts a path in quotes when it holds something a diff header cannot carry as it is.
+    private static func quotedForDiffHeader(_ path: String) -> String {
+        guard path.unicodeScalars.contains(where: { $0.value < 0x20 || $0 == "\"" || $0 == "\\" || $0.value == 0x7F }) else { return path }
+        var quoted = "\""
+        for scalar in path.unicodeScalars {
+            switch scalar {
+            case "\"": quoted += "\\\""
+            case "\\": quoted += "\\\\"
+            case "\n": quoted += "\\n"
+            case "\t": quoted += "\\t"
+            case _ where scalar.value < 0x20 || scalar.value == 0x7F:
+                quoted += "\\" + String(scalar.value, radix: 8).leftPadded(to: 3)
+            default: quoted.unicodeScalars.append(scalar)
+            }
+        }
+        return quoted + "\""
     }
 
     /// Status lists every untracked file on its own, so the one folder it can report is a repository
@@ -413,9 +477,10 @@ public struct GitClient: Sendable {
     }
 
     /// For a change that came from `status(in:)`, which has already settled whether it is a rename,
-    /// so no staged diff needs to detect that again.
+    /// so no staged diff needs to detect that again. A copy has an origin too, but its source is
+    /// a file of its own that must stay out of the pathspec.
     public func fileDiff(for change: GitFileChange, staged: Bool, contextLines: Int? = nil, in folder: URL) async throws -> GitFileDiff? {
-        try await fileDiff(path: change.path, staged: staged, contextLines: contextLines, origin: .known(change.originalPath), in: folder)
+        try await fileDiff(path: change.path, staged: staged, contextLines: contextLines, origin: .known(change.kind == .renamed ? change.originalPath : nil), in: folder)
     }
 
     private enum RenameOrigin {
@@ -443,11 +508,17 @@ public struct GitClient: Sendable {
             output = try await run(base + ["--"] + pathspecs([path]), in: folder)
         } else {
             let topURL = try await topLevel(of: folder)
-            guard FileManager.default.fileExists(atPath: topURL.appending(path: path).path) else { return nil }
-            try refuseFolder(path, in: topURL)
-            output = try await run(base + ["--no-index", "--", "/dev/null", path], in: topURL, acceptedExitCodes: [0, 1])
+            if let link = untrackedLinkDiff(path, in: topURL) {
+                output = link
+            } else {
+                guard FileManager.default.fileExists(atPath: topURL.appending(path: path).path) else { return nil }
+                try refuseFolder(path, in: topURL)
+                output = try await run(base + ["--no-index", "--", "/dev/null", path], in: topURL, acceptedExitCodes: [0, 1])
+            }
         }
-        return GitParser.fileDiffs(output).first
+        let diffs = GitParser.fileDiffs(output)
+        // A staged rename is one diff. Asking by name guards against a second pathspec bringing its own along.
+        return diffs.first { $0.newPath == path } ?? diffs.first
     }
 
     /// Large enough that any text file fits in a single hunk.
@@ -763,5 +834,11 @@ final class ProcessLimiter: Sendable {
             return state.waiters.removeFirst()
         }
         next?.resume()
+    }
+}
+
+private extension String {
+    func leftPadded(to length: Int) -> String {
+        String(repeating: "0", count: max(0, length - count)) + self
     }
 }

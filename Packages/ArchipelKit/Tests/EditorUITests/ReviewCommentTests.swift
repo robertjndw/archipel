@@ -137,6 +137,63 @@ struct ReviewCommentPersistenceTests {
         #expect(ReviewCommentStore(fileURL: file).comments(in: root).count == 1)
     }
 
+    @Test func awkwardTextSurvivesTheRoundTrip() {
+        defer { cleanUp() }
+        let store = ReviewCommentStore(fileURL: file)
+        let tricky = comment(
+            "Sources/My Folder/naïve \"quoted\".swift", 1, side: .old, staged: true,
+            code: "\tlet s = \"a\\nb\" // 🙂\r", "Line one\r\nline two with `code` and </script>\n\n"
+        )
+        store.add(tricky, in: URL(filePath: "/Users/me/Projects/With Space/wt"))
+        store.saveNow()
+        #expect(ReviewCommentStore(fileURL: file).comments(in: URL(filePath: "/Users/me/Projects/With Space/wt/")) == [tricky])
+    }
+
+    @Test func retainingEveryWorktreeWritesNothing() throws {
+        defer { cleanUp() }
+        let store = ReviewCommentStore(fileURL: file)
+        store.add(comment("a.swift", 1), in: root)
+        store.saveNow()
+        try FileManager.default.removeItem(at: file)
+
+        // Runs on every workspace change; with nothing to drop it must not touch the file.
+        store.retain(only: [root, other])
+        store.saveNow()
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(store.comments(in: root).count == 1)
+    }
+
+    @Test func savingWithoutChangesWritesNothing() throws {
+        defer { cleanUp() }
+        let store = ReviewCommentStore(fileURL: file)
+        store.add(comment("a.swift", 1), in: root)
+        store.saveNow()
+        try FileManager.default.removeItem(at: file)
+
+        // Removing an unknown id and re-adding an identical comment are no changes either.
+        store.remove(UUID(), in: root)
+        store.removeAll(in: other)
+        store.saveNow()
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func aFileWithEmptyWorktreesLoadsWithoutThem() throws {
+        defer { cleanUp() }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let kept = comment("a.swift", 1)
+        let encoder = JSONEncoder()
+        let json = """
+        {"version": 1, "commentsByRoot": {"/repo/empty": [], "/repo/worktree": [\(String(decoding: try encoder.encode(kept), as: UTF8.self))]}}
+        """
+        try Data(json.utf8).write(to: file)
+
+        let store = ReviewCommentStore(fileURL: file)
+        #expect(store.comments(in: root) == [kept])
+        #expect(store.comments(in: URL(filePath: "/repo/empty")).isEmpty)
+        store.retain(only: [root])
+        #expect(store.comments(in: root) == [kept])
+    }
+
     @Test func withoutAFileNothingIsWritten() {
         let store = ReviewCommentStore()
         store.add(comment("a.swift", 1), in: root)

@@ -25,6 +25,7 @@ extension AppModel {
     }
 
     func openProjectSettings(_ id: Project.ID, showingScripts: Bool = false) {
+        guard readyForSheet() else { return }
         projectSettingsShowsScripts = showingScripts
         projectSettingsID = id
     }

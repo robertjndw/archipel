@@ -62,7 +62,11 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     func requestAuthorizationIfNeeded() {
         guard !hasRequestedAuthorization else { return }
         hasRequestedAuthorization = true
+        // The system's permission dialog would come up on the machine running the UI tests, and
+        // its answer would stick to the test build.
+        #if !UITESTS
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        #endif
     }
 
     private static var categories: Set<UNNotificationCategory> {
@@ -107,6 +111,9 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         status: SessionStatus,
         category: Category?
     ) {
+        // Not every session that notifies is an agent's: a setup script or dev server that exits
+        // gets here without the question ever having been asked.
+        requestAuthorizationIfNeeded()
         let token = UUID().uuidString
         tokens[sessionID] = token
         delivered.insert(sessionID)
@@ -130,6 +137,7 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// The one notification that stands in for everything held back while the user was busy.
     /// Tapping it opens `sessionID`.
     func postSummary(title: String, body: String, sessionID: Session.ID, playsSound: Bool) {
+        requestAuthorizationIfNeeded()
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body

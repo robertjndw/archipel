@@ -191,9 +191,12 @@ open -n --env ARCHIPEL_SUPPORT_DIR=/tmp/archipel-dev path/to/Archipel.app
   share) and the `archipel-hook` helper that
   agents call. Run `swift test` here. `editor-demo` opens an editor or diff
   in a window of its own.
+- `ArchipelUITests/` - end-to-end tests that drive the real app against a
+  throwaway workspace and fixture git repositories. Run them with
+  `./scripts/ui-tests.sh`; see [CONTRIBUTING.md](CONTRIBUTING.md#ui-tests).
 - `Packages/TerminalKit` - the only code that talks to Ghostty. Includes
   `terminal-demo`, a one-window harness for testing a surface in isolation.
-- `scripts/` - `build-ghostty.sh`, `install.sh`, and `build-dmg.sh`,
+- `scripts/` - `build-ghostty.sh`, `install.sh`, `ui-tests.sh`, and `build-dmg.sh`,
   `notarize.sh` and `build-appcast.py`, which the release workflows use.
   Releases and in-app updates (beta and stable channels) are described in
   [docs/releasing.md](docs/releasing.md).

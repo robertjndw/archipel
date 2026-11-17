@@ -18,6 +18,7 @@
 		AA0000000000000000000109 /* EditorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000206 /* EditorUI */; };
 		AA000000000000000000010A /* TerminalKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000203 /* TerminalKit */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AA000000000000000000010B /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000207 /* Sparkle */; };
+		AA000000000000000000010C /* ArchipelCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000208 /* ArchipelCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -27,6 +28,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = AA0000000000000000000502;
 			remoteInfo = "archipel-hook";
+		};
+		AA0000000000000000000402 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000501;
+			remoteInfo = Archipel;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -61,6 +69,7 @@
 		AA0000000000000000000303 /* ghostty */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ghostty; path = "Vendor/ghostty-resources/ghostty"; sourceTree = "<group>"; };
 		AA0000000000000000000304 /* terminfo */ = {isa = PBXFileReference; lastKnownFileType = folder; name = terminfo; path = "Vendor/ghostty-resources/terminfo"; sourceTree = "<group>"; };
 		AA0000000000000000000305 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Signing.xcconfig; path = Configs/Signing.xcconfig; sourceTree = "<group>"; };
+		AA0000000000000000000306 /* ArchipelUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArchipelUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -88,6 +97,11 @@
 			path = "Packages/ArchipelKit/Sources/archipel-hook";
 			sourceTree = "<group>";
 		};
+		AA0000000000000000000703 /* ArchipelUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ArchipelUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -112,6 +126,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA0000000000000000000803 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000000000000000000010C /* ArchipelCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -121,6 +143,7 @@
 				AA0000000000000000000305 /* Signing.xcconfig */,
 				AA0000000000000000000701 /* Archipel */,
 				AA0000000000000000000702 /* archipel-hook */,
+				AA0000000000000000000703 /* ArchipelUITests */,
 				AA0000000000000000000903 /* Ghostty Resources */,
 				AA0000000000000000000902 /* Products */,
 			);
@@ -131,6 +154,7 @@
 			children = (
 				AA0000000000000000000301 /* Archipel.app */,
 				AA0000000000000000000302 /* archipel-hook */,
+				AA0000000000000000000306 /* ArchipelUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -198,6 +222,29 @@
 			productReference = AA0000000000000000000302 /* archipel-hook */;
 			productType = "com.apple.product-type.tool";
 		};
+		AA0000000000000000000503 /* ArchipelUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000A04 /* Build configuration list for PBXNativeTarget "ArchipelUITests" */;
+			buildPhases = (
+				AA0000000000000000000B03 /* Sources */,
+				AA0000000000000000000803 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0000000000000000000D02 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA0000000000000000000703 /* ArchipelUITests */,
+			);
+			name = ArchipelUITests;
+			packageProductDependencies = (
+				AA0000000000000000000208 /* ArchipelCore */,
+			);
+			productName = ArchipelUITests;
+			productReference = AA0000000000000000000306 /* ArchipelUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -229,6 +276,7 @@
 			targets = (
 				AA0000000000000000000501 /* Archipel */,
 				AA0000000000000000000502 /* archipel-hook */,
+				AA0000000000000000000503 /* ArchipelUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -260,6 +308,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA0000000000000000000B03 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -267,6 +322,11 @@
 			isa = PBXTargetDependency;
 			target = AA0000000000000000000502 /* archipel-hook */;
 			targetProxy = AA0000000000000000000401 /* PBXContainerItemProxy */;
+		};
+		AA0000000000000000000D02 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000000000000000000501 /* Archipel */;
+			targetProxy = AA0000000000000000000402 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -387,6 +447,108 @@
 			};
 			name = Release;
 		};
+		AA0000000000000000000F07 /* UITests */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA0000000000000000000305 /* Signing.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG UITESTS $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = UITests;
+		};
+		AA0000000000000000000F08 /* UITests */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = Archipel;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Archipel/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Archipel UI Tests";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(ARCHIPEL_BUNDLE_ID).uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = UITests;
+		};
+		AA0000000000000000000F09 /* UITests */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_HARDENED_RUNTIME = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(ARCHIPEL_BUNDLE_ID).hook";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = UITests;
+		};
+		AA0000000000000000000F0A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Configs/ArchipelUITests.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(ARCHIPEL_BUNDLE_ID).uitests.runner";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_TARGET_NAME = Archipel;
+			};
+			name = Debug;
+		};
+		AA0000000000000000000F0B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Configs/ArchipelUITests.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(ARCHIPEL_BUNDLE_ID).uitests.runner";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_TARGET_NAME = Archipel;
+			};
+			name = Release;
+		};
+		AA0000000000000000000F0C /* UITests */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Configs/ArchipelUITests.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(ARCHIPEL_BUNDLE_ID).uitests.runner";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_TARGET_NAME = Archipel;
+			};
+			name = UITests;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -395,6 +557,7 @@
 			buildConfigurations = (
 				AA0000000000000000000F01 /* Debug */,
 				AA0000000000000000000F02 /* Release */,
+				AA0000000000000000000F07 /* UITests */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -404,6 +567,7 @@
 			buildConfigurations = (
 				AA0000000000000000000F03 /* Debug */,
 				AA0000000000000000000F04 /* Release */,
+				AA0000000000000000000F08 /* UITests */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -413,6 +577,17 @@
 			buildConfigurations = (
 				AA0000000000000000000F05 /* Debug */,
 				AA0000000000000000000F06 /* Release */,
+				AA0000000000000000000F09 /* UITests */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000000A04 /* Build configuration list for PBXNativeTarget "ArchipelUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000F0A /* Debug */,
+				AA0000000000000000000F0B /* Release */,
+				AA0000000000000000000F0C /* UITests */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -470,6 +645,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA0000000000000000000E03 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		AA0000000000000000000208 /* ArchipelCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ArchipelCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

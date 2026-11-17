@@ -18,7 +18,13 @@ struct PaletteCommand: Identifiable {
     /// others open a sheet or another window), which the palette's usual hand-back to the focused tab
     /// would undo.
     var refocusesTab = true
+    /// Words the command is also found by but does not show, such as the name it used to have.
+    var alias: String? = nil
     let perform: @MainActor () -> Void
+
+    /// What a query is matched against. The alias comes last, so the positions of a title match
+    /// are positions in the title.
+    var searchKey: String { alias.map { title + " " + $0 } ?? title }
 
     /// The palette shows these in this order when the query is empty. They do what the menu items of
     /// the same name do, through the same `AppActions`.
@@ -60,7 +66,9 @@ struct PaletteCommand: Identifiable {
                 id: "toggle-inspector",
                 title: actions.isInspectorShown ? "Hide Inspector" : "Show Inspector",
                 symbol: "sidebar.trailing",
-                shortcutHint: "⌥⌘0"
+                shortcutHint: "⌥⌘0",
+                // The title names what it will do now; people still look for it by what it is.
+                alias: "Toggle Inspector"
             ) { actions.toggleInspector() },
             PaletteCommand(id: "show-files", title: "Show Files", symbol: "folder", shortcutHint: "⌥⌘1") { actions.revealInspector(.files) },
             PaletteCommand(id: "show-changes", title: "Show Changes", symbol: "plus.forwardslash.minus", shortcutHint: "⌥⌘2") {
@@ -362,7 +370,7 @@ final class CommandPaletteModel {
     }
 
     private func commandRows(matching text: String, limit: Int) -> [PaletteRow] {
-        FuzzyMatcher.rank(commands, query: text, limit: limit, key: \.title).map { command, match in
+        FuzzyMatcher.rank(commands, query: text, limit: limit, key: \.searchKey).map { command, match in
             row(for: command, matches: match)
         }
     }
@@ -388,7 +396,7 @@ final class CommandPaletteModel {
         // The subtitle rides along at the end of the key, so it matches too, but the title's start and boundary
         // bonuses make a title hit outrank a context-only hit.
         let ranked = FuzzyMatcher.rank(destinations, query: text, limit: Self.destinationLimit) { $0.title + " " + $0.subtitle }
-        let rankedCommands = FuzzyMatcher.rank(commands, query: text, limit: 20, key: \.title)
+        let rankedCommands = FuzzyMatcher.rank(commands, query: text, limit: 20, key: \.searchKey)
 
         var merged: [(score: Int, row: PaletteRow)] = []
         for (entry, match) in ranked { merged.append((match.score, row(for: entry, matches: match, app: app))) }
@@ -404,7 +412,8 @@ final class CommandPaletteModel {
             id: "command:\(command.id)",
             symbol: command.symbol,
             title: command.title,
-            titleMatches: Set(match?.positions ?? []),
+            // A hit in the alias has nothing in the title to highlight.
+            titleMatches: Set((match?.positions ?? []).filter { $0 < command.title.count }),
             subtitle: nil,
             subtitleMatches: [],
             activity: nil,

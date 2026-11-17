@@ -25,6 +25,7 @@ struct SidebarProjectHeader: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .accessibilityIdentifier("sidebar.project")
             Spacer(minLength: 4)
             trailing(summary: summary)
         }

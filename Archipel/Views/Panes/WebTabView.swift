@@ -23,7 +23,8 @@ struct WebTabView: View {
             // The model opens the page when the tab comes on screen, so this is not normally seen.
             // Should a tab get here without one, it is opened after this update instead of during it.
             Color.clear
-                .task(id: url) { model.webPages.open(tabID, url: url) }
+                // The tab is part of the id: two tabs on the same address can follow one another here.
+                .task(id: "\(tabID)|\(url)") { model.webPages.open(tabID, url: url) }
         }
     }
 }

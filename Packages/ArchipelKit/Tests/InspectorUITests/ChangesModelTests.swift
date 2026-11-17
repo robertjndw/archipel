@@ -1,4 +1,5 @@
 import Foundation
+import GitKit
 import Testing
 @testable import InspectorUI
 
@@ -14,6 +15,8 @@ final class ChangesModelTests {
         try git("config", "user.name", "InspectorUI Tests")
         try git("config", "user.email", "tests@example.invalid")
         try git("config", "commit.gpgsign", "false")
+        // The default, spelled out so a global core.hooksPath cannot run the user's own hooks here.
+        try git("config", "core.hooksPath", ".git/hooks")
         try write("a.txt", "a\n")
         try write("b.txt", "b\n")
         try git("add", "-A")
@@ -89,6 +92,115 @@ final class ChangesModelTests {
         try await idle(committing)
         #expect(successor.message == "next, and more")
         successor.message = ""
+    }
+
+    @Test func discardAllTouchesOnlyWhatTheDialogListed() async throws {
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        // What the dialog was raised with.
+        let confirmed = model.status.unstaged
+        #expect(confirmed.map(\.path) == ["a.txt", "b.txt"])
+
+        // The poll keeps running behind the dialog: b.txt is deleted outright and a new file shows up.
+        try FileManager.default.removeItem(at: repo.appending(path: "b.txt"))
+        try write("c.txt", "new\n")
+        await model.refresh()
+
+        model.discardAll(confirmed)
+        try await until { model.status.unstaged.allSatisfy { $0.path != "a.txt" } }
+
+        #expect(model.actionError == nil)
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "a\n")
+        // Agreed to as a modification, now a deletion: restoring it was never asked for.
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "b.txt").path))
+        #expect(try String(contentsOf: repo.appending(path: "c.txt"), encoding: .utf8) == "new\n")
+        #expect(model.status.unstaged.map(\.path) == ["b.txt", "c.txt"])
+    }
+
+    @Test func commitAllStagesEverythingWhenNothingIsStaged() async throws {
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        model.message = "everything"
+        #expect(model.commitControl.mode == .commitAll)
+        model.commit()
+        try await idle(model)
+
+        #expect(model.actionError == nil)
+        #expect(try git("show", "--name-only", "--format=%s", "HEAD") == "everything\n\na.txt\nb.txt")
+        #expect(model.status.staged.isEmpty && model.status.unstaged.isEmpty)
+        #expect(model.commitCompletions == 1)
+    }
+
+    @Test func aFailedCommitAllSaysTheFilesWereLeftStaged() async throws {
+        try installHook("#!/bin/sh\necho 'lint failed' >&2\nexit 1\n")
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        model.message = "rejected"
+        model.commit()
+        try await idle(model)
+
+        let error = try #require(model.actionError)
+        #expect(error.hasPrefix("All changes were staged, but the commit failed. They remain staged."))
+        #expect(error.contains("lint failed"))
+        #expect(model.status.staged.map(\.path) == ["a.txt", "b.txt"])
+        #expect(try git("log", "--format=%s") == "first")
+        // The draft stays for the next attempt, and no checkmark is shown.
+        #expect(model.message == "rejected")
+        #expect(model.commitCompletions == 0)
+        model.message = ""
+    }
+
+    @Test func aMergeConflictBlocksTheCommit() async throws {
+        try git("commit", "-q", "-am", "ours")
+        try git("checkout", "-q", "-b", "other", "HEAD~1")
+        try write("a.txt", "theirs\n")
+        try git("commit", "-q", "-am", "theirs")
+        try git("checkout", "-q", "main")
+        try git("merge", "-q", "other")
+
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        #expect(model.status.unstaged.contains { $0.path == "a.txt" && $0.kind == .conflicted })
+        model.message = "merge with markers"
+        #expect(model.commitControl.hasConflicts)
+        #expect(!model.commitControl.isEnabled)
+
+        model.commit()
+        #expect(model.activity == nil)
+        #expect(try git("rev-parse", "-q", "--verify", "MERGE_HEAD").isEmpty == false)
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8).contains("<<<<<<<"))
+        model.message = ""
+    }
+
+    @Test func unstagingARenameUnstagesBothNames() async throws {
+        try git("checkout", "-q", "--", ".")
+        try git("mv", "a.txt", "moved.txt")
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        let rename = try #require(model.status.staged.first)
+        #expect(rename.kind == .renamed)
+        #expect(rename.originalPath == "a.txt")
+
+        model.unstage(rename)
+        try await until { model.status.staged.isEmpty }
+        #expect(model.actionError == nil)
+        // The old name's deletion was unstaged too: it is now a working tree change, not a staged one.
+        #expect(model.status.unstaged.contains { $0.path == "a.txt" && $0.kind == .deleted })
+        #expect(model.status.unstaged.contains { $0.path == "moved.txt" && $0.kind == .untracked })
+    }
+
+    /// Polls for a state the model reaches on its own, since stage, unstage and discard return
+    /// before git has run. The deadline only turns a hang into a failure.
+    private func until(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(condition())
+    }
+
+    private func installHook(_ script: String) throws {
+        let hook = repo.appending(path: ".git/hooks/pre-commit")
+        try script.write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
     }
 
     private func idle(_ model: ChangesModel) async throws {

@@ -26,6 +26,9 @@ struct SwitchBranchSheet: View {
     @State private var isRepository = true
     @State private var isWorking = false
     @State private var failure: String?
+    /// Set when the chosen branch is held by a worktree whose folder is missing, which the user
+    /// has to confirm was deleted before its registration is dropped.
+    @State private var leftover: AppModel.LeftoverWorktreeError?
     /// Off only for previews, which fill the sheet themselves and have no repository to ask.
     private var asksGit = true
 
@@ -77,6 +80,15 @@ struct SwitchBranchSheet: View {
             }
         }
         .task { if asksGit { await load() } }
+        .confirmationDialog(
+            "Release \(leftover?.branch ?? "the branch")?",
+            isPresented: Binding { leftover != nil } set: { if !$0 { leftover = nil } },
+            presenting: leftover
+        ) { _ in
+            Button("Release Branch", role: .destructive) { Task { await perform(releasingLeftover: true) } }
+        } message: { leftover in
+            Text(leftover.question)
+        }
     }
 
     private var currentBranchLabel: some View {
@@ -337,14 +349,14 @@ struct SwitchBranchSheet: View {
         createNameInvalid = !isValid
     }
 
-    private func perform() async {
+    private func perform(releasingLeftover: Bool = false) async {
         guard let suggestion = selectedSuggestion, canPerform(suggestion), !isWorking else { return }
         isWorking = true
         defer { isWorking = false }
         do {
             switch suggestion.kind {
             case .local:
-                try await model.switchBranch(of: worktree.id, to: .local(suggestion.title))
+                try await model.switchBranch(of: worktree.id, to: .local(suggestion.title), releasingLeftover: releasingLeftover)
             case .remote:
                 try await model.switchBranch(of: worktree.id, to: .remote(suggestion.title))
             case .create:
@@ -357,6 +369,8 @@ struct SwitchBranchSheet: View {
                 return
             }
             dismiss()
+        } catch let error as AppModel.LeftoverWorktreeError {
+            leftover = error
         } catch {
             failure = error.localizedDescription
         }

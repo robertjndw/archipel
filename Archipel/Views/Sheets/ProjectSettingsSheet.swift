@@ -317,7 +317,10 @@ struct ProjectSettingsSheet: View {
         baseBranch = project.baseBranch
         setup = project.scripts.setup
         run = project.scripts.run
-        branches = try? await model.git.localBranches(in: project.folderURL)
+        // Left nil without git, which shows the plain text field instead of the system's offer to install it.
+        if model.isGitAvailable {
+            branches = try? await model.git.localBranches(in: project.folderURL)
+        }
     }
 
     private func refreshPreview() async {

@@ -114,6 +114,7 @@ struct PaneTabBar: View {
                 .toolbarGroupMenu()
                 .help("New Session")
                 .accessibilityLabel("New Session")
+                .accessibilityIdentifier("pane.newSession")
 
                 if pane.id == worktree.panes.last?.id {
                     // Only once there is something to run. Setting a script up is rare and lives in
@@ -331,6 +332,7 @@ private struct TabButtonContent: View, Equatable {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label.title)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityIdentifier("pane.tab")
         .accessibilityAction(.default) { model.select(tab: tab.id) }
     }
 }

@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 /// silently undo the other's edits.
 @MainActor @Observable
 public final class FileDocumentStore {
-    /// The files with unsaved changes, each under the path it was first opened by. That is the
+    /// The files with unsaved changes, each under the first path it was opened by that is still open. That is the
     /// path the user saw, and for a file inside a worktree it stays inside that worktree, which
     /// the resolved one need not.
     public private(set) var dirtyURLs: Set<URL> = []
@@ -57,8 +57,22 @@ public final class FileDocumentStore {
     /// The app calls this when the last tab showing `url` closes. The buffer goes with the last
     /// path it was opened by: tabs that reached the same file another way are still using it.
     public func close(_ url: URL) {
-        let key = keys.removeValue(forKey: url.standardizedFileURL) ?? key(for: url)
-        guard !keys.values.contains(key), let buffer = buffers.removeValue(forKey: key) else { return }
+        let closed = url.standardizedFileURL
+        let key = keys.removeValue(forKey: closed) ?? key(for: url)
+        guard let buffer = buffers[key] else { return }
+        // Sorted so the same tabs always leave the buffer under the same name.
+        if let survivor = keys.lazy.filter({ $0.value == key }).map(\.key).min(by: { $0.path < $1.path }) {
+            // The buffer is reported under the path it goes by. Left on one no tab shows, the quit
+            // prompt would name a file the user cannot find, and `forget` could not find the buffer
+            // by that path once the link behind it is deleted.
+            if buffer.url == closed {
+                let wasDirty = dirtyURLs.remove(closed) != nil
+                buffer.url = survivor
+                if wasDirty { dirtyURLs.insert(survivor) }
+            }
+            return
+        }
+        buffers[key] = nil
         buffer.close()
         dirtyURLs.remove(buffer.url)
     }
@@ -86,8 +100,10 @@ public final class FileDocumentStore {
         keys[opened] = key
         if let buffer = buffers[key] { return buffer }
         let buffer = TextBuffer(url: opened, fileURL: key) { [weak self] isDirty in
-            guard let self else { return }
-            if isDirty { dirtyURLs.insert(opened) } else { dirtyURLs.remove(opened) }
+            // Looked up rather than captured: `close` moves the buffer to another path when the
+            // one it was opened by goes away first.
+            guard let self, let shown = buffers[key]?.url else { return }
+            if isDirty { dirtyURLs.insert(shown) } else { dirtyURLs.remove(shown) }
         }
         buffers[key] = buffer
         return buffer
@@ -119,8 +135,9 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
 
     nonisolated static let maximumTextSize: Int64 = 5_000_000
 
-    /// The path the file was first opened by, for showing and for `FileDocumentStore.dirtyURLs`.
-    let url: URL
+    /// The path the file was first opened by that a tab still shows, for showing and for
+    /// `FileDocumentStore.dirtyURLs`.
+    fileprivate(set) var url: URL
     /// The file itself, with the symlinks of `url` resolved when it was opened. Everything that
     /// touches the disk goes here. Going through `url` would follow a link as it is now: once that
     /// link is deleted or repointed, a save from a tab showing the real file would report the file
@@ -226,7 +243,11 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
             state = .text
         case .other(let newState):
             if state == .text, isDirty {
-                if newState == .missing { conflict = .deleted }
+                // The fingerprint above already describes this version, so the check at save time
+                // will not notice it again. Without a conflict here the next save would replace
+                // whatever the file has become with the edits, unasked.
+                pendingDiskText = nil
+                conflict = newState == .missing ? .deleted : .changed
                 return
             }
             if state != newState { state = newState }
@@ -317,8 +338,14 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
     /// next save goes through unless the file changed once more.
     private func checkForExternalChange() throws {
         let current = FileFingerprint(fileURL) ?? .missing
-        // Preview samples have no fingerprint and nothing on disk to protect.
-        if let fingerprint, current != fingerprint {
+        // Text without a fingerprint is `discardChanges` waiting for its reload: what the buffer
+        // shows is not what is on disk, so the disk has to be looked at before it is overwritten.
+        var isUnchecked = fingerprint == nil
+#if DEBUG
+        // Preview samples never have a fingerprint, and nothing on disk to protect.
+        if isPreviewSample { isUnchecked = false }
+#endif
+        if isUnchecked || (fingerprint != nil && current != fingerprint) {
             self.fingerprint = current
             let disk = current.exists ? Self.readText(fileURL, fingerprint: current) : nil
             if !current.exists {

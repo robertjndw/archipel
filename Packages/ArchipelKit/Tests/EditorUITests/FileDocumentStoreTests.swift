@@ -394,6 +394,182 @@ final class FileDocumentStoreTests {
         #expect(store.sharesBuffer(link, real))
     }
 
+    @Test func saveRefusesToOverwriteAnUnseenChangeToSomethingThatIsNotText() async throws {
+        let url = try file("unseen-binary.txt", Data("v1\n".utf8))
+        let buffer = await open(url)
+        type("mine ", at: 0, in: buffer)
+
+        let binary = Data([0, 1, 2, 0, 0xFF, 0xFE])
+        try binary.write(to: url, options: .atomic)
+        #expect(throws: SaveConflictError(fileName: "unseen-binary.txt", conflict: .changed)) { try self.store.save(url) }
+        #expect(try Data(contentsOf: url) == binary)
+
+        // Nothing readable to show as the disk version, so Reload has to look at the file again.
+        store.discardChanges(url)
+        // discardChanges starts a reload of its own in a Task. A reload supersedes any started
+        // before it, so of two in a row the second one is sure to finish what that Task began.
+        await buffer.reload()
+        await buffer.reload()
+        #expect(buffer.state == .binary)
+        #expect(!store.isDirty(url))
+        try store.save(url)
+        #expect(try Data(contentsOf: url) == binary)
+    }
+
+    /// The watcher's path, as opposed to the save-time check above. A reload records the new
+    /// fingerprint even when it raises no conflict, so the save-time check then sees nothing new.
+    @Test(arguments: ["binary", "too large", "unreadable"])
+    func aShownDirtyBufferFlagsAFileThatStoppedBeingText(change: String) async throws {
+        let url = try file("stopped-being-text.txt", Data("v1\n".utf8))
+        let buffer = await open(url)
+        type("mine ", at: 0, in: buffer)
+
+        switch change {
+        case "binary":
+            try Data([0, 1, 2, 0, 0xFF]).write(to: url, options: .atomic)
+        case "too large":
+            try Data(repeating: UInt8(ascii: "a"), count: Int(TextBuffer.maximumTextSize) + 1).write(to: url, options: .atomic)
+        default:
+            try Data("theirs\n".utf8).write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        }
+        await buffer.reload()
+        #expect(buffer.text == "mine v1\n")
+        #expect(store.isDirty(url))
+
+        // The reload has recorded the new fingerprint, so the conflict it raises is all that
+        // stands between the next save and the agent's file.
+        #expect(buffer.conflict == .changed)
+        #expect(throws: SaveConflictError.self) { try self.store.save(url) }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+    }
+
+    @Test func aCleanBufferFollowsTheFileIntoBinaryAndBack() async throws {
+        let url = try file("flip.txt", Data("v1\n".utf8))
+        let buffer = await open(url)
+
+        try Data([0, 1, 2, 0]).write(to: url, options: .atomic)
+        await buffer.reload()
+        #expect(buffer.state == .binary)
+        #expect(!store.isDirty(url))
+        #expect(buffer.conflict == nil)
+        // Nothing to save while the file is not text.
+        try store.save(url)
+        #expect(try Data(contentsOf: url) == Data([0, 1, 2, 0]))
+
+        try Data("v2\n".utf8).write(to: url, options: .atomic)
+        await buffer.reload()
+        #expect(buffer.state == .text)
+        #expect(buffer.text == "v2\n")
+        #expect(!store.isDirty(url))
+    }
+
+    @Test func aFailedSaveKeepsTheEditsAndASaveAfterTheFixClearsTheError() async throws {
+        let url = try file("legacy2.txt", Data([0x63, 0x61, 0x66, 0xE9]))
+        let buffer = await open(url)
+        type("\u{1F600}", at: 0, in: buffer)
+        #expect(throws: (any Error).self) { try self.store.save(url) }
+        #expect(buffer.saveError != nil)
+        #expect(store.isDirty(url))
+        #expect(buffer.conflict == nil)
+        #expect(try Data(contentsOf: url) == Data([0x63, 0x61, 0x66, 0xE9]))
+
+        // The failed attempt must not have recorded a fingerprint or left a conflict behind.
+        buffer.textStorage.replaceCharacters(in: NSRange(location: 0, length: 2), with: "!")
+        try store.save(url)
+        #expect(buffer.saveError == nil)
+        #expect(!store.isDirty(url))
+        #expect(try Data(contentsOf: url) == Data([0x21, 0x63, 0x61, 0x66, 0xE9]))
+    }
+
+    @Test func savingIntoADeletedWorktreeFailsWithoutRecreatingIt() async throws {
+        let worktree = folder.appending(path: "feature")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let url = worktree.appending(path: "main.swift")
+        try Data("print(1)\n".utf8).write(to: url)
+        let buffer = await open(url)
+        type("// ", at: 0, in: buffer)
+
+        try FileManager.default.removeItem(at: worktree)
+        #expect(throws: SaveConflictError(fileName: "main.swift", conflict: .deleted)) { try self.store.save(url) }
+        #expect(throws: SaveConflictError.self) { try self.store.saveAll() }
+
+        // Even when told to keep the edits there is no folder to write into, and none is made.
+        buffer.keepChanges()
+        #expect(throws: (any Error).self) { try self.store.save(url) }
+        #expect(buffer.saveError != nil)
+        #expect(store.isDirty(url))
+        #expect(!FileManager.default.fileExists(atPath: worktree.path))
+
+        // What the app does once the worktree is removed: nothing is left to hold up Save All or quitting.
+        store.forget(url)
+        #expect(store.dirtyURLs.isEmpty)
+        #expect(!store.isDirty(url))
+        try store.saveAll()
+    }
+
+    @Test func saveAllWritesEveryBufferItCanAndReportsTheFirstFailure() async throws {
+        let good = try file("good.txt", Data("g\n".utf8))
+        let raced = try file("raced.txt", Data("r\n".utf8))
+        let goodBuffer = await open(good)
+        let racedBuffer = await open(raced)
+        type("1", at: 0, in: goodBuffer)
+        type("2", at: 0, in: racedBuffer)
+        try Data("theirs\n".utf8).write(to: raced, options: .atomic)
+
+        #expect(throws: SaveConflictError(fileName: "raced.txt", conflict: .changed)) { try self.store.saveAll() }
+        #expect(try String(contentsOf: good, encoding: .utf8) == "1g\n")
+        #expect(try String(contentsOf: raced, encoding: .utf8) == "theirs\n")
+        #expect(store.dirtyURLs == [raced.standardizedFileURL])
+    }
+
+    @Test func ourOwnSaveDoesNotLookLikeAnExternalChangeToTheNextSave() async throws {
+        let url = try file("twice-saved.txt", Data("v1\n".utf8))
+        let buffer = await open(url)
+        type("a", at: 0, in: buffer)
+        try store.save(url)
+        type("b", at: 0, in: buffer)
+        try store.save(url)
+        #expect(buffer.conflict == nil)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "bav1\n")
+    }
+
+    @Test func aReloadThatStartedBeforeASaveDoesNotPutTheOldTextBack() async throws {
+        let url = try file("overtaken.txt", Data("v1\n".utf8))
+        let buffer = await open(url)
+        type("mine ", at: 0, in: buffer)
+        try Data("v1\n".utf8).write(to: url, options: .atomic)
+
+        // The yield lets the reload start and go off the main actor to read the file; the save
+        // then lands before its result comes back.
+        let reload = Task { await buffer.reload() }
+        await Task.yield()
+        try store.save(url)
+        await reload.value
+        #expect(buffer.text == "mine v1\n")
+        #expect(!store.isDirty(url))
+        #expect(buffer.conflict == nil)
+    }
+
+    @Test func closingThePathABufferWasFirstOpenedByMovesItToOneStillOpen() async throws {
+        let real = try file("AGENTS.md", Data("one\n".utf8))
+        let link = folder.appending(path: "CLAUDE.md")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+        let buffer = await open(link)
+        #expect(store.buffer(for: real) === buffer)
+        // The link's tab closes while the buffer is clean; the real file's tab keeps it.
+        store.close(link)
+        type("x", at: 0, in: buffer)
+        #expect(store.isDirty(real))
+
+        // The quit prompt names what `dirtyURLs` holds, and the app forgets a removed worktree's
+        // buffers by those paths, so it has to be one a tab still shows.
+        #expect(store.dirtyURLs == [real.standardizedFileURL])
+        store.forget(real)
+        #expect(store.dirtyURLs.isEmpty)
+    }
+
     @Test func aBufferIsStillFoundAfterItsFileIsDeleted() async throws {
         let url = try file("gone.txt", Data("one\n".utf8))
         let buffer = await open(url)

@@ -22,6 +22,9 @@ final class AppModel {
     private(set) var islandAttention: [Island.ID: AttentionSummary] = [:]
     private(set) var terminals: [Session.ID: TerminalSession] = [:]
     private(set) var launchFailures: [Session.ID: String] = [:]
+    /// Counts the launches asked for per session. A launch waits for the login PATH, and a restart
+    /// or Run in that time asks for another one with a different command; only the latest may start.
+    @ObservationIgnored private var launchGenerations: [Session.ID: Int] = [:]
     /// The glow each worktree row last played. Not persisted, so nothing glows after a launch.
     private(set) var statusPulses: [Worktree.ID: StatusPulseCount] = [:]
     /// Glows of changes that happened while Archipel was in the background. They would play behind
@@ -161,7 +164,11 @@ final class AppModel {
         // app. Sharing it would mean sharing the workspace file, and the hook server
         // unlinks any socket already at its path, so the installed app would stop
         // getting agent status. ARCHIPEL_SUPPORT_DIR is for throwaway runs.
-        #if DEBUG
+        #if UITESTS
+        // The UI test build is a Debug build under another bundle id. Launched without
+        // ARCHIPEL_SUPPORT_DIR it must still stay away from the Debug build's workspace and socket.
+        let supportFolder = "Archipel UI Tests"
+        #elseif DEBUG
         let supportFolder = "Archipel Dev"
         #else
         let supportFolder = "Archipel"
@@ -432,10 +439,13 @@ final class AppModel {
 
     /// Looks for each agent's executable once the login PATH is known. A missing agent is otherwise
     /// only found out when a session fails to start.
-    private func refreshAgentAvailability() {
+    func refreshAgentAvailability() {
         Task { [weak self] in
             guard let path = await self?.loginPATH.value else { return }
-            let executables = AgentDefinition.builtIns.map { (id: $0.id, name: $0.executableName) }
+            // The shell is launched by its full path, which need not be in a folder on the PATH.
+            let executables = AgentDefinition.builtIns.map {
+                (id: $0.id, name: $0.id == AgentDefinition.shell.id ? AgentDefinition.loginShellPath : $0.executableName)
+            }
             let installed = await Task.detached(priority: .utility) {
                 Set(executables.filter { LoginEnvironment.locate($0.name, inPATH: path) != nil }.map(\.id))
             }.value
@@ -657,7 +667,13 @@ final class AppModel {
     /// any folder it cannot find, which includes every worktree on a volume that is not mounted,
     /// and those must keep their registration and their branch. Touches the disk.
     static func isLeftover(_ entry: GitWorktreeEntry) -> Bool {
-        entry.isPrunable && WorktreeLocation.isProvablyGone(entry.path)
+        entry.isPrunable && isDeletedWorktree(entry.path)
+    }
+
+    /// Whether a worktree's folder was deleted, as far as can be told: it is missing from a place
+    /// that is still there, and was not just renamed beside where it used to be. Touches the disk.
+    static func isDeletedWorktree(_ path: URL) -> Bool {
+        WorktreeLocation.isProvablyGone(path) && WorktreeLocation.movedWorktree(from: path) == nil
     }
 
     /// Worktrees git still lists although their folder is gone, as of the last refresh.
@@ -671,13 +687,38 @@ final class AppModel {
     /// Throws when the worktree holding the branch cannot be reached right now, most likely because
     /// its volume is not mounted. Its registration stays, so git would refuse the branch anyway;
     /// this only says why in words that point at the disk.
-    func releasePrunedBranch(_ branch: String, in project: Project) async throws {
+    ///
+    /// Throws `LeftoverWorktreeError` unless `confirmed`. A folder that was moved somewhere else
+    /// looks exactly like a deleted one, and dropping its registration takes its index and HEAD
+    /// with it, so that is only done once the user has said the folder is really gone.
+    func releasePrunedBranch(_ branch: String, in project: Project, confirmed: Bool) async throws {
         guard isGitAvailable, let entries = try? await git.worktrees(of: project.folderURL) else { return }
         for entry in entries where entry.isPrunable && entry.branch == branch {
-            guard Self.isLeftover(entry) else {
+            if let moved = WorktreeLocation.movedWorktree(from: entry.path) {
+                throw GitError(message: "The branch \(branch) is checked out in a worktree that was moved from \(entry.path.abbreviatedPath) to \(moved.abbreviatedPath). Run \"git worktree repair\" in that folder so git finds it again, then add it from Add Worktree.")
+            }
+            guard WorktreeLocation.isProvablyGone(entry.path) else {
                 throw GitError(message: "The branch \(branch) is checked out in the worktree at \(entry.path.abbreviatedPath), which cannot be reached right now. If it is on an external or network volume, connect that and try again.")
             }
+            guard confirmed else { throw LeftoverWorktreeError(branch: branch, path: entry.path.abbreviatedPath) }
             try? await git.removeWorktree(repository: project.folderURL, path: entry.path)
+        }
+    }
+
+    /// A branch is held by a worktree whose folder is missing, and using it elsewhere means
+    /// dropping that worktree for good. The sheets ask before they try again.
+    struct LeftoverWorktreeError: LocalizedError, Equatable {
+        var branch: String
+        /// The missing folder, already shortened for showing.
+        var path: String
+
+        var errorDescription: String? {
+            "The branch \(branch) is checked out in a worktree at \(path), whose folder is missing."
+        }
+
+        /// What the confirmation says. Shared so both sheets put the choice the same way.
+        var question: String {
+            "git still has \(branch) checked out in a worktree at \(path), and that folder is missing. If you deleted it, release the branch to use it here.\n\nIf you moved or renamed the folder, cancel instead. Releasing the branch would leave the moved worktree broken. Run \"git worktree repair\" inside it so git finds it again."
         }
     }
 
@@ -691,8 +732,8 @@ final class AppModel {
     /// The task running this can be cancelled until git starts adding the worktree; after that the
     /// worktree exists and is shown.
     @discardableResult
-    func createWorktree(in project: Project, branch: String, createBranch: Bool) async throws -> WorktreeCreation {
-        try await createWorktree(in: project, branch: branch, from: createBranch ? .newBranch : .existingBranch)
+    func createWorktree(in project: Project, branch: String, createBranch: Bool, releasingLeftover: Bool = false) async throws -> WorktreeCreation {
+        try await createWorktree(in: project, branch: branch, from: createBranch ? .newBranch : .existingBranch(releasingLeftover: releasingLeftover))
     }
 
     /// A worktree for a branch that so far only exists on a remote, given as `origin/feature`. It
@@ -708,7 +749,8 @@ final class AppModel {
     }
 
     private enum WorktreeSource {
-        case existingBranch
+        /// `releasingLeftover` is the user's word that a missing worktree holding the branch was deleted.
+        case existingBranch(releasingLeftover: Bool)
         /// Off the project's base.
         case newBranch
         /// A new local branch tracking the branch of the same name on this remote.
@@ -727,9 +769,9 @@ final class AppModel {
         }
         var start: (name: String, fetchFailure: String?)?
         switch source {
-        case .existingBranch:
+        case .existingBranch(let releasingLeftover):
             // A worktree whose folder was deleted by hand still holds its branch as far as git is concerned.
-            try await releasePrunedBranch(branch, in: project)
+            try await releasePrunedBranch(branch, in: project, confirmed: releasingLeftover)
         case .newBranch:
             start = await fetchedWorktreeBase(for: project)
         case .remoteBranch(let remote):
@@ -807,7 +849,7 @@ final class AppModel {
         else { return .notRequested }
         let folderExists = FileManager.default.fileExists(atPath: worktree.path.path(percentEncoded: false))
         // Missing is not the same as deleted: on an unmounted volume the worktree is all still there.
-        let isGone = !folderExists && WorktreeLocation.isProvablyGone(worktree.path)
+        let isGone = !folderExists && Self.isDeletedWorktree(worktree.path)
         if deleteFolder, folderExists { try requireGit() }
         // Found before the folder goes, while a file opened through another spelling of its path
         // (`/private/var` for `/var`, say) can still be resolved to this worktree.
@@ -892,6 +934,9 @@ final class AppModel {
         let worktrees = workspace.allWorktrees
         Task {
             for worktree in worktrees {
+                // git answers nothing for a folder it cannot reach, the same as for a detached HEAD.
+                // The stored name of a worktree on a disk that is not mounted has to outlive that.
+                guard FileManager.default.fileExists(atPath: worktree.path.path) else { continue }
                 let generation = branchGenerations[worktree.id]
                 let branch = await git.currentBranch(in: worktree.path)
                 // A switch made in the app while git was asked has written the newer name already.
@@ -1243,10 +1288,13 @@ final class AppModel {
         if script == nil, definition.acceptsPrompts { notifier.requestAuthorizationIfNeeded() }
         launchFailures[id] = nil
         apply(.launched, to: id)
+        launchGenerations[id, default: 0] += 1
+        let launch = launchGenerations[id]
         Task {
             let path = await loginPATH.value
-            // The session may have been closed or started by another path while we waited.
-            guard terminals[id] == nil, workspace.session(id: id) != nil else { return }
+            // The session may have been closed, started by another path or asked to start
+            // something else while we waited.
+            guard launch == launchGenerations[id], terminals[id] == nil, workspace.session(id: id) != nil else { return }
             guard FileManager.default.fileExists(atPath: worktree.path.path) else {
                 launchFailures[id] = "The folder \(worktree.path.path) no longer exists."
                 apply(.processExited(code: 1), to: id)
@@ -1363,6 +1411,7 @@ final class AppModel {
         activities[id] = nil
         launchFailures[id] = nil
         if !restarting {
+            launchGenerations[id] = nil
             scriptSessions[id] = nil
             pendingReviews[id] = nil
         }
@@ -1521,6 +1570,16 @@ final class AppModel {
     /// are windows of the same app, so anything that acts on "the window" has to check.
     static func isMainWindow(_ window: NSWindow?) -> Bool {
         window?.identifier?.rawValue == mainWindowID
+    }
+
+    /// Whether a sheet may be asked for now, bringing the main window forward if so, since that is
+    /// where sheets attach. Menu commands stay enabled under a sheet and with the window closed. A
+    /// second sheet would wait and come up after the first is dismissed, and one asked for without
+    /// a window would appear whenever that is next opened, by which time what it was for may be gone.
+    func readyForSheet() -> Bool {
+        if NSApp.windows.contains(where: { Self.isMainWindow($0) && $0.attachedSheet != nil }) { return false }
+        if !Self.isMainWindow(NSApp.keyWindow) { showMainWindow() }
+        return true
     }
 
     /// Brings Archipel and its main window forward. The app keeps running without a window while

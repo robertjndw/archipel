@@ -84,6 +84,65 @@ public enum WorktreeLocation {
         return fileExists(Project.worktreeKey(folder.deletingLastPathComponent()))
     }
 
+    /// Where a linked worktree went when its folder was renamed or moved within the folder that
+    /// held it, which is what a rename in Finder does. `isProvablyGone` cannot tell that from a
+    /// deletion, and git cannot either, yet dropping the registration ruins the moved worktree just
+    /// as it would one on a disk that is not mounted.
+    ///
+    /// A worktree's `.git` file names its registration, and the registration's `gitdir` file names
+    /// the `.git` file it was made for. A neighbour whose registration still points at `folder` is
+    /// the worktree under its new name. One moved somewhere else is not found.
+    public static func movedWorktree(from folder: URL) -> URL? {
+        let folder = folder.standardizedFileURL
+        let wanted = pathKey(folder.appending(path: ".git"))
+        let parent = folder.deletingLastPathComponent()
+        guard let neighbours = try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil) else { return nil }
+        // A worktrees folder holds a handful of entries. Something far larger is not one, and is not worth reading through.
+        for neighbour in neighbours.prefix(500) where pathKey(neighbour.appending(path: ".git")) != wanted {
+            guard let registration = pointer(in: neighbour.appending(path: ".git"), prefix: "gitdir: "),
+                  let recorded = pointer(in: registration.appending(path: "gitdir"), prefix: ""),
+                  pathKey(recorded) == wanted
+            else { continue }
+            return neighbour.standardizedFileURL
+        }
+        return nil
+    }
+
+    /// The path a one-line git pointer file holds. git writes it absolute, or relative to the
+    /// folder the file is in when `worktree.useRelativePaths` is set.
+    private static func pointer(in file: URL, prefix: String) -> URL? {
+        // A main checkout has a `.git` folder here, which fails to read as a file and is skipped.
+        guard let line = (try? String(contentsOf: file, encoding: .utf8))?.split(whereSeparator: \.isNewline).first,
+              line.hasPrefix(prefix)
+        else { return nil }
+        let path = String(line.dropFirst(prefix.count))
+        guard !path.isEmpty else { return nil }
+        return URL(filePath: path, relativeTo: file.deletingLastPathComponent()).standardizedFileURL
+    }
+
+    private static func pathKey(_ url: URL) -> String {
+        Project.worktreeKey(resolvingExistingPart(of: url))
+    }
+
+    /// `url` with the symlinks resolved in as much of it as exists. The paths compared here are
+    /// often of folders that are not there (yet, or any more), and Foundation leaves such a path
+    /// untouched instead of resolving the part it can.
+    private static func resolvingExistingPart(of url: URL) -> URL {
+        var existing = url.standardizedFileURL
+        var missing: [String] = []
+        while existing.pathComponents.count > 1 {
+            if let resolved = realpath(existing.path(percentEncoded: false), nil) {
+                defer { free(resolved) }
+                return missing.reversed().reduce(URL(filePath: String(cString: resolved), directoryHint: .isDirectory)) {
+                    $0.appending(path: $1, directoryHint: .isDirectory)
+                }
+            }
+            missing.append(existing.lastPathComponent)
+            existing = existing.deletingLastPathComponent()
+        }
+        return url.standardizedFileURL
+    }
+
     /// The folders a project's linked worktrees sit in, plus the one it is configured to use.
     private static func worktreeFolders(of project: Project) -> Set<String> {
         var folders = Set(project.worktrees.lazy.filter { !$0.isMain }.map { folderKey($0.path.deletingLastPathComponent()) })
@@ -91,8 +150,10 @@ public enum WorktreeLocation {
         return folders
     }
 
-    /// Lowercased because the default file system does not tell `App` from `app`.
+    /// Lowercased because the default file system does not tell `App` from `app`. Symlinks are
+    /// resolved because git reports a worktree by its real path (`/private/tmp/x`) while one made
+    /// here keeps the path as configured (`/tmp/x`), and both have to claim the same folder.
     private static func folderKey(_ url: URL) -> String {
-        Project.worktreeKey(url).lowercased()
+        pathKey(url).lowercased()
     }
 }

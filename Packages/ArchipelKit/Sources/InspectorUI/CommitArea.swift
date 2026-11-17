@@ -197,6 +197,7 @@ struct CommitArea: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .focused($messageFocused)
+                .accessibilityIdentifier("changes.commitMessage")
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .glassEffect(.regular, in: .rect(cornerRadius: 12))
@@ -239,6 +240,7 @@ struct CommitArea: View {
             .buttonStyle(.glassProminent)
             .controlSize(.large)
             .disabled(!action.isEnabled)
+            .accessibilityIdentifier("changes.primaryAction")
             // Only while the field is focused and the button commits, so Cmd-Return never pushes.
             .keyboardShortcut(messageFocused && action.activity == .commit ? KeyboardShortcut(.return, modifiers: .command) : nil)
             .help(help(for: action))

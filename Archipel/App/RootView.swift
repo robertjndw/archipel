@@ -23,6 +23,9 @@ struct RootView: View {
         @Bindable var model = model
         NavigationSplitView(columnVisibility: columns) {
             SidebarView(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
+                // The column width below is not enough on its own: with no saved split positions
+                // (a first launch) the sidebar came up about 160 points wide, well under its minimum.
+                .frame(minWidth: 220)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 400)
                 .toolbar(removing: .sidebarToggle)
                 .ignoresSafeArea(.container, edges: .top)

@@ -131,6 +131,9 @@ final class ChangesModel {
     }
 
     func discard(_ change: GitFileChange, staged: Bool) {
+        // The poll keeps running while the confirmation is open. An entry that has since gone or
+        // changed kind is not the one that was agreed to, as in `discardAll`.
+        guard (staged ? status.staged : status.unstaged).contains(change) else { return }
         let changes = [change]
         perform { git, root in
             if staged {
@@ -162,7 +165,12 @@ final class ChangesModel {
             // still be the one from before a stage click, with nothing staged, and going by that
             // would turn "commit the file I just staged" into "commit everything".
             let status = try await git.status(in: root)
-            let stagesFirst = CommitControl(status: status, message: text, isBusy: false).mode == .commitAll
+            let fresh = CommitControl(status: status, message: text, isBusy: false)
+            // A merge an agent started since the click would otherwise be staged, markers and all.
+            guard fresh.isEnabled else {
+                throw GitError(message: "The changes are no longer what the list showed, so nothing was committed. Look at them again before you commit.")
+            }
+            let stagesFirst = fresh.mode == .commitAll
             if stagesFirst { try await git.stageAll(in: root) }
             do {
                 try await git.commit(message: text, in: root)
@@ -633,6 +641,7 @@ private struct ChangeRow: View {
         .modifier(FileDragModifier(url: change.kind == .deleted ? nil : model.url(for: change)))
         .help(change.originalPath.map { "\(change.path), renamed from \($0)" } ?? change.path)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(staged ? "changes.staged" : "changes.unstaged")
         .accessibilityAction(named: staged ? "Unstage" : "Stage", toggleStage)
         .accessibilityAction(named: "Discard") { if change.isDiscardable { requestDiscard() } }
     }

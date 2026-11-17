@@ -33,6 +33,10 @@ struct WorktreeSheet: View {
     /// Where a new branch starts when the project names no base branch. Nil means HEAD.
     @State private var remoteDefaultBranch: String?
     @State private var failure: String?
+    /// Set when the chosen branch is held by a worktree whose folder is missing, which the user
+    /// has to confirm was deleted before its registration is dropped. Keeps the row that was
+    /// chosen, since the list can re-rank while the question is up.
+    @State private var leftover: (error: AppModel.LeftoverWorktreeError, suggestion: Suggestion)?
     /// Something to tell the user about a worktree that was created all the same. Shown instead of
     /// the search, with Done as the only way on.
     @State private var note: String?
@@ -75,6 +79,14 @@ struct WorktreeSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+                // Done is the only button and takes Return. Escape needs one of its own, which
+                // does not have to be seen to work.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                        .opacity(0)
+                        .accessibilityHidden(true)
+                }
             } else {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -90,6 +102,19 @@ struct WorktreeSheet: View {
         }
         .task { if asksGit { await load() } }
         .onDisappear { addTask?.cancel() }
+        .confirmationDialog(
+            "Release \(leftover?.error.branch ?? "the branch")?",
+            isPresented: Binding { leftover != nil } set: { if !$0 { leftover = nil } },
+            presenting: leftover
+        ) { leftover in
+            Button("Release Branch", role: .destructive) {
+                guard !isWorking else { return }
+                isWorking = true
+                addTask = Task { await add(leftover.suggestion, releasingLeftover: true) }
+            }
+        } message: { leftover in
+            Text(leftover.error.question)
+        }
     }
 
     // MARK: Search field
@@ -351,17 +376,18 @@ struct WorktreeSheet: View {
     }
 
     private func startAdd() {
-        guard !isWorking else { return }
-        addTask = Task { await add() }
+        guard !isWorking, let suggestion = selectedSuggestion, canAdd(suggestion) else { return }
+        // Set here, not in the task: a second Return in the same turn would otherwise start a
+        // second task and replace `addTask`, and Cancel would then cancel the wrong one.
+        isWorking = true
+        addTask = Task { await add(suggestion) }
     }
 
-    private func add() async {
-        guard let suggestion = selectedSuggestion, canAdd(suggestion), !isWorking else { return }
+    private func add(_ suggestion: Suggestion, releasingLeftover: Bool = false) async {
         workingLabel = switch suggestion.kind {
         case .create, .branch, .remoteBranch: "Creating Worktree…"
         case .worktree, .open: "Adding Worktree…"
         }
-        isWorking = true
         defer { isWorking = false }
         do {
             var creation: AppModel.WorktreeCreation?
@@ -369,7 +395,7 @@ struct WorktreeSheet: View {
             case .create:
                 creation = try await model.createWorktree(in: project, branch: suggestion.title, createBranch: true)
             case .branch:
-                creation = try await model.createWorktree(in: project, branch: suggestion.title, createBranch: false)
+                creation = try await model.createWorktree(in: project, branch: suggestion.title, createBranch: false, releasingLeftover: releasingLeftover)
             case .remoteBranch:
                 creation = try await model.createWorktree(in: project, tracking: suggestion.title)
             case .worktree(let path):
@@ -384,6 +410,8 @@ struct WorktreeSheet: View {
             } else {
                 dismiss()
             }
+        } catch let error as AppModel.LeftoverWorktreeError {
+            leftover = (error, suggestion)
         } catch is CancellationError {
             // Cancel was pressed, or the project went away meanwhile. Nothing to report either way.
         } catch {

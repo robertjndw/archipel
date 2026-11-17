@@ -101,14 +101,8 @@ struct AppActions {
         model.focusedSessionID.flatMap { model.workspace.session(id: $0) }
     }
 
-    /// Menu commands stay enabled under a sheet. A second sheet asked for then would wait and come
-    /// up after the first is dismissed, by which time its worktree or session may be gone.
-    private var isSheetUp: Bool {
-        NSApp.windows.contains { AppModel.isMainWindow($0) && $0.attachedSheet != nil }
-    }
-
     func renameFocusedSession() {
-        guard !isSheetUp, let session = focusedSession else { return }
+        guard let session = focusedSession, model.readyForSheet() else { return }
         model.renameRequest = RenameTarget(kind: .session(session.id), name: session.displayTitle)
     }
 
@@ -135,7 +129,7 @@ struct AppActions {
     }
 
     func removeSelectedWorktree() {
-        if !isSheetUp, let worktree = removableWorktree { model.worktreeAwaitingRemoval = worktree }
+        if let worktree = removableWorktree, model.readyForSheet() { model.worktreeAwaitingRemoval = worktree }
     }
 
     var selectedWorktreeHasUnread: Bool {
@@ -154,7 +148,7 @@ struct AppActions {
     }
 
     func addWorktree() {
-        if let project = projectForNewWorktree { model.addWorktreeProjectID = project.id }
+        if let project = projectForNewWorktree, model.readyForSheet() { model.addWorktreeProjectID = project.id }
     }
 
     var worktreeForBranchSwitch: Worktree? {
@@ -163,7 +157,7 @@ struct AppActions {
     }
 
     func switchBranch() {
-        if let worktree = worktreeForBranchSwitch { model.switchBranchWorktreeID = worktree.id }
+        if let worktree = worktreeForBranchSwitch, model.readyForSheet() { model.switchBranchWorktreeID = worktree.id }
     }
 
     func sync(_ action: SyncAction) {
@@ -367,7 +361,9 @@ private struct IslandMenuItems: View {
 
     var body: some View {
         let islands = model.workspace.islands
-        Button("New Island…", systemImage: "plus.square.on.square") { model.isCreatingIsland = true }
+        Button("New Island…", systemImage: "plus.square.on.square") {
+            if model.readyForSheet() { model.isCreatingIsland = true }
+        }
         Divider()
         Button("Next Island", systemImage: "chevron.right") { model.selectAdjacentIsland(offset: 1) }
             .keyboardShortcut("]", modifiers: [.command, .control])

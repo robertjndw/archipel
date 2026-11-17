@@ -92,6 +92,9 @@ extension AppModel {
                 if NSApp.isActive {
                     self.refreshGitStatus(lookingUpPullRequests: true)
                     self.fetchRemotesIfDue()
+                    // An agent installed from one of the app's own terminals should not stay
+                    // greyed out until the user happens to switch apps and back.
+                    self.refreshAgentAvailability()
                 }
             }
         }

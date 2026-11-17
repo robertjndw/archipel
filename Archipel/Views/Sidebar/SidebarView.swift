@@ -42,6 +42,7 @@ struct SidebarView: View {
                 }
             }
         }
+        .accessibilityIdentifier("sidebar")
         .environment(\.sidebarDensity, model.settings.sidebarDensity)
         .animation(.snappy, value: model.settings.sidebarDensity)
         .background { SidebarPeekKeyMonitor(peek: peek, model: model) }

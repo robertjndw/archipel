@@ -80,6 +80,14 @@ struct RemoveWorktreeSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+                // Done is the only button and takes Return. Escape needs one of its own, which
+                // does not have to be seen to work.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                        .opacity(0)
+                        .accessibilityHidden(true)
+                }
             } else {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -163,8 +171,9 @@ struct RemoveWorktreeSheet: View {
     }
 
     private func loadStatus() async {
-        isUnavailable = isMissing && !WorktreeLocation.isProvablyGone(worktree.path)
-        guard !isMissing, let status = try? await model.git.status(in: worktree.path) else { return }
+        isUnavailable = isMissing && !AppModel.isDeletedWorktree(worktree.path)
+        // Without git there is nothing to count, and asking would bring up the system's offer to install it.
+        guard !isMissing, model.isGitAvailable, let status = try? await model.git.status(in: worktree.path) else { return }
         changeCount = Set((status.staged + status.unstaged).map(\.path)).count
     }
 

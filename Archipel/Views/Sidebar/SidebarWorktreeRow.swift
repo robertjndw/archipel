@@ -41,6 +41,7 @@ struct SidebarWorktreeRow: View {
                         .fontWeight(content.isUnread ? .semibold : .regular)
                         .truncationMode(.middle)
                         .lineLimit(1)
+                        .accessibilityIdentifier("sidebar.worktree")
                     if density.showsSecondLine {
                         detail
                     }
@@ -329,6 +330,7 @@ struct SidebarSessionRow: View {
         .buttonStyle(.plain)
         .onHover { peek?.hover(session: content.id, $0) }
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        .accessibilityIdentifier("sidebar.session")
         .contextMenu {
             Button("Show Session", systemImage: "terminal") { model.select(session: content.id) }
             Button("Rename…", systemImage: "pencil") {
@@ -453,15 +455,20 @@ private struct WorktreeRowsPreview: View {
     var body: some View {
         List(selection: $selection) {
             ForEach(WorktreeRowSamples.worktrees) { worktree in
-                SidebarWorktreeRow(
-                    worktree: worktree,
-                    content: model.rowContent(for: worktree),
-                    sessions: model.sessionRows(for: worktree),
-                    isSelected: worktree.id == selection,
-                    tint: .blue,
-                    removing: .constant(nil),
-                    renaming: .constant(nil)
-                )
+                // The stack looks redundant and is not. A row that is a custom view straight out of
+                // a ForEach makes the canvas crash inside SwiftUI's outline list (macOS 27.2). A
+                // container the list can count without running the row's body avoids that.
+                HStack(spacing: 0) {
+                    SidebarWorktreeRow(
+                        worktree: worktree,
+                        content: model.rowContent(for: worktree),
+                        sessions: model.sessionRows(for: worktree),
+                        isSelected: worktree.id == selection,
+                        tint: .blue,
+                        removing: .constant(nil),
+                        renaming: .constant(nil)
+                    )
+                }
                 .tag(worktree.id)
             }
         }

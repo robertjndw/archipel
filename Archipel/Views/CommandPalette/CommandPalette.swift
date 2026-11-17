@@ -107,6 +107,7 @@ private struct PalettePanel: View {
                                 .accessibilityElement(children: .ignore)
                                 .accessibilityLabel(row.subtitle.map { "\(row.title), \($0)" } ?? row.title)
                                 .accessibilityAddTraits(index == palette.selection ? [.isButton, .isSelected] : .isButton)
+                                .accessibilityIdentifier("palette.row")
                                 .onContinuousHover { phase in
                                     if case .active = phase, palette.selection != index { palette.selection = index }
                                 }
@@ -219,6 +220,7 @@ private struct PaletteField: NSViewRepresentable {
         field.lineBreakMode = .byTruncatingHead
         field.cell?.usesSingleLineMode = true
         field.delegate = context.coordinator
+        field.setAccessibilityIdentifier("palette.query")
         return field
     }
 
