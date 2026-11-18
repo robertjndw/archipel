@@ -7,14 +7,14 @@ struct WorktreeSettingsView: View {
 
     var body: some View {
         @Bindable var settings = model.settings
-        let installed = ExternalEditor.installed()
+        let installed = model.installedEditors
         Form {
             Section {
                 WorktreesFolderPicker(isChoosingFolder: $isChoosingFolder)
 
                 TextField(text: $settings.branchPrefix, prompt: Text("yourname/")) {
                     Text("Branch prefix")
-                    Text("Filled in for new branches and still editable each time.")
+                    Text("Added in front of new branch names, unless the name you type already contains a slash.")
                 }
                 .autocorrectionDisabled()
 

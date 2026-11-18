@@ -633,7 +633,11 @@ final class DiffGutterView: NSView {
                 return button
             }()
             button.setAccessibilityLabel(label)
-            button.setAccessibilityFrameInParentSpace(rowRect(for: index))
+            // The parent space counts up from the bottom edge, whatever `isFlipped` says.
+            let row = rowRect(for: index)
+            button.setAccessibilityFrameInParentSpace(
+                NSRect(x: row.minX - bounds.minX, y: bounds.maxY - row.maxY, width: row.width, height: row.height)
+            )
             children.append(button)
         }
         return children

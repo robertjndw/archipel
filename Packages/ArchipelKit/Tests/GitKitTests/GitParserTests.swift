@@ -3,6 +3,20 @@ import Testing
 @testable import GitKit
 
 struct GitParserTests {
+    @Test func marksBareRepositoryInWorktreeList() {
+        let output = [
+            "worktree /repo.git", "bare", "",
+            "worktree /repo/feature", "HEAD 1111", "branch refs/heads/feature", "",
+            "",
+        ].joined(separator: "\0")
+
+        let entries = GitParser.worktrees(output)
+
+        #expect(entries.map(\.isBare) == [true, false])
+        #expect(entries.map(\.isMain) == [true, false])
+        #expect(entries.first?.branch == nil)
+    }
+
     @Test func parsesBranchAndEntryKinds() {
         let output = [
             "# branch.oid 492fcb4b06d8bd5e37005c30d252d97a8c2d890e",

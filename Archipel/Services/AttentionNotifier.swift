@@ -42,11 +42,31 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// The token of each session's newest notification. Anything else, or anything posted before the
     /// session's state last changed, is stale and must not be answered on the agent's behalf.
     private var tokens: [Session.ID: String] = [:]
+    /// Sessions that may still have a banner in Notification Center. `clear` runs on every selection
+    /// change, and without this each of those would be a round trip to the notification daemon.
+    private var delivered: Set<Session.ID> = []
+    private var hasRequestedAuthorization = false
 
     func start() {
         center.delegate = self
         center.setNotificationCategories(Self.categories)
+        // Banners of the previous run are still there, and looking at their session has to clear them too.
+        center.getDeliveredNotifications { [weak self] notifications in
+            let ids = notifications.compactMap { UUID(uuidString: $0.request.identifier) }
+            Task { @MainActor in self?.delivered.formUnion(ids) }
+        }
+    }
+
+    /// Asked when the first agent starts rather than at launch: by then the user has done something
+    /// that explains why Archipel wants to notify them. The system only ever shows the dialog once.
+    func requestAuthorizationIfNeeded() {
+        guard !hasRequestedAuthorization else { return }
+        hasRequestedAuthorization = true
+        // The system's permission dialog would come up on the machine running the UI tests, and
+        // its answer would stick to the test build.
+        #if !UITESTS
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        #endif
     }
 
     private static var categories: Set<UNNotificationCategory> {
@@ -91,8 +111,12 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         status: SessionStatus,
         category: Category?
     ) {
+        // Not every session that notifies is an agent's: a setup script or dev server that exits
+        // gets here without the question ever having been asked.
+        requestAuthorizationIfNeeded()
         let token = UUID().uuidString
         tokens[sessionID] = token
+        delivered.insert(sessionID)
         let content = UNMutableNotificationContent()
         content.title = title
         content.subtitle = subtitle
@@ -113,6 +137,7 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// The one notification that stands in for everything held back while the user was busy.
     /// Tapping it opens `sessionID`.
     func postSummary(title: String, body: String, sessionID: Session.ID, playsSound: Bool) {
+        requestAuthorizationIfNeeded()
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -123,6 +148,7 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
 
     func clear(sessionID: Session.ID) {
         tokens[sessionID] = nil
+        guard delivered.remove(sessionID) != nil else { return }
         center.removeDeliveredNotifications(withIdentifiers: [sessionID.uuidString])
     }
 
@@ -163,7 +189,7 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
             if let choice {
                 onResponse?(Response(sessionID: id, choice: choice, status: status, token: token))
             } else {
-                NSApp.activate()
+                // The receiver brings the app and its window forward; see AppModel.showMainWindow().
                 onOpenSession?(id)
             }
         }

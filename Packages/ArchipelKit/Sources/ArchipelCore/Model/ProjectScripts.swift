@@ -1,5 +1,10 @@
 import Foundation
 
+/// Which of a project's scripts a session was started for.
+public enum ScriptKind: String, Codable, Sendable {
+    case setup, run
+}
+
 /// Shell snippets a project runs for its worktrees. Empty means "not configured".
 public struct ProjectScripts: Codable, Equatable, Sendable {
     /// Run once in a freshly created worktree, e.g. installing dependencies or copying `.env`.

@@ -17,15 +17,27 @@ extension AppModel {
 
     /// Where a new worktree of this project on `branch` would be created.
     func worktreePath(for project: Project, branch: String) -> URL {
-        WorktreeLocation.path(for: project, branch: branch, defaultRoot: settings.worktreesRoot)
+        WorktreeLocation.path(for: project, branch: branch, defaultRoot: settings.worktreesRoot, among: allProjects)
     }
 
     func worktreesFolder(for project: Project) -> URL {
-        WorktreeLocation.parentFolder(for: project, defaultRoot: settings.worktreesRoot)
+        WorktreeLocation.parentFolder(for: project, defaultRoot: settings.worktreesRoot, among: allProjects)
+    }
+
+    /// Where the project's worktrees go under the default root when it has no folder of its own.
+    /// Not simply `<root>/<name>`: see `WorktreeLocation.defaultParentFolder`.
+    func defaultWorktreesFolder(for project: Project) -> URL {
+        WorktreeLocation.defaultParentFolder(for: project, defaultRoot: settings.worktreesRoot, among: allProjects)
+    }
+
+    private var allProjects: [Project] {
+        workspace.islands.flatMap(\.projects)
     }
 
     func loadProjectIcons() {
-        for project in workspace.islands.flatMap(\.projects) { loadIcon(of: project) }
+        let projects = allProjects
+        ProjectIconCache.forget(allBut: Set(projects.map(\.id)))
+        for project in projects { loadIcon(of: project) }
     }
 
     /// Fills `projectIcons` for the project. A missing entry means "draw the initial instead".
@@ -36,12 +48,68 @@ extension AppModel {
             projectIcons[id] = nil
             return
         }
+        let folder = project.folderURL
+        // Only an automatic icon is searched for, so only that search is worth remembering.
+        let remembered = icon == .automatic ? ProjectIconCache.lookup(id, folder: folder) : nil
+        let usesGit = isGitAvailable
         Task { [weak self] in
-            let image = await ProjectIconFinder.image(for: icon, in: project.folderURL)
+            let found = await ProjectIconFinder.find(icon, in: folder, remembered: remembered, usingGit: usesGit)
+            if icon == .automatic, found.searched { ProjectIconCache.remember(found.file, for: id, folder: folder) }
             // The repository scan is slow; by now the user may have chosen another icon.
             guard let self, self.workspace.project(id: id)?.icon == icon else { return }
-            self.projectIcons[id] = image
+            self.projectIcons[id] = found.image
         }
+    }
+}
+
+/// Where the icon search of each project ended, so a launch does not walk every repository again.
+/// In UserDefaults like other state that only saves work: losing it costs one search.
+nonisolated enum ProjectIconCache {
+    enum Answer: Equatable, Sendable {
+        case file(URL)
+        /// The repository has no icon of its own.
+        case nothing
+    }
+
+    private struct Entry: Codable {
+        var folder: String
+        var file: String?
+        var searchedAt: Date
+    }
+
+    private static let key = "projectIcons.found"
+    /// A repository can gain an icon, or a better one than the favicon found first. Searching again
+    /// now and then picks that up without a search at every launch.
+    private static let lifetime: TimeInterval = 7 * 24 * 60 * 60
+
+    /// Nil when the project has to be searched: never searched, searched too long ago, or moved.
+    /// A remembered file that has since been deleted is found out by whoever tries to read it.
+    static func lookup(_ id: Project.ID, folder: URL, defaults: UserDefaults = .standard) -> Answer? {
+        guard let entry = entries(defaults)[id.uuidString], entry.folder == folder.path(percentEncoded: false),
+              Date().timeIntervalSince(entry.searchedAt) < lifetime
+        else { return nil }
+        return entry.file.map { .file(URL(filePath: $0)) } ?? .nothing
+    }
+
+    static func remember(_ file: URL?, for id: Project.ID, folder: URL, defaults: UserDefaults = .standard) {
+        var all = entries(defaults)
+        all[id.uuidString] = Entry(folder: folder.path(percentEncoded: false), file: file?.path(percentEncoded: false), searchedAt: Date())
+        save(all, defaults)
+    }
+
+    static func forget(allBut projects: Set<Project.ID>, defaults: UserDefaults = .standard) {
+        let all = entries(defaults)
+        let kept = all.filter { UUID(uuidString: $0.key).map(projects.contains) ?? false }
+        if kept.count != all.count { save(kept, defaults) }
+    }
+
+    private static func entries(_ defaults: UserDefaults) -> [String: Entry] {
+        defaults.data(forKey: key).flatMap { try? JSONDecoder().decode([String: Entry].self, from: $0) } ?? [:]
+    }
+
+    private static func save(_ entries: [String: Entry], _ defaults: UserDefaults) {
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        defaults.set(data, forKey: key)
     }
 }
 
@@ -66,14 +134,38 @@ nonisolated enum ProjectIconFinder {
         "node_modules", "Pods", "Carthage", "Vendor", "vendor", "build", "dist", "DerivedData", "target",
     ]
 
-    @concurrent
-    static func findIcon(in root: URL) async -> NSImage? {
-        if let appIcon = appIconFile(under: root), let image = thumbnail(of: appIcon) { return image }
+    /// What `find(_:in:remembered:usingGit:)` came up with.
+    struct Found: Sendable {
+        var image: NSImage?
+        /// The file in the repository the image came from; nil for an avatar or no image at all.
+        var file: URL?
+        /// True when the repository was searched, which is when the answer is worth remembering.
+        var searched = false
+    }
+
+    /// The repository's own icon file. The walk for an app icon is the slow part; see `appIconFile`.
+    private static func iconFile(in root: URL) -> (file: URL, image: NSImage)? {
+        if let appIcon = appIconFile(under: root), let image = thumbnail(of: appIcon) { return (appIcon, image) }
         for path in wellKnownPaths {
             let url = root.appending(path: path)
-            if FileManager.default.fileExists(atPath: url.path), let image = thumbnail(of: url) { return image }
+            if FileManager.default.fileExists(atPath: url.path), let image = thumbnail(of: url) { return (url, image) }
         }
-        return await gitHubAvatar(for: root)
+        return nil
+    }
+
+    private static func findIcon(in root: URL, remembered: ProjectIconCache.Answer?, usingGit: Bool) async -> Found {
+        var found = Found()
+        // A remembered file that is gone or no longer an image means the repository changed.
+        if case .file(let file) = remembered, let image = thumbnail(of: file) {
+            return Found(image: image, file: file)
+        }
+        if remembered != .nothing {
+            found.searched = true
+            if let icon = iconFile(in: root) { return Found(image: icon.image, file: icon.file, searched: true) }
+        }
+        // Looking up the remote takes git, which must not be started on a Mac without it.
+        if usingGit { found.image = await gitHubAvatar(for: root) }
+        return found
     }
 
     /// The avatar of the repository's owner on GitHub, for a repository that ships no icon of its
@@ -91,10 +183,17 @@ nonisolated enum ProjectIconFinder {
     /// The image to draw for `icon`, or nil when it is a symbol or nothing was found.
     @concurrent
     static func image(for icon: ProjectIcon, in root: URL) async -> NSImage? {
+        await find(icon, in: root, remembered: nil, usingGit: true).image
+    }
+
+    /// Like `image(for:in:)`, also saying where the image came from. `remembered` is where the last
+    /// search of this repository ended, which saves searching it again.
+    @concurrent
+    static func find(_ icon: ProjectIcon, in root: URL, remembered: ProjectIconCache.Answer?, usingGit: Bool) async -> Found {
         switch icon {
-        case .symbol: nil
-        case .image(let url): thumbnail(of: url)
-        case .automatic: await findIcon(in: root)
+        case .symbol: Found()
+        case .image(let url): Found(image: thumbnail(of: url))
+        case .automatic: await findIcon(in: root, remembered: remembered, usingGit: usingGit)
         }
     }
 

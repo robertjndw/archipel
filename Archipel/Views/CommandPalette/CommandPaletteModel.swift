@@ -14,20 +14,27 @@ struct PaletteCommand: Identifiable {
     var shortcutHint: String? = nil
     /// Evaluated when the palette opens, so unavailable commands are left out instead of shown disabled.
     var isAvailable = true
-    /// False for a command that puts the keyboard somewhere itself (Commit… focuses the message field),
-    /// which the palette's usual hand-back to the focused tab would undo.
+    /// False for a command that puts the keyboard somewhere itself (Commit… focuses the message field,
+    /// others open a sheet or another window), which the palette's usual hand-back to the focused tab
+    /// would undo.
     var refocusesTab = true
+    /// Words the command is also found by but does not show, such as the name it used to have.
+    var alias: String? = nil
     let perform: @MainActor () -> Void
 
-    /// The palette shows these in this order when the query is empty.
-    static func standard(
-        model: AppModel,
-        addProject: @escaping @MainActor () -> Void,
-        toggleInspector: @escaping @MainActor () -> Void,
-        startCommit: @escaping @MainActor () -> Void
-    ) -> [PaletteCommand] {
-        let worktreeID = model.selectedWorktree?.id
+    /// What a query is matched against. The alias comes last, so the positions of a title match
+    /// are positions in the title.
+    var searchKey: String { alias.map { title + " " + $0 } ?? title }
+
+    /// The palette shows these in this order when the query is empty. They do what the menu items of
+    /// the same name do, through the same `AppActions`.
+    static func standard(model: AppModel, actions: AppActions) -> [PaletteCommand] {
+        let worktree = model.selectedWorktree
+        let worktreeID = worktree?.id
         let hasSelection = worktreeID != nil
+        let project = model.project(ofWorktree: worktreeID)
+        let session = actions.focusedSession
+        let publishes = model.pushPublishes(worktreeID)
 
         let newSessions = zip(model.agentsInMenuOrder, ["⌘T", "⌥⌘T", "⇧⌘T"]).map { agent, hint in
             PaletteCommand(
@@ -35,33 +42,97 @@ struct PaletteCommand: Identifiable {
                 title: "New \(agent.displayName) Session",
                 symbol: agent.symbolName,
                 shortcutHint: hint,
-                isAvailable: hasSelection
+                isAvailable: hasSelection && model.canStartSession(with: agent)
             ) {
                 if let worktreeID { model.newSession(in: worktreeID, agent: agent) }
             }
         }
 
+        let stayAwake = model.stayAwake
+        let stayAwakeModes = StayAwake.Mode.allCases.map { mode in
+            PaletteCommand(
+                id: "stay-awake-\(mode.rawValue)",
+                title: "Stay Awake: \(mode.title)",
+                symbol: mode == .off ? "cup.and.saucer" : "cup.and.heat.waves.fill",
+                isAvailable: stayAwake.mode != mode
+            ) { stayAwake.mode = mode }
+        }
+
         return newSessions + [
-            PaletteCommand(id: "add-project", title: "Add Project…", symbol: "folder.badge.plus", shortcutHint: "⇧⌘O", perform: addProject),
-            PaletteCommand(id: "toggle-inspector", title: "Toggle Inspector", symbol: "sidebar.trailing", shortcutHint: "⌥⌘0", perform: toggleInspector),
+            PaletteCommand(id: "add-project", title: "Add Project…", symbol: "folder.badge.plus", shortcutHint: "⇧⌘O", refocusesTab: false) { actions.addProject() },
+            PaletteCommand(id: "new-island", title: "New Island…", symbol: "plus.square.on.square", refocusesTab: false) {
+                if model.readyForSheet() { model.isCreatingIsland = true }
+            },
+            PaletteCommand(
+                id: "toggle-inspector",
+                title: actions.isInspectorShown ? "Hide Inspector" : "Show Inspector",
+                symbol: "sidebar.trailing",
+                shortcutHint: "⌥⌘0",
+                // The title names what it will do now; people still look for it by what it is.
+                alias: "Toggle Inspector"
+            ) { actions.toggleInspector() },
+            PaletteCommand(id: "show-files", title: "Show Files", symbol: "folder", shortcutHint: "⌥⌘1") { actions.revealInspector(.files) },
+            PaletteCommand(id: "show-changes", title: "Show Changes", symbol: "plus.forwardslash.minus", shortcutHint: "⌥⌘2") {
+                actions.revealInspector(.changes)
+            },
+            PaletteCommand(
+                id: "toggle-sidebar",
+                title: actions.isSidebarCollapsed ? "Show Sidebar" : "Hide Sidebar",
+                symbol: "sidebar.leading",
+                shortcutHint: "⌃⌘S"
+            ) { actions.toggleSidebar() },
             PaletteCommand(
                 id: "split-right",
                 title: "Split Right",
                 symbol: "rectangle.split.2x1",
                 shortcutHint: "⌘\\",
-                isAvailable: (model.selectedWorktree?.focusedPane?.tabs.count ?? 0) >= 2
+                isAvailable: (worktree?.focusedPane?.tabs.count ?? 0) >= 2
             ) {
                 if let tab = model.focusedTab { model.split(tab: tab.id) }
             },
             PaletteCommand(id: "close-tab", title: "Close Tab", symbol: "xmark", shortcutHint: "⌘W", isAvailable: model.focusedTab != nil) {
                 if let tab = model.focusedTab { model.close(tab: tab.id) }
             },
+            PaletteCommand(id: "reload-page", title: "Reload Page", symbol: "arrow.clockwise", isAvailable: actions.focusedWebTab != nil) {
+                actions.reloadFocusedPage()
+            },
+            PaletteCommand(id: "save", title: "Save", symbol: "square.and.arrow.down", shortcutHint: "⌘S", isAvailable: actions.unsavedFocusedFile != nil) {
+                // Not `actions.save()`: that asks the first responder first, which is the palette's
+                // own text field while this runs.
+                if let url = actions.unsavedFocusedFile { try? model.documents.save(url) }
+            },
+            PaletteCommand(
+                id: "save-all",
+                title: "Save All",
+                symbol: "square.and.arrow.down.on.square",
+                shortcutHint: "⌥⌘S",
+                isAvailable: !model.documents.dirtyURLs.isEmpty
+            ) { model.saveAllDocuments() },
+            PaletteCommand(
+                id: "rename-session",
+                title: "Rename Session…",
+                symbol: "pencil",
+                isAvailable: session != nil,
+                refocusesTab: false
+            ) { actions.renameFocusedSession() },
+            PaletteCommand(id: "restart-session", title: "Restart Session", symbol: "arrow.clockwise", isAvailable: session != nil) {
+                actions.restartFocusedSession()
+            },
+            PaletteCommand(
+                id: "restart-session-fresh",
+                title: "Restart with a New Conversation",
+                symbol: "plus.bubble",
+                isAvailable: session?.agentSessionID != nil
+            ) { actions.restartFocusedSession(fresh: true) },
             PaletteCommand(
                 id: "next-attention",
                 title: "Next Session Needing Attention",
                 symbol: "bell.badge",
                 shortcutHint: "⇧⌘U"
             ) { model.selectNextNeedingAttention() },
+            PaletteCommand(id: "mark-read", title: "Mark as Read", symbol: "envelope.open", isAvailable: actions.selectedWorktreeHasUnread) {
+                actions.markSelectedWorktreeRead()
+            },
             PaletteCommand(id: "run", title: "Run", symbol: "play", shortcutHint: "⌘R", isAvailable: hasSelection) {
                 if let worktreeID { model.runProject(in: worktreeID) }
             },
@@ -69,7 +140,7 @@ struct PaletteCommand: Identifiable {
                 id: "run-setup",
                 title: "Run Setup Script",
                 symbol: "wrench.and.screwdriver",
-                isAvailable: model.project(ofWorktree: worktreeID)?.scripts.setupCommand != nil
+                isAvailable: project?.scripts.setupCommand != nil
             ) {
                 if let worktreeID { model.startScript(.setup, in: worktreeID) }
             },
@@ -78,10 +149,17 @@ struct PaletteCommand: Identifiable {
                 title: "Commit…",
                 symbol: "checkmark.circle",
                 shortcutHint: "⌥⌘C",
-                isAvailable: hasSelection,
-                refocusesTab: false,
-                perform: startCommit
-            ),
+                isAvailable: actions.canCommit,
+                refocusesTab: false
+            ) { actions.startCommit() },
+            PaletteCommand(id: "pull", title: "Pull", symbol: "arrow.down", isAvailable: model.canSync(.pull, worktreeID)) { actions.sync(.pull) },
+            PaletteCommand(
+                id: "push",
+                title: publishes ? "Publish Branch" : "Push",
+                symbol: publishes ? "icloud.and.arrow.up" : "arrow.up",
+                isAvailable: model.canSync(.push, worktreeID)
+            ) { actions.sync(.push) },
+            PaletteCommand(id: "fetch", title: "Fetch", symbol: "arrow.triangle.2.circlepath", isAvailable: model.canSync(.fetch, worktreeID)) { actions.sync(.fetch) },
             PaletteCommand(
                 id: "open-in-editor",
                 title: model.preferredEditor.map { "Open in \($0.name)" } ?? "Open in Editor",
@@ -89,33 +167,59 @@ struct PaletteCommand: Identifiable {
                 shortcutHint: "⇧⌘E",
                 isAvailable: hasSelection && model.preferredEditor != nil
             ) {
-                if let worktree = model.selectedWorktree { model.openInEditor(worktree.path) }
+                if let worktree { model.openInEditor(worktree.path) }
+            },
+            PaletteCommand(id: "show-in-finder", title: "Show in Finder", symbol: "folder", isAvailable: hasSelection) {
+                if let worktree { model.revealInFinder(worktree.path) }
+            },
+            PaletteCommand(id: "open-in-terminal", title: "Open in Terminal", symbol: "apple.terminal", isAvailable: hasSelection) {
+                if let worktree { model.openInTerminal(worktree.path) }
+            },
+            PaletteCommand(
+                id: "copy-branch-name",
+                title: "Copy Branch Name",
+                symbol: "arrow.triangle.branch",
+                isAvailable: worktree?.branch != nil
+            ) {
+                if let branch = worktree?.branch { model.copyToPasteboard(branch) }
             },
             PaletteCommand(
                 id: "add-worktree",
                 title: "Add Worktree…",
                 symbol: "plus",
                 shortcutHint: "⇧⌘N",
-                isAvailable: model.project(ofWorktree: worktreeID) != nil
-            ) {
-                if let project = model.project(ofWorktree: worktreeID) { model.addWorktreeProjectID = project.id }
-            },
+                isAvailable: actions.projectForNewWorktree != nil,
+                refocusesTab: false
+            ) { actions.addWorktree() },
             PaletteCommand(
                 id: "switch-branch",
                 title: "Switch Branch…",
                 symbol: "arrow.triangle.swap",
                 shortcutHint: "⇧⌘B",
-                isAvailable: hasSelection
-            ) {
-                if let worktreeID { model.switchBranchWorktreeID = worktreeID }
-            },
+                isAvailable: actions.worktreeForBranchSwitch != nil,
+                refocusesTab: false
+            ) { actions.switchBranch() },
             PaletteCommand(
-                id: "project-settings",
-                title: "Project Settings…",
-                symbol: "gearshape",
-                isAvailable: model.project(ofWorktree: worktreeID) != nil
-            ) {
-                if let project = model.project(ofWorktree: worktreeID) { model.openProjectSettings(project.id) }
+                id: "remove-worktree",
+                title: "Remove Worktree…",
+                symbol: "minus.circle",
+                isAvailable: actions.removableWorktree != nil,
+                refocusesTab: false
+            ) { actions.removeSelectedWorktree() },
+            PaletteCommand(id: "project-settings", title: "Project Settings…", symbol: "gearshape", isAvailable: project != nil, refocusesTab: false) {
+                if let project { model.openProjectSettings(project.id) }
+            },
+        ] + stayAwakeModes + [
+            PaletteCommand(id: "settings", title: "Settings…", symbol: "gearshape", shortcutHint: "⌘,", refocusesTab: false) { actions.openSettings() },
+            PaletteCommand(
+                id: "check-for-updates",
+                title: "Check for Updates…",
+                symbol: "arrow.down.circle",
+                isAvailable: Updater.isEnabled && actions.updater.canCheckForUpdates,
+                refocusesTab: false
+            ) { actions.updater.checkForUpdates() },
+            PaletteCommand(id: "help", title: "Archipel Help", symbol: "questionmark.circle", refocusesTab: false) {
+                NSWorkspace.shared.open(AppActions.helpURL)
             },
         ]
     }
@@ -267,7 +371,7 @@ final class CommandPaletteModel {
     }
 
     private func commandRows(matching text: String, limit: Int) -> [PaletteRow] {
-        FuzzyMatcher.rank(commands, query: text, limit: limit, key: \.title).map { command, match in
+        FuzzyMatcher.rank(commands, query: text, limit: limit, key: \.searchKey).map { command, match in
             row(for: command, matches: match)
         }
     }
@@ -293,7 +397,7 @@ final class CommandPaletteModel {
         // The subtitle rides along at the end of the key, so it matches too, but the title's start and boundary
         // bonuses make a title hit outrank a context-only hit.
         let ranked = FuzzyMatcher.rank(destinations, query: text, limit: Self.destinationLimit) { $0.title + " " + $0.subtitle }
-        let rankedCommands = FuzzyMatcher.rank(commands, query: text, limit: 20, key: \.title)
+        let rankedCommands = FuzzyMatcher.rank(commands, query: text, limit: 20, key: \.searchKey)
 
         var merged: [(score: Int, row: PaletteRow)] = []
         for (entry, match) in ranked { merged.append((match.score, row(for: entry, matches: match, app: app))) }
@@ -309,7 +413,8 @@ final class CommandPaletteModel {
             id: "command:\(command.id)",
             symbol: command.symbol,
             title: command.title,
-            titleMatches: Set(match?.positions ?? []),
+            // A hit in the alias has nothing in the title to highlight.
+            titleMatches: Set((match?.positions ?? []).filter { $0 < command.title.count }),
             subtitle: nil,
             subtitleMatches: [],
             activity: nil,
@@ -369,6 +474,8 @@ final class CommandPaletteModel {
         loadTask = Task { [weak self] in
             let listed: [String]
             do {
+                // Without git even asking would bring up the system's install dialog.
+                guard app.isGitAvailable else { throw CancellationError() }
                 listed = try await git.listFiles(in: root)
             } catch {
                 // Not a repository (or git failed): walk the folder instead.

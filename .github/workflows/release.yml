@@ -1,8 +1,9 @@
 name: Release
 
-# Publishing a GitHub release (or prerelease) builds Archipel and attaches
-# Archipel-<version>.dmg to it. Running the workflow by hand builds a DMG as a
-# workflow artifact instead, without touching any release.
+# Publishing a GitHub release (or prerelease) runs the UI tests, then builds
+# Archipel and attaches Archipel-<version>.dmg to it. Running the workflow by
+# hand builds a DMG as a workflow artifact instead, without touching any
+# release.
 #
 # Signing is optional: with the Developer ID secrets set the DMG is signed and
 # notarized, without them it is signed ad-hoc. Only a notarized DMG is added to
@@ -23,7 +24,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A release that fails the UI tests gets no DMG and never reaches the appcast. A run by hand
+  # skips them, since its DMG is only an artifact.
+  ui-tests:
+    if: github.event_name == 'release'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ui-tests.yml
+
   dmg:
+    needs: ui-tests
+    # A skipped job counts as not succeeded, which would skip this one too on a run by hand.
+    if: ${{ !cancelled() && (needs.ui-tests.result == 'success' || needs.ui-tests.result == 'skipped') }}
     # The app targets macOS 27, which needs Xcode 27. The macos-26 images don't have it.
     runs-on: xcode-27
     timeout-minutes: 60

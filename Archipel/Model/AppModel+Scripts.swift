@@ -4,19 +4,19 @@ import Foundation
 
 /// A project script running as a session's process.
 struct ScriptRun: Equatable {
-    enum Kind {
-        case setup, run
-
-        var title: String {
-            switch self {
-            case .setup: "Setup"
-            case .run: "Run"
-            }
-        }
-    }
+    typealias Kind = ScriptKind
 
     var kind: Kind
     var command: String
+}
+
+extension ScriptKind {
+    var title: String {
+        switch self {
+        case .setup: "Setup"
+        case .run: "Run"
+        }
+    }
 }
 
 extension AppModel {
@@ -25,6 +25,7 @@ extension AppModel {
     }
 
     func openProjectSettings(_ id: Project.ID, showingScripts: Bool = false) {
+        guard readyForSheet() else { return }
         projectSettingsShowsScripts = showingScripts
         projectSettingsID = id
     }
@@ -40,9 +41,10 @@ extension AppModel {
         startScript(.run, in: worktreeID)
     }
 
-    /// Reuses the worktree's live session of that kind so repeated runs do not pile up tabs (and a
-    /// second dev server does not fight the first over its port). The script is read again each
-    /// time, so edits in the settings apply on the next run.
+    /// Reuses the worktree's session of that kind so repeated runs do not pile up tabs (and a
+    /// second dev server does not fight the first over its port). That includes a tab restored
+    /// after a relaunch, which is a plain shell until the script is run in it again. The script is
+    /// read again each time, so edits in the settings apply on the next run.
     func startScript(_ kind: ScriptRun.Kind, in worktreeID: Worktree.ID) {
         guard let worktree = workspace.worktree(id: worktreeID), let project = project(ofWorktree: worktreeID) else { return }
         let command = switch kind {
@@ -52,15 +54,16 @@ extension AppModel {
         guard let command else { return }
         let run = ScriptRun(kind: kind, command: command)
 
-        if let existing = worktree.sessions.first(where: { scriptSessions[$0.id]?.kind == kind }) {
+        if let existing = worktree.sessions.first(where: { $0.script == kind }) {
             scriptSessions[existing.id] = run
             select(session: existing.id)
-            restartSession(existing.id)
+            // No confirmation: running the script again is itself the request to stop the last run.
+            restartSessionNow(existing.id)
             return
         }
 
         // A custom title, because the terminal title of a script is whatever the script prints there.
-        let session = Session(title: kind.title, hasCustomTitle: true, agent: .shell)
+        let session = Session(title: kind.title, hasCustomTitle: true, agent: .shell, script: kind)
         // Registered before the session exists in the workspace, since selecting it starts it.
         scriptSessions[session.id] = run
         changingSelection {

@@ -10,14 +10,25 @@ public struct GitFileDiff: Equatable, Sendable {
     public var newPath: String?
     public var status: Status
     public var isBinary: Bool
+    /// True for an unmerged path. git describes those in combined format, or not at all, so there
+    /// are never any hunks to go with it.
+    public var isConflicted: Bool
     public var hunks: [GitDiffHunk]
 
-    public init(oldPath: String?, newPath: String?, status: Status, isBinary: Bool = false, hunks: [GitDiffHunk] = []) {
+    public init(
+        oldPath: String?,
+        newPath: String?,
+        status: Status,
+        isBinary: Bool = false,
+        hunks: [GitDiffHunk] = [],
+        isConflicted: Bool = false
+    ) {
         self.oldPath = oldPath
         self.newPath = newPath
         self.status = status
         self.isBinary = isBinary
         self.hunks = hunks
+        self.isConflicted = isConflicted
     }
 }
 
@@ -62,17 +73,23 @@ extension GitParser {
     ///
     /// Hunk bodies are consumed by the line counts in their `@@` header rather than by prefix, so
     /// content that happens to start with `diff ` or `@@` is never mistaken for a header.
+    ///
+    /// An unmerged path comes back with `isConflicted` set and no hunks. For those git prints either
+    /// a combined diff (`diff --cc`, `@@@` hunks with one prefix column per parent) or, when a side
+    /// is missing or the diff is against the index, only a `* Unmerged path` line.
     static func fileDiffs(_ output: String) -> [GitFileDiff] {
         var files: [GitFileDiff] = []
         var current: GitFileDiff?
         var oldRemaining = 0
         var newRemaining = 0
+        var inCombinedBody = false
 
         func flush() {
             if let file = current { files.append(file) }
             current = nil
             oldRemaining = 0
             newRemaining = 0
+            inCombinedBody = false
         }
 
         var lines = output.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false)
@@ -102,6 +119,17 @@ extension GitParser {
             } else if line.starts(with: "diff ".unicodeScalars) {
                 flush()
                 current = GitFileDiff(oldPath: nil, newPath: nil, status: .modified)
+                current?.isConflicted = line.starts(with: "diff --cc ".unicodeScalars) || line.starts(with: "diff --combined ".unicodeScalars)
+            } else if let path = line.dropPrefix("* Unmerged path ") {
+                flush()
+                let path = unquote(path)
+                files.append(GitFileDiff(oldPath: path, newPath: path, status: .modified, isConflicted: true))
+            } else if inCombinedBody {
+                // Every body line starts with the prefix columns, so none can pass for a `diff ` line
+                // above, but `--- x` is a perfectly good one and must not be read as a file header.
+                continue
+            } else if current?.isConflicted == true, line.starts(with: "@@@".unicodeScalars) {
+                inCombinedBody = true
             } else if current != nil, let header = line.dropPrefix("@@ "), let hunk = hunkHeader(header) {
                 current?.hunks.append(hunk)
                 oldRemaining = hunk.oldCount

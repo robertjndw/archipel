@@ -146,6 +146,8 @@ enum PreviewSamples {
 
     static let renamedOnly = GitFileDiff(oldPath: "Sources/Helpers.swift", newPath: "Sources/Util/StringHelpers.swift", status: .renamed)
 
+    static let conflicted = GitFileDiff(oldPath: mixedPath, newPath: mixedPath, status: .modified, isConflicted: true)
+
     static let binary = GitFileDiff(oldPath: "Assets/AppIcon.png", newPath: "Assets/AppIcon.png", status: .modified, isBinary: true)
 
     /// Same text on both sides, only the line endings differ, so the header shows LF to CRLF.

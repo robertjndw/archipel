@@ -23,8 +23,12 @@ public enum UsageDecoder {
     /// secondary and says how long each one is, which differs by plan.
     public static func codexRateLimits(_ limits: [String: Any], at date: Date) -> ProviderUsage? {
         let windows = ["primary", "secondary"].compactMap { key -> UsageWindow? in
-            guard let raw = limits[key] as? [String: Any], let minutes = number(raw["window_minutes"]) else { return nil }
-            return window(raw, percentKey: "used_percent", minutes: Int(minutes))
+            // Int(exactly:) because the plain conversion traps on NaN, infinity and anything out of
+            // range, and this number comes straight out of a log file.
+            guard let raw = limits[key] as? [String: Any],
+                  let minutes = number(raw["window_minutes"]).flatMap({ Int(exactly: $0.rounded(.towardZero)) })
+            else { return nil }
+            return window(raw, percentKey: "used_percent", minutes: minutes)
         }
         guard !windows.isEmpty else { return nil }
         return ProviderUsage(provider: .codex, windows: windows, updatedAt: date)
@@ -46,8 +50,9 @@ public enum UsageDecoder {
     }
 
     private static func window(_ raw: [String: Any], percentKey: String, minutes: Int) -> UsageWindow? {
-        guard let percent = number(raw[percentKey]) else { return nil }
-        return UsageWindow(usedPercent: percent, windowMinutes: minutes, resetsAt: resetDate(raw["resets_at"]))
+        // The status bar rounds this to an Int, which traps on NaN, infinity and a number like 1e300.
+        guard let percent = number(raw[percentKey]), percent.isFinite else { return nil }
+        return UsageWindow(usedPercent: min(max(percent, 0), 100), windowMinutes: minutes, resetsAt: resetDate(raw["resets_at"]))
     }
 
     /// Epoch seconds in both agents today; an ISO 8601 string is accepted too in case that changes.

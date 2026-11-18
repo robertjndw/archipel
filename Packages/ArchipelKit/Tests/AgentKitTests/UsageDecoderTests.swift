@@ -52,6 +52,33 @@ struct UsageDecoderTests {
         #expect(usage.windows.map(\.shortLabel) == ["5h", "week"])
     }
 
+    @Test func codexWindowLengthThatIsNoUsableNumberIsSkipped() throws {
+        // Converting these to Int the plain way traps.
+        let huge = try json(#"{"primary": {"used_percent": 2.0, "window_minutes": 1e300}, "secondary": {"used_percent": 4.0, "window_minutes": 10080}}"#)
+        #expect(UsageDecoder.codexRateLimits(huge, at: now)?.windows.map(\.windowMinutes) == [10080])
+
+        for value in [Double.nan, .infinity, -.infinity, -1e300] {
+            let limits: [String: Any] = ["primary": ["used_percent": 2.0, "window_minutes": NSNumber(value: value)]]
+            #expect(UsageDecoder.codexRateLimits(limits, at: now) == nil)
+        }
+        let fractional = try json(#"{"primary": {"used_percent": 2.0, "window_minutes": 300.9}}"#)
+        #expect(UsageDecoder.codexRateLimits(fractional, at: now)?.windows.map(\.windowMinutes) == [300])
+    }
+
+    @Test func percentThatIsNoUsableNumberIsSkippedOrClamped() throws {
+        // The status bar rounds the percentage to an Int, which traps on all of these.
+        for value in [Double.nan, .infinity, -.infinity] {
+            let limits: [String: Any] = ["primary": ["used_percent": NSNumber(value: value), "window_minutes": 300]]
+            #expect(UsageDecoder.codexRateLimits(limits, at: now) == nil)
+            let payload: [String: Any] = ["rate_limits": ["five_hour": ["used_percentage": NSNumber(value: value)]]]
+            #expect(UsageDecoder.claudeStatusLine(payload, at: now) == nil)
+        }
+        let outOfRange = try json(#"{"primary": {"used_percent": 1e300, "window_minutes": 300}, "secondary": {"used_percent": -1e300, "window_minutes": 10080}}"#)
+        #expect(UsageDecoder.codexRateLimits(outOfRange, at: now)?.windows.map(\.usedPercent) == [100, 0])
+        let claude = try json(#"{"rate_limits": {"five_hour": {"used_percentage": 1e300}}}"#)
+        #expect(UsageDecoder.claudeStatusLine(claude, at: now)?.windows.map(\.usedPercent) == [100])
+    }
+
     @Test func codexMonthlyWindowOnTheFreePlan() throws {
         let limits = try json(#"{"primary": {"used_percent": 2.0, "window_minutes": 43200, "resets_at": 1796590778}, "secondary": null}"#)
         let usage = try #require(UsageDecoder.codexRateLimits(limits, at: now))

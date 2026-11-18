@@ -26,17 +26,29 @@ final class ChangesModel {
     private let git = GitClient()
     private var generation = 0
 
-    /// Kept here rather than in the view so switching inspector tabs does not lose a half-written message.
-    var message = ""
+    /// Kept outside the view so switching inspector tabs does not lose a half-written message, and
+    /// in `CommitMessageDrafts` rather than in the model so switching worktrees does not either.
+    /// Read from there every time instead of copied once: a commit can finish in a model that the
+    /// inspector has already replaced, and its successor must not keep showing the committed text.
+    var message: String {
+        get { CommitMessageDrafts.shared.draft(for: root) }
+        set { CommitMessageDrafts.shared.set(newValue, for: root) }
+    }
     private(set) var activity: Activity?
     /// Bumped when a push or pull lands, so its arrow can fly off before the label changes.
     private(set) var syncCompletion = SyncCompletion(count: 0, direction: .up)
+    /// Bumped when a commit lands, for the commit button's checkmark.
+    private(set) var commitCompletions = 0
     private(set) var hasRemote = false
     private(set) var pullRequestLookup: PullRequestLookup?
     private let searchPATH: @MainActor () async -> String
     private var gitHubTask: Task<GitHubClient?, Never>?
     private var lookupGeneration = 0
     private var lookupBranch: String?
+    /// The newest git command started from here: a stage, unstage or discard, and the git part of a
+    /// commit, push, pull or fetch. Each one waits for the one before, since two git processes
+    /// writing the index at once make the second fail on index.lock.
+    private var pendingChange: Task<Void, Never>?
 #if DEBUG
     /// Set on preview samples, which have no repository behind them and must never run git.
     @ObservationIgnored fileprivate var isPreviewSample = false
@@ -118,7 +130,23 @@ final class ChangesModel {
         perform { try await $0.unstageAll(in: $1) }
     }
 
-    func discard(_ change: GitFileChange, staged: Bool) {
+    /// What the files of some changes look like on disk right now, to hand back to `discard` or
+    /// `discardAll` once the user has answered.
+    func stamps(of changes: [GitFileChange]) -> [String: FileStamp] {
+        Dictionary(changes.map { ($0.path, FileStamp(of: root.appending(path: $0.path))) }) { first, _ in first }
+    }
+
+    /// An agent can rewrite a file while the confirmation is open without its entry changing at
+    /// all, and what it wrote was never agreed to.
+    private func isUntouched(_ change: GitFileChange, since seen: [String: FileStamp]?) -> Bool {
+        guard let seen else { return true }
+        return seen[change.path] == FileStamp(of: root.appending(path: change.path))
+    }
+
+    func discard(_ change: GitFileChange, staged: Bool, seen: [String: FileStamp]? = nil) {
+        // The poll keeps running while the confirmation is open. An entry that has since gone or
+        // changed kind is not the one that was agreed to, as in `discardAll`.
+        guard (staged ? status.staged : status.unstaged).contains(change), isUntouched(change, since: seen) else { return }
         let changes = [change]
         perform { git, root in
             if staged {
@@ -130,8 +158,14 @@ final class ChangesModel {
     }
 
     /// Only the unstaged section: staged work is never thrown away in bulk.
-    func discardAll() {
-        let changes = status.unstaged.filter(\.isDiscardable)
+    ///
+    /// `confirmed` is the list the dialog asked about. The poll keeps running while the dialog is
+    /// open, so the section may have grown since; anything new was never agreed to. Entries that
+    /// went away or changed kind in the meantime are dropped rather than discarded blind, and so
+    /// are files written to since `seen` was taken.
+    func discardAll(_ confirmed: [GitFileChange], seen: [String: FileStamp]? = nil) {
+        let current = Dictionary(status.unstaged.map { ($0.path, $0) }) { first, _ in first }
+        let changes = confirmed.filter { $0.isDiscardable && current[$0.path] == $0 && isUntouched($0, since: seen) }
         guard !changes.isEmpty else { return }
         perform { try await $0.discardUnstaged(changes, in: $1) }
     }
@@ -140,8 +174,17 @@ final class ChangesModel {
         let control = commitControl
         guard control.isEnabled else { return }
         let text = message
-        let stagesFirst = control.mode == .commitAll
         run(.commit) { [git, root] in
+            // Asked now, with the stages queued before this commit done. The status on screen can
+            // still be the one from before a stage click, with nothing staged, and going by that
+            // would turn "commit the file I just staged" into "commit everything".
+            let status = try await git.status(in: root)
+            let fresh = CommitControl(status: status, message: text, isBusy: false)
+            // A merge an agent started since the click would otherwise be staged, markers and all.
+            guard fresh.isEnabled else {
+                throw GitError(message: "The changes are no longer what the list showed, so nothing was committed. Look at them again before you commit.")
+            }
+            let stagesFirst = fresh.mode == .commitAll
             if stagesFirst { try await git.stageAll(in: root) }
             do {
                 try await git.commit(message: text, in: root)
@@ -150,6 +193,7 @@ final class ChangesModel {
                 throw GitError(message: "All changes were staged, but the commit failed. They remain staged.\n\(error.localizedDescription)")
             }
         } onSuccess: { [self] in
+            commitCompletions += 1
             // The user may have kept typing while git ran.
             if message == text { message = "" }
         }
@@ -188,7 +232,7 @@ final class ChangesModel {
 
     func fetch() {
         guard syncState.canFetch else { return }
-        run(.fetch) { [git, root] in try await git.fetch(in: root) } onSuccess: {}
+        run(.fetch) { [git, root] in try await git.fetch(in: root, userInitiated: true) } onSuccess: {}
     }
 
     /// Network and process work that changes slowly: the remote list and the branch's pull request.
@@ -224,6 +268,10 @@ final class ChangesModel {
         let outcome: PullRequestLookup.Outcome
         do {
             outcome = try await client.pullRequest(in: root).map { .found($0) } ?? .none
+        } catch is CancellationError {
+            // The tab went off screen and took gh down with it. That says nothing about the pull
+            // request, so what was known stays until the next lookup.
+            return
         } catch {
             // Not signed in or not a GitHub remote: the control just stays away instead of nagging.
             outcome = .unavailable
@@ -244,12 +292,26 @@ final class ChangesModel {
 #endif
         self.activity = activity
         actionError = nil
-        Task {
+        let previous = pendingChange
+        let outcome = Task { () -> (any Error)? in
+            // A commit right after a quick stage click would otherwise race it for the index.
+            await previous?.value
             do {
                 try await work()
-                await onSuccess()
+                return nil
             } catch {
+                return error
+            }
+        }
+        // Only the git command is a link in the chain, so a stage clicked while a pre-commit hook
+        // runs waits for the commit. What follows (the arrow's flight, the pull request lookup)
+        // leaves the index alone and need not hold anything up.
+        pendingChange = Task { _ = await outcome.value }
+        Task {
+            if let error = await outcome.value {
                 actionError = error.localizedDescription
+            } else {
+                await onSuccess()
             }
             // Refresh before going idle: the other order briefly offers the action that just ran again,
             // which after a push would also bring the sent-off arrow back for a moment.
@@ -272,7 +334,9 @@ final class ChangesModel {
 #endif
         let git = git
         let root = root
-        Task {
+        let previous = pendingChange
+        pendingChange = Task {
+            await previous?.value
             do {
                 try await action(git, root)
                 actionError = nil
@@ -284,21 +348,60 @@ final class ChangesModel {
     }
 }
 
+/// Unsent commit messages by worktree, for as long as the app runs. The inspector rebuilds its
+/// models whenever the selected worktree changes, so the model alone would lose a draft on every switch.
+@MainActor @Observable
+final class CommitMessageDrafts {
+    static let shared = CommitMessageDrafts()
+
+    private var drafts: [String: String] = [:]
+
+    func draft(for root: URL) -> String {
+        drafts[root.pathKey] ?? ""
+    }
+
+    func set(_ message: String, for root: URL) {
+        let message = message.isEmpty ? nil : message
+        // Called on every keystroke, and an equal write would still redraw the field.
+        if drafts[root.pathKey] != message { drafts[root.pathKey] = message }
+    }
+}
+
 extension GitFileChange {
     /// Conflicts need resolving, and discarding one would silently pick a side.
     var isDiscardable: Bool { kind != .conflicted }
+}
+
+/// Enough of a file's state on disk to notice that it was written to. A missing file has neither.
+struct FileStamp: Equatable {
+    var modified: Date?
+    var size: Int?
+
+    init(of url: URL) {
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        modified = values?.contentModificationDate
+        size = values?.fileSize
+    }
 }
 
 /// What the confirmation dialog is asking about. Lives on the model so rows, menus and the
 /// section header can all raise the one dialog.
 enum DiscardRequest: Equatable {
     case file(GitFileChange, staged: Bool)
-    case allUnstaged(count: Int)
+    /// The discardable unstaged entries as they were when the dialog was raised.
+    case allUnstaged([GitFileChange])
+
+    var changes: [GitFileChange] {
+        switch self {
+        case .file(let change, _): [change]
+        case .allUnstaged(let changes): changes
+        }
+    }
 
     var title: String {
         switch self {
         case .file(let change, _): "Discard changes to \((change.path as NSString).lastPathComponent)?"
-        case .allUnstaged(let count): "Discard all \(count) unstaged changes?"
+        case .allUnstaged(let changes): "Discard all \(changes.count) unstaged changes?"
         }
     }
 
@@ -307,6 +410,8 @@ enum DiscardRequest: Equatable {
         case .file(let change, let staged):
             if change.kind == .untracked { return "This file is not tracked by Git. It will be moved to the Trash." }
             if staged { return "Staged and unstaged changes to this file will be lost. This can't be undone." }
+            // Unstaged and added means `git add -N`: git holds no content for it, so it is trashed like an untracked file.
+            if change.kind == .added { return "Git has no copy of this file yet. It will be moved to the Trash." }
             return "This can't be undone."
         case .allUnstaged:
             return "Untracked files will be moved to the Trash. Changes to tracked files can't be recovered. Staged changes are kept."
@@ -321,6 +426,9 @@ struct ChangesTab: View {
     @State private var showsStaged = true
     @State private var showsUnstaged = true
     @State private var discardRequest: DiscardRequest?
+    /// The files of `discardRequest` as they were when the question was asked.
+    @State private var discardStamps: [String: FileStamp] = [:]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -329,8 +437,9 @@ struct ChangesTab: View {
             } accessory: {
                 if model.phase == .ready { SyncMenu(model: model) }
             }
-            if let message = model.actionError ?? model.refreshError {
+            if let message = bannerMessage {
                 ErrorBanner(message: message, dismiss: model.actionError == nil ? nil : { model.actionError = nil })
+                    .transition(.opacity)
             }
             content
                 .frame(maxHeight: .infinity)
@@ -338,6 +447,8 @@ struct ChangesTab: View {
                 CommitArea(model: model, focusRequest: $focusCommitMessage)
             }
         }
+        // The banner pushes the list down, so its arrival only animates without Reduce Motion.
+        .animation(reduceMotion ? nil : Motion.disclosure, value: bannerMessage != nil)
         .refreshing(every: .seconds(3)) { await model.refresh() }
         .task { await model.refreshRemoteInfo() }
         .onChange(of: model.status.branch) { refreshRemoteInfo() }
@@ -350,13 +461,20 @@ struct ChangesTab: View {
         ) { request in
             Button("Discard", role: .destructive) {
                 switch request {
-                case .file(let change, let staged): model.discard(change, staged: staged)
-                case .allUnstaged: model.discardAll()
+                case .file(let change, let staged): model.discard(change, staged: staged, seen: discardStamps)
+                case .allUnstaged(let changes): model.discardAll(changes, seen: discardStamps)
                 }
             }
         } message: { request in
             Text(request.message)
         }
+        .onChange(of: discardRequest) { _, request in
+            if let request { discardStamps = model.stamps(of: request.changes) }
+        }
+    }
+
+    private var bannerMessage: String? {
+        model.actionError ?? model.refreshError
     }
 
     @ViewBuilder
@@ -443,8 +561,10 @@ struct ChangesTab: View {
                 ForEach(changes.map { ListedChange(change: $0, staged: staged) }) { row in
                     // Keep the HStack. With ChangeRow directly in the ForEach, a few thousand changes froze
                     // the app for 40 seconds after a branch switch, and Xcode Previews crashed on a SwiftUI
-                    // assertion. Probably List can't tell that ChangeRow is a single row without building
-                    // it; an HStack always is one.
+                    // assertion. List templates its row ids from the ForEach content's structure, and a
+                    // custom view whose body ends in a conditional (FileDragModifier) could be any number
+                    // of rows, so List has to build every ChangeRow to count them. An HStack is always
+                    // exactly one row.
                     HStack {
                         ChangeRow(change: row.change, staged: staged, model: model) {
                             discardRequest = .file(row.change, staged: staged)
@@ -456,7 +576,7 @@ struct ChangesTab: View {
         } header: {
             HStack {
                 Button {
-                    withAnimation(.snappy(duration: 0.2)) { isExpanded.wrappedValue.toggle() }
+                    withAnimation(reduceMotion ? nil : Motion.disclosure) { isExpanded.wrappedValue.toggle() }
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "chevron.right")
@@ -468,6 +588,8 @@ struct ChangesTab: View {
                         Text(changes.count, format: .number)
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
+                            .contentTransition(.numericText(value: Double(changes.count)))
+                            .animation(reduceMotion ? nil : .smooth, value: changes.count)
                     }
                     .contentShape(.rect)
                 }
@@ -476,13 +598,14 @@ struct ChangesTab: View {
                 .accessibilityHint(isExpanded.wrappedValue ? "Collapses the section" : "Expands the section")
                 Spacer()
                 if !staged {
-                    let discardable = changes.filter(\.isDiscardable).count
-                    if discardable > 0 {
+                    let discardable = changes.filter(\.isDiscardable)
+                    if !discardable.isEmpty {
                         Button("Discard All Changes", systemImage: "arrow.uturn.backward") {
-                            discardRequest = .allUnstaged(count: discardable)
+                            discardRequest = .allUnstaged(discardable)
                         }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
                         .help("Discard All Changes")
                     }
                 }
@@ -491,6 +614,7 @@ struct ChangesTab: View {
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
                 .help(staged ? "Unstage All Changes" : "Stage All Changes")
             }
         }
@@ -510,7 +634,7 @@ private struct ChangeRow: View {
     let staged: Bool
     let model: ChangesModel
     let requestDiscard: () -> Void
-    @State private var isHovering = false
+    @State private var isHovered = false
 
     var body: some View {
         let name = (change.path as NSString).lastPathComponent
@@ -530,7 +654,9 @@ private struct ChangeRow: View {
                 .lineLimit(1)
                 .truncationMode(.head)
             Spacer(minLength: 0)
-            if isHovering {
+            // Always in the tree and faded by opacity, so the directory does not re-truncate
+            // under the pointer when the buttons appear.
+            HStack(spacing: 6) {
                 if change.isDiscardable {
                     Button("Discard Changes", systemImage: "arrow.uturn.backward", action: requestDiscard)
                         .labelStyle(.iconOnly)
@@ -542,16 +668,22 @@ private struct ChangeRow: View {
                     .buttonStyle(.borderless)
                     .help(staged ? "Unstage Changes" : "Stage Changes")
             }
+            .foregroundStyle(.secondary)
+            .opacity(isHovered ? 1 : 0)
+            .allowsHitTesting(isHovered)
+            .accessibilityHidden(!isHovered)
             Text(change.kind.letter)
                 .font(.callout.monospaced().weight(.semibold))
                 .foregroundStyle(change.kind.color)
                 .frame(minWidth: 14)
                 .accessibilityLabel(change.kind.description)
         }
-        .onHover { isHovering = $0 }
+        .onHover { isHovered = $0 }
+        .animation(Motion.hover, value: isHovered)
         .modifier(FileDragModifier(url: change.kind == .deleted ? nil : model.url(for: change)))
         .help(change.originalPath.map { "\(change.path), renamed from \($0)" } ?? change.path)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(staged ? "changes.staged" : "changes.unstaged")
         .accessibilityAction(named: staged ? "Unstage" : "Stage", toggleStage)
         .accessibilityAction(named: "Discard") { if change.isDiscardable { requestDiscard() } }
     }
@@ -583,48 +715,88 @@ private struct ChangeContextMenu: View {
     let requestDiscard: () -> Void
 
     var body: some View {
-        Button(staged ? "Unstage Changes" : "Stage Changes") {
+        Button(staged ? "Unstage Changes" : "Stage Changes", systemImage: staged ? "minus" : "plus") {
             staged ? model.unstage(change) : model.stage(change)
         }
         if change.isDiscardable {
-            Button("Discard Changes…", role: .destructive, action: requestDiscard)
+            Button("Discard Changes…", systemImage: "arrow.uturn.backward", role: .destructive, action: requestDiscard)
         }
         Divider()
-        Button("Open File") { actions.openFile(model.url(for: change), false) }
+        Button("Open File", systemImage: "doc") { actions.openFile(model.url(for: change), false) }
             .disabled(change.kind == .deleted)
-        Button("Open in Default App") { FileActions.open([model.url(for: change)]) }
+        Button("Open in Default App", systemImage: "arrow.up.forward.app") { FileActions.open([model.url(for: change)]) }
             .disabled(change.kind == .deleted)
-        Button("Reveal in Finder") { FileActions.reveal([model.url(for: change)]) }
+        Button("Show in Finder", systemImage: "folder") { FileActions.reveal([model.url(for: change)]) }
             .disabled(change.kind == .deleted)
-        Button("Copy Relative Path") { FileActions.copy([change.path]) }
+        Button("Copy Relative Path", systemImage: "document.on.document") { FileActions.copy([change.path]) }
     }
 }
 
 private struct ErrorBanner: View {
     let message: String
     let dismiss: (() -> Void)?
+    @State private var showsDetails = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
+                .foregroundStyle(.orange)
                 .accessibilityHidden(true)
             Text(message)
                 .font(.callout)
                 .lineLimit(4)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            // Always offered: a failing hook or rejected push prints far more than four lines, and
+            // whether the text above is cut off depends on the inspector's width.
+            Button("Show Details", systemImage: "text.page") { showsDetails = true }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Show Details")
+                .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
+                    ErrorDetails(message: message)
+                }
             if let dismiss {
                 Button("Dismiss", systemImage: "xmark", action: dismiss)
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
                     .help("Dismiss")
             }
         }
         .padding(8)
-        .background(.yellow.opacity(0.12), in: .rect(cornerRadius: 10))
+        .background(.orange.opacity(0.12), in: .rect(cornerRadius: 10))
         .padding(.horizontal, 8)
         .padding(.bottom, 6)
+    }
+}
+
+/// The whole output of a failed git command, which is mostly what a hook or the remote printed.
+private struct ErrorDetails: View {
+    let message: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                Text(verbatim: message)
+                    .font(.callout.monospaced())
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+            .frame(maxHeight: 360)
+            .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            HStack {
+                Spacer()
+                Button("Copy", systemImage: "document.on.document") { FileActions.copy([message]) }
+                    .controlSize(.small)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+        .frame(width: 440)
     }
 }
 

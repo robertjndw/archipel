@@ -10,6 +10,13 @@ struct RenameTarget: Identifiable {
     let id = UUID()
     var kind: Kind
     var name: String
+
+    var title: String {
+        switch kind {
+        case .project: "Rename Project"
+        case .session: "Rename Session"
+        }
+    }
 }
 
 extension View {
@@ -23,7 +30,7 @@ private struct RenameAlert: ViewModifier {
     @Binding var target: RenameTarget?
 
     func body(content: Content) -> some View {
-        content.alert("Rename", item: $target) { target in
+        content.alert(target?.title ?? "Rename", item: $target) { target in
             RenameFields(target: target) { name in
                 switch target.kind {
                 case .project(let id): model.renameProject(id, to: name)

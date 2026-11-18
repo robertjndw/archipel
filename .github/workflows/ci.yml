@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Runs the ui-tests job for a branch, which pull requests skip.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -62,3 +64,9 @@ jobs:
             -destination 'generic/platform=macOS' \
             -derivedDataPath .build/ci-derived \
             -quiet
+
+  # Too slow to hold up every pull request, so they run once a change has landed on main. They can
+  # also be started by hand from the Actions tab for a branch that touches the flows they cover.
+  ui-tests:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/ui-tests.yml

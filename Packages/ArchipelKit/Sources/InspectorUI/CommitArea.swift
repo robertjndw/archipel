@@ -8,14 +8,18 @@ struct CommitControl: Equatable {
 
     var mode: Mode
     var hasChanges: Bool
+    /// git refuses to commit with unmerged paths, and "Commit All" would get around that by staging
+    /// the files with their conflict markers still in them.
+    var hasConflicts: Bool
     var isEnabled: Bool
 
     init(status: GitStatus, message: String, isBusy: Bool) {
         hasChanges = !status.staged.isEmpty || !status.unstaged.isEmpty
+        hasConflicts = status.unstaged.contains { $0.kind == .conflicted } || status.staged.contains { $0.kind == .conflicted }
         // With nothing staged, "Commit All" is the only thing a commit can mean.
         mode = status.staged.isEmpty && hasChanges ? .commitAll : .commit
         let hasMessage = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        isEnabled = hasChanges && hasMessage && !isBusy
+        isEnabled = hasChanges && hasMessage && !isBusy && !hasConflicts
     }
 
     var title: LocalizedStringKey { mode == .commit ? "Commit" : "Commit All" }
@@ -181,6 +185,9 @@ struct CommitArea: View {
     /// Set by the host (the Commit… command) to put the cursor in the message field.
     @Binding var focusRequest: Bool
     @FocusState private var messageFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Push and pull get their flying arrow; a commit gets a brief checkmark in place of the spinner.
+    @State private var showsCommitDone = false
 
     var body: some View {
         let action = model.primaryAction
@@ -190,6 +197,7 @@ struct CommitArea: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .focused($messageFocused)
+                .accessibilityIdentifier("changes.commitMessage")
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .glassEffect(.regular, in: .rect(cornerRadius: 12))
@@ -203,7 +211,10 @@ struct CommitArea: View {
 
             Button(action: model.performPrimaryAction) {
                 HStack(spacing: 6) {
-                    if let symbol = action.symbol {
+                    if showsCommitDone {
+                        Image(systemName: "checkmark")
+                            .transition(.symbolEffect)
+                    } else if let symbol = action.symbol {
                         SyncArrow(
                             systemName: symbol,
                             direction: action.direction,
@@ -214,7 +225,11 @@ struct CommitArea: View {
                     } else if model.activity == action.activity {
                         ProgressView().controlSize(.small)
                     }
-                    if case .pull(let behind, let ahead, _) = action, ahead > 0 {
+                    if showsCommitDone {
+                        // The button already describes the next step by now ("Push 1 Commit"), and a
+                        // checkmark beside that would read as the push having happened.
+                        Text("Committed")
+                    } else if case .pull(let behind, let ahead, _) = action, ahead > 0 {
                         DivergedCounts(behind: behind, ahead: ahead)
                     } else {
                         Text(action.title)
@@ -225,11 +240,23 @@ struct CommitArea: View {
             .buttonStyle(.glassProminent)
             .controlSize(.large)
             .disabled(!action.isEnabled)
+            .accessibilityIdentifier("changes.primaryAction")
             // Only while the field is focused and the button commits, so Cmd-Return never pushes.
             .keyboardShortcut(messageFocused && action.activity == .commit ? KeyboardShortcut(.return, modifiers: .command) : nil)
             .help(help(for: action))
-            .contentTransition(.interpolate)
+            // The digits roll when a count changes ("Push 3 Commits"); a crossfade under Reduce Motion.
+            .contentTransition(reduceMotion ? .interpolate : .numericText())
             .animation(.smooth(duration: 0.2), value: action)
+            .onChange(of: model.commitCompletions) {
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { showsCommitDone = true }
+            }
+            // Keyed on the count, so a second commit while the mark is up restarts the wait.
+            .task(id: model.commitCompletions) {
+                guard showsCommitDone else { return }
+                try? await Task.sleep(for: .seconds(1.2))
+                guard !Task.isCancelled else { return }
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { showsCommitDone = false }
+            }
 
             pullRequestButton
         }
@@ -241,6 +268,7 @@ struct CommitArea: View {
 
     private func help(for action: PrimaryAction) -> LocalizedStringKey {
         switch action {
+        case .commit(let control) where control.hasConflicts: "Resolve the merge conflicts and stage the files before committing."
         case .commit(let control): control.mode == .commitAll ? "Stages all changes, then commits them." : "Commits the staged changes."
         case .pull(let behind, let ahead, _) where ahead > 0:
             "The branch has diverged from \(model.syncState.upstream ?? "its upstream") (\(behind) behind, \(ahead) ahead) and can't be fast-forwarded. Rebase or merge in a terminal."
@@ -290,6 +318,8 @@ struct SyncMenu: View {
                 .animation(.smooth(duration: 0.3), value: remoteActivity)
         }
         .buttonStyle(.borderless)
+        // Monochrome like Refresh beside it.
+        .foregroundStyle(.secondary)
         // Opens on mouse down like a native menu. The button underneath handles keyboard and VoiceOver.
         .overlay { MenuTrigger(anchor: anchor, tooltip: sync.summary, isEnabled: isEnabled) { showMenu(sync) } }
         .fixedSize()
@@ -404,12 +434,13 @@ private final class ActionMenuItem: NSMenuItem {
 private struct ActivitySymbol: View {
     let activity: ChangesModel.Activity
     let completion: SyncCompletion
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         switch activity {
         case .fetch:
             Image(systemName: "arrow.triangle.2.circlepath")
-                .symbolEffect(.rotate.clockwise.wholeSymbol, options: .repeat(.continuous))
+                .symbolEffect(.rotate.clockwise.wholeSymbol, options: .repeat(.continuous), isActive: !reduceMotion)
         case .pull:
             SyncArrow(systemName: "arrow.down", direction: .down, isBusy: true, completion: completion)
         case .push, .commit:
@@ -444,7 +475,7 @@ struct SyncArrow: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .symbolEffect(direction == .up ? .wiggle.up : .wiggle.down, options: .repeat(.continuous), isActive: isBusy && phase == .resting)
+            .symbolEffect(direction == .up ? .wiggle.up : .wiggle.down, options: .repeat(.continuous), isActive: isBusy && phase == .resting && !reduceMotion)
             .offset(y: direction == .up ? offset : -offset)
             .scaleEffect(phase == .sent ? 0.7 : 1, anchor: direction == .up ? .bottom : .top)
             .blur(radius: phase == .sent ? 1 : 0)
@@ -457,7 +488,7 @@ struct SyncArrow: View {
             }
             .onChange(of: isBusy) {
                 guard !isBusy, phase != .resting else { return }
-                withAnimation(.smooth(duration: 0.3)) { phase = .resting }
+                withAnimation(reduceMotion ? .easeOut(duration: 0.25) : .smooth(duration: 0.3)) { phase = .resting }
             }
     }
 

@@ -51,6 +51,7 @@ struct DetectedWorktreesRow: View {
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
                     .help("Don't suggest this worktree again")
                 }
             }

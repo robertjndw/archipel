@@ -61,7 +61,7 @@ private struct UsageItems: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help("Show usage details")
+        .help("Show Usage Details")
         .popover(isPresented: $showsDetails, arrowEdge: .top) {
             UsageDetails(readings: readings)
         }
@@ -73,6 +73,7 @@ private struct UsageItem: View {
     let now: Date
     let display: AppSettings.UsageDisplay
     let fill: AppSettings.UsageBarFill
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 6) {
@@ -86,6 +87,8 @@ private struct UsageItem: View {
                             .foregroundStyle(.tertiary)
                         Text("\(Int(percent.rounded()))%")
                             .foregroundStyle(UsageColor.style(for: percent, calm: .secondary))
+                            .contentTransition(.numericText(value: percent.rounded()))
+                            .animation(reduceMotion ? nil : Motion.disclosure, value: Int(percent.rounded()))
                     }
                 }
             case .bars:
@@ -227,6 +230,7 @@ private struct WindowDetails: View {
     let window: UsageWindow
     let now: Date
     let fill: AppSettings.UsageBarFill
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let percent = window.usedPercent(at: now)
@@ -238,6 +242,8 @@ private struct WindowDetails: View {
                 Text(fill == .used ? "\(Int(percent.rounded()))% used" : "\(Int((100 - percent).rounded()))% left")
                     .monospacedDigit()
                     .foregroundStyle(UsageColor.style(for: percent, calm: .primary))
+                    .contentTransition(.numericText(value: percent.rounded()))
+                    .animation(reduceMotion ? nil : Motion.disclosure, value: Int(percent.rounded()))
             }
             .font(.callout)
             UsageBar(usedPercent: percent, fill: fill, height: 6)
@@ -289,9 +295,10 @@ private struct WindowDetails: View {
 private struct AgentsItem: View {
     @Environment(AppModel.self) private var model
     @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let summary = attentionSummary(of: model.workspace, activities: model.activities)
+        let summary = model.workspaceAttention
         Button {
             model.selectNextNeedingAttention()
         } label: {
@@ -307,6 +314,8 @@ private struct AgentsItem: View {
                             .foregroundStyle(.tint)
                             .symbolEffect(.pulse, options: .repeating, isActive: appearsActive)
                         Text("\(summary.working) working")
+                            .contentTransition(.numericText(value: Double(summary.working)))
+                            .animation(reduceMotion ? nil : Motion.disclosure, value: summary.working)
                     }
                     .foregroundStyle(.secondary)
                 }
@@ -316,6 +325,8 @@ private struct AgentsItem: View {
                             .foregroundStyle(.orange)
                         Text("\(summary.needsAttention) waiting")
                             .foregroundStyle(.primary)
+                            .contentTransition(.numericText(value: Double(summary.needsAttention)))
+                            .animation(reduceMotion ? nil : Motion.disclosure, value: summary.needsAttention)
                     }
                 }
             }

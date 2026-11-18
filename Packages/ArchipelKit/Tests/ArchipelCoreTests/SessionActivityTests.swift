@@ -130,4 +130,29 @@ struct SessionActivityTests {
         activity.apply(.launched, isBeingViewed: true)
         #expect(!activity.completedTurn)
     }
+
+    @Test func backgroundTasksDoNotHoldBackAFinishedTurn() {
+        var activity = SessionActivity(status: .working)
+        activity.apply(.turnFinished(message: "Server is up", backgroundTasks: 1), isBeingViewed: false)
+        #expect(activity.backgroundTasks == 1)
+        // A dev server never exits, so the result has to be announced regardless.
+        #expect(activity.unread)
+        #expect(!activity.isBusy)
+        #expect(activity.hasWorkInFlight)
+    }
+
+    @Test func backgroundTasksFollowTheLatestReport() {
+        var activity = SessionActivity(status: .working)
+        activity.apply(.turnFinished(message: nil, backgroundTasks: 2), isBeingViewed: false)
+        // StopFailure and Codex say nothing about background work.
+        activity.apply(.turnFinished(message: nil), isBeingViewed: false)
+        #expect(activity.backgroundTasks == 2)
+        activity.apply(.turnFinished(message: nil, backgroundTasks: 0), isBeingViewed: false)
+        #expect(activity.backgroundTasks == 0)
+        #expect(!activity.hasWorkInFlight)
+
+        activity.apply(.turnFinished(message: nil, backgroundTasks: 1), isBeingViewed: false)
+        activity.apply(.processExited(code: 0), isBeingViewed: false)
+        #expect(activity.backgroundTasks == 0)
+    }
 }

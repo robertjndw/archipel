@@ -7,7 +7,8 @@ struct SettingsView: View {
     }
 
     // HIG: reopen on the pane that was used last.
-    @AppStorage("settings.selectedPane") private var pane: Pane = .general
+    @AppStorage(SettingsView.selectedPaneKey) private var pane: Pane = .general
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         TabView(selection: $pane) {
@@ -21,6 +22,17 @@ struct SettingsView: View {
         // Sized to the selected tab, as system settings windows are, instead of scrolling a short form.
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: 540)
+        // Here and not on the main window, which may be closed while Settings is open.
+        .onChange(of: model.settings.appearance) { model.applyAppearance() }
+        .onChange(of: model.settings.showsDockBadge) { model.refreshDockBadge() }
+    }
+
+    private static let selectedPaneKey = "settings.selectedPane"
+
+    /// Makes the Settings window show `pane`, whether it is opened next or open already: it reads
+    /// its selection from the defaults.
+    static func select(_ pane: Pane) {
+        UserDefaults.standard.set(pane.rawValue, forKey: selectedPaneKey)
     }
 }
 

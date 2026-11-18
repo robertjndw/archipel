@@ -44,6 +44,7 @@ struct ProjectSettingsSheet: View {
     @State private var isPickingImage = false
     @State private var isPickingFolder = false
     @State private var didLoad = false
+    @State private var confirmsDiscard = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -74,7 +75,9 @@ struct ProjectSettingsSheet: View {
         .navigationTitle("\(project.name) Settings")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") {
+                    if hasChanges { confirmsDiscard = true } else { dismiss() }
+                }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }
@@ -84,11 +87,28 @@ struct ProjectSettingsSheet: View {
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { worktreesDirectory = url }
         }
+        .confirmationDialog("Discard your changes?", isPresented: $confirmsDiscard) {
+            Button("Discard Changes", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) {}
+        }
         .task { await load() }
         .task(id: icon) { await refreshPreview() }
     }
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// False until `load()` has filled the fields, so the empty initial state never counts as an edit.
+    private var hasChanges: Bool {
+        didLoad && (
+            trimmedName != project.name
+                || icon != project.icon
+                || tint != project.tint
+                || worktreesDirectory != project.worktreesDirectory
+                || baseBranch != project.baseBranch
+                || setup != project.scripts.setup
+                || run != project.scripts.run
+        )
+    }
 
     private var previewColor: Color {
         (tint ?? model.tint(of: project)).color
@@ -101,7 +121,7 @@ struct ProjectSettingsSheet: View {
         Section {
             HStack(spacing: 16) {
                 ProjectIconTile(icon: icon, image: previewImage, name: trimmedName, color: previewColor, size: 56)
-                TextField("Name", text: $name, prompt: Text("Project name"))
+                TextField("Name", text: $name, prompt: Text("Project Name"))
                     .textFieldStyle(.plain)
                     .labelsHidden()
                     .font(.title2.weight(.semibold))
@@ -139,7 +159,7 @@ struct ProjectSettingsSheet: View {
         }
 
         Section {
-            ProjectTintPicker(tint: $tint)
+            TintSwatchPicker(selection: $tint, automaticLabel: "Same as Island")
         } header: {
             Text("Color")
         } footer: {
@@ -182,7 +202,7 @@ struct ProjectSettingsSheet: View {
     // MARK: Worktrees
 
     private var defaultFolder: URL {
-        WorktreeLocation.defaultParentFolder(for: project, defaultRoot: model.settings.worktreesRoot)
+        model.defaultWorktreesFolder(for: project)
     }
 
     @ViewBuilder
@@ -230,8 +250,7 @@ struct ProjectSettingsSheet: View {
         var draft = project
         draft.worktreesDirectory = worktreesDirectory
         draft.name = trimmedName.isEmpty ? project.name : trimmedName
-        let url = WorktreeLocation.path(for: draft, branch: "feature/login", defaultRoot: model.settings.worktreesRoot)
-        return url.abbreviatedPath
+        return model.worktreePath(for: draft, branch: "feature/login").abbreviatedPath
     }
 
     /// Keeps a saved base branch selectable even when it no longer exists locally.
@@ -256,14 +275,14 @@ struct ProjectSettingsSheet: View {
         Section {
             ScriptEditor(text: $setup)
         } header: {
-            Text("Setup script")
+            Text("Setup Script")
         } footer: {
             Text("Runs once in each new worktree, for example to install dependencies or copy .env from the main checkout.")
         }
         Section {
             ScriptEditor(text: $run)
         } header: {
-            Text("Run script")
+            Text("Run Script")
         } footer: {
             // Run (⌘R) opens this page when there is nothing to run, so the empty state says why.
             if run.allSatisfy(\.isWhitespace) {
@@ -298,7 +317,10 @@ struct ProjectSettingsSheet: View {
         baseBranch = project.baseBranch
         setup = project.scripts.setup
         run = project.scripts.run
-        branches = try? await model.git.localBranches(in: project.folderURL)
+        // Left nil without git, which shows the plain text field instead of the system's offer to install it.
+        if model.isGitAvailable {
+            branches = try? await model.git.localBranches(in: project.folderURL)
+        }
     }
 
     private func refreshPreview() async {
@@ -317,38 +339,6 @@ struct ProjectSettingsSheet: View {
             $0.scripts = ProjectScripts(setup: setup, run: run)
         }
         dismiss()
-    }
-}
-
-/// Swatches for every tint, plus "Same as Island" as the first choice.
-private struct ProjectTintPicker: View {
-    @Binding var tint: Tint?
-
-    var body: some View {
-        HStack(spacing: 10) {
-            swatch(nil, label: "Same as Island") {
-                Circle().strokeBorder(.secondary, style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
-            }
-            ForEach(Tint.allCases, id: \.self) { value in
-                swatch(value, label: value.displayName) { Circle().fill(value.color.gradient) }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func swatch(_ value: Tint?, label: String, @ViewBuilder _ content: () -> some View) -> some View {
-        Button { tint = value } label: {
-            content()
-                .frame(width: 22, height: 22)
-                .padding(3)
-                .overlay {
-                    if tint == value { Circle().strokeBorder(.primary.opacity(0.6), lineWidth: 2) }
-                }
-        }
-        .buttonStyle(.plain)
-        .help(label)
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(tint == value ? .isSelected : [])
     }
 }
 

@@ -42,12 +42,42 @@ func run() {
             forward(["rate_limits": limits], source: source)
         }
     } else if let payload {
-        forward(payload, source: source)
+        forward(slimmed(payload, rawSize: rawPayload.count), source: source)
     }
 
     if isStatusLine {
         runUserStatusLine(input: rawPayload, payload: payload as? [String: Any])
     }
+}
+
+/// The keys `HookDecoder` in the app reads, for Claude and Codex alike. Keep the two in step.
+let decodedKeys = [
+    "hook_event_name", "session_id", "agent_id", "tool_name", "notification_type", "message",
+    "last_assistant_message", "type", "thread-id", "last-assistant-message",
+]
+
+/// The app drops anything over 4 MiB, and a permission request for a large Write carries the
+/// whole file in `tool_input`, so the one event the user has to answer would be the one that gets
+/// lost. A big payload is therefore cut down to what the app looks at. Small ones go through
+/// whole, so a key the app starts reading tomorrow does not need a new helper for the usual case.
+func slimmed(_ payload: Any, rawSize: Int) -> Any {
+    // Far enough below the app's limit that JSON escaping cannot push the envelope over it.
+    guard rawSize > 512 << 10, let object = payload as? [String: Any] else { return payload }
+    // The messages only feed a notification and a row's subtitle, neither of which shows this much.
+    let longestString = 64 << 10
+    var slim: [String: Any] = [:]
+    for key in decodedKeys {
+        guard let value = object[key] else { continue }
+        if let string = value as? String, string.utf8.count > longestString {
+            slim[key] = String(String.UnicodeScalarView(string.unicodeScalars.prefix(longestString / 4)))
+        } else if value is String {
+            slim[key] = value
+        }
+    }
+    // Not a string, so the loop above skips it. Each entry is capped by Claude, and without the
+    // list the app could not tell that the agent left something running.
+    if let tasks = object["background_tasks"] as? [Any] { slim["background_tasks"] = tasks }
+    return slim
 }
 
 func forward(_ payload: Any, source: String) {

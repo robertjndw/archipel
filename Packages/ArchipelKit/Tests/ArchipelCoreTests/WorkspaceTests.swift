@@ -223,6 +223,26 @@ struct WorkspaceTests {
         #expect(ws.worktree(id: main.id)?.sessions.count == 1)
     }
 
+    @Test func movingTheSelectedProjectAwaySelectsItsNeighbour() {
+        var (ws, p, main, _) = fixture()
+        let home = ws.islands[0].id
+        let work = ws.addIsland(name: "Work")
+        let q = Project(name: "q", folderURL: URL(fileURLWithPath: "/tmp/q"))
+        ws.addProject(q, to: home)
+        let feature = makeWorktree("q-feat", branch: "feat"), neighbour = makeWorktree("q", isMain: true)
+        ws.addWorktree(feature, to: q.id)
+        ws.addWorktree(neighbour, to: q.id)
+        ws.selectWorktree(main.id)
+
+        // Reordering within the island takes nothing away from it.
+        ws.moveProject(id: p.id, to: home, at: 1)
+        #expect(ws.selectedWorktreeIDByIsland[home] == main.id)
+
+        ws.moveProject(id: p.id, to: work)
+        #expect(ws.selectedWorktreeIDByIsland[home] == neighbour.id)
+        #expect(ws.selectedWorktreeIDByIsland[work] == nil)
+    }
+
     @Test func missingOptionalKeysDecodeWithDefaults() throws {
         let id = UUID().uuidString
         let json = """

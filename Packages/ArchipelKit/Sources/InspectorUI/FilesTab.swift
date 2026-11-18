@@ -11,9 +11,12 @@ struct FileNode: Identifiable, Hashable, Sendable {
 @MainActor @Observable
 final class FileTreeModel {
     let root: URL
-    private(set) var children: [URL: [FileNode]] = [:]
+    /// Keyed by `URL.pathKey`, not URL: `deletingLastPathComponent` adds a trailing slash, and a
+    /// listing may or may not have one, so equal folders would not find each other as URLs.
+    private var children: [String: [FileNode]] = [:]
     private(set) var rootError: String?
-    private var expanded: Set<URL> = []
+    /// Path key to the URL to list.
+    private var expanded: [String: URL] = [:]
     private let listDirectory: @Sendable (URL) async throws -> [FileNode]
 
     /// `listDirectory` is only replaced by previews, which must not read the disk.
@@ -22,22 +25,28 @@ final class FileTreeModel {
         self.listDirectory = listDirectory
     }
 
+    /// Nil until the folder has been listed once.
+    func nodes(in directory: URL) -> [FileNode]? {
+        children[directory.pathKey]
+    }
+
     /// Whether a listed URL is a folder, from the listings already loaded rather than another stat.
     func isDirectory(_ url: URL) -> Bool {
-        children[url.deletingLastPathComponent()]?.first { $0.url == url }?.isDirectory ?? false
+        let key = url.pathKey
+        return children[url.deletingLastPathComponent().pathKey]?.first { $0.url.pathKey == key }?.isDirectory ?? false
     }
 
     func isExpanded(_ directory: URL) -> Bool {
-        expanded.contains(directory)
+        expanded[directory.pathKey] != nil
     }
 
     func setExpanded(_ directory: URL, _ isExpanded: Bool) {
         if isExpanded {
-            expanded.insert(directory)
+            expanded[directory.pathKey] = directory
             // Cached children show immediately; the reload catches anything that changed while collapsed.
             Task { await load(directory) }
         } else {
-            expanded.remove(directory)
+            expanded[directory.pathKey] = nil
         }
     }
 
@@ -45,7 +54,7 @@ final class FileTreeModel {
     /// subtrees cost nothing.
     func refresh() async {
         await load(root)
-        for directory in expanded where isVisible(directory) {
+        for directory in expanded.values where isVisible(directory) {
             await load(directory)
         }
     }
@@ -57,15 +66,21 @@ final class FileTreeModel {
         return components.dropFirst(base.count).joined(separator: "/")
     }
 
+    /// Every row reads `children`, so an assignment of an unchanged listing would re-render each
+    /// expanded folder once per folder refreshed. Only real changes are written.
     func load(_ directory: URL) async {
+        let key = directory.pathKey
+        let isRoot = key == root.pathKey
         do {
-            children[directory] = try await listDirectory(directory)
-            if directory == root { rootError = nil }
+            let nodes = try await listDirectory(directory)
+            if children[key] != nodes { children[key] = nodes }
+            if isRoot, rootError != nil { rootError = nil }
         } catch {
-            if directory == root {
-                rootError = error.localizedDescription
-            } else {
-                children[directory] = []
+            if isRoot {
+                let message = error.localizedDescription
+                if rootError != message { rootError = message }
+            } else if children[key] != [] {
+                children[key] = []
             }
         }
     }
@@ -73,7 +88,7 @@ final class FileTreeModel {
     private func isVisible(_ directory: URL) -> Bool {
         var parent = directory.deletingLastPathComponent()
         while parent.pathComponents.count > root.pathComponents.count {
-            guard expanded.contains(parent) else { return false }
+            guard expanded[parent.pathKey] != nil else { return false }
             parent = parent.deletingLastPathComponent()
         }
         return true
@@ -98,6 +113,15 @@ final class FileTreeModel {
     }
 }
 
+extension URL {
+    /// The standardized path without a trailing slash, so `/a/b` and `/a/b/` compare equal.
+    var pathKey: String {
+        var path = standardizedFileURL.path(percentEncoded: false)
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+}
+
 struct FilesTab: View {
     let model: FileTreeModel
     let actions: InspectorActions
@@ -110,8 +134,9 @@ struct FilesTab: View {
             }
             list
         }
-        .task { await model.refresh() }
-        .onAppActivation(perform: refresh)
+        // Slower than the Changes tab: this lists folders rather than asking git, and an unchanged
+        // listing writes nothing, so the poll is only there to pick up files an agent creates.
+        .refreshing(every: .seconds(5)) { await model.refresh() }
     }
 
     private var list: some View {
@@ -157,13 +182,13 @@ struct FilesTab: View {
         if !urls.isEmpty {
             let urls = urls.sorted { $0.path < $1.path }
             let files = urls.filter { !model.isDirectory($0) }
-            Button("Open in Tab") { files.forEach { actions.openFile($0, false) } }
+            Button("Open in Tab", systemImage: "doc") { files.forEach { actions.openFile($0, false) } }
                 .disabled(files.isEmpty)
-            Button("Open in Default App") { FileActions.open(urls) }
-            Button("Reveal in Finder") { FileActions.reveal(urls) }
+            Button("Open in Default App", systemImage: "arrow.up.forward.app") { FileActions.open(urls) }
+            Button("Show in Finder", systemImage: "folder") { FileActions.reveal(urls) }
             Divider()
-            Button("Copy Path") { FileActions.copy(urls.map(\.path)) }
-            Button("Copy Relative Path") { FileActions.copy(urls.map(model.relativePath(of:))) }
+            Button("Copy Path", systemImage: "document.on.document") { FileActions.copy(urls.map(\.path)) }
+            Button("Copy Relative Path", systemImage: "document.on.document") { FileActions.copy(urls.map(model.relativePath(of:))) }
         }
     }
 
@@ -177,7 +202,7 @@ private struct FileTreeRows: View {
     let model: FileTreeModel
 
     var body: some View {
-        if let nodes = model.children[directory] {
+        if let nodes = model.nodes(in: directory) {
             ForEach(nodes) { node in
                 if node.isDirectory {
                     DisclosureGroup(isExpanded: expansion(of: node.url)) {

@@ -61,7 +61,21 @@ final class AppSettings {
     // MARK: General
 
     /// What ⌘T and the plain "new session" buttons start.
-    var defaultAgentID: String { didSet { defaults.set(defaultAgentID, forKey: Key.defaultAgentID) } }
+    var defaultAgentID: String {
+        didSet { if !isSuggestingDefaultAgent { defaults.set(defaultAgentID, forKey: Key.defaultAgentID) } }
+    }
+    /// True once the user picked the default agent themselves. Until then it follows what is installed.
+    var hasChosenDefaultAgent: Bool { defaults.string(forKey: Key.defaultAgentID) != nil }
+    @ObservationIgnored private var isSuggestingDefaultAgent = false
+
+    /// Makes `id` the default without recording it as the user's choice, so the suggestion can
+    /// still change when another agent is installed. Ignored once the user has chosen.
+    func suggestDefaultAgent(_ id: String) {
+        guard !hasChosenDefaultAgent, defaultAgentID != id else { return }
+        isSuggestingDefaultAgent = true
+        defaultAgentID = id
+        isSuggestingDefaultAgent = false
+    }
     /// Root for new worktrees of projects without a folder of their own: `<root>/<project>/<branch>`.
     var worktreesRoot: URL { didSet { defaults.set(worktreesRoot.path, forKey: Key.worktreesRoot) } }
     /// Prepended to the name typed for a new branch, e.g. `alex/`.

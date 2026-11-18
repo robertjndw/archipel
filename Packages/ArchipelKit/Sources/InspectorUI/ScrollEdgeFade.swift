@@ -1,4 +1,5 @@
 import SwiftUI
+import UISupport
 
 extension View {
     /// Fades the top or bottom edge while content is cut off there. Replaces the system scroll edge
@@ -26,7 +27,7 @@ private struct ScrollEdgeFade: ViewModifier {
                 let bottom = geometry.visibleRect.maxY < geometry.contentSize.height - 0.5
                 return ClippedEdges(top: top, bottom: bottom)
             } action: { _, edges in
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { clipped = edges }
+                withAnimation(reduceMotion ? nil : Motion.hover) { clipped = edges }
             }
             // An overlay rather than a mask: masking the sidebar-style list makes its icons vanish.
             .overlay(alignment: .top) { fade(from: .top).opacity(clipped.top ? 1 : 0) }

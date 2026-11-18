@@ -95,6 +95,8 @@ public final class TerminalSession: Identifiable {
         let command = configuration.command.flatMap { $0.isEmpty ? nil : $0 }.map { command in
             let statusFile = FileManager.default.temporaryDirectory
                 .appending(path: "terminalkit-\(UUID().uuidString).status")
+            // The wrapper only ever fills in a file that exists, so removing it is final. See `wrap`.
+            FileManager.default.createFile(atPath: statusFile.path(percentEncoded: false), contents: nil)
             exitStatusFile = statusFile
             return Self.wrap(command, statusFile: statusFile)
         }
@@ -123,6 +125,11 @@ public final class TerminalSession: Identifiable {
     /// also covers a bare `exit N` in the command. login only exits after the
     /// wrapper, so the file is complete when Ghostty sees the exit.
     ///
+    /// The session creates the file and the trap only writes when it is still
+    /// there. Closing a session hangs up the pty, and the trap then runs some
+    /// time after `close()` has removed the file; writing unconditionally
+    /// would bring it back with nobody left to delete it.
+    ///
     /// INT and QUIT are caught, not ignored: caught signals reset to default
     /// in the command, so Ctrl-C still reaches it, while the wrapper outlives
     /// a Ctrl-C the command chooses to survive (agents cancel, not quit).
@@ -133,7 +140,7 @@ public final class TerminalSession: Identifiable {
     private static func wrap(_ command: String, statusFile: URL) -> String {
         let script = """
         __terminalkit_status=\(shellQuote(statusFile.path(percentEncoded: false)))
-        trap 'printf %s "$?" > "$__terminalkit_status"' EXIT
+        trap '__terminalkit_code=$?; [ -e "$__terminalkit_status" ] && printf %s "$__terminalkit_code" > "$__terminalkit_status"' EXIT
         trap : INT QUIT
         \(command)
         """

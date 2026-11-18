@@ -28,8 +28,8 @@ struct ExternalEditor: Identifiable, Equatable {
         ("com.apple.dt.Xcode", "Xcode"),
     ]
 
-    /// The known editors that are installed, asked fresh each time: it is cheap, and an editor
-    /// installed while Archipel runs should show up without a relaunch.
+    /// The known editors that are installed. One LaunchServices lookup per known editor, so views
+    /// read `AppModel.installedEditors`, which is refreshed whenever the app comes forward.
     static func installed() -> [ExternalEditor] {
         known.compactMap { entry in
             NSWorkspace.shared.urlForApplication(withBundleIdentifier: entry.bundleID)
@@ -41,7 +41,7 @@ struct ExternalEditor: Identifiable, Equatable {
 extension AppModel {
     /// The editor the user picked if it is still installed, otherwise the first installed one.
     var preferredEditor: ExternalEditor? {
-        let installed = ExternalEditor.installed()
+        let installed = installedEditors
         if let id = settings.externalEditorBundleID, let chosen = installed.first(where: { $0.bundleID == id }) {
             return chosen
         }

@@ -41,14 +41,33 @@ enum DiffHunks {
     }
 
     /// Index of the row in `rows` (whichever presentation) that starts each hunk, mapped to the hunk's index.
+    ///
+    /// One pass over the rows for all hunks together. Searching per hunk made this hunks times rows,
+    /// and it runs again whenever the presentation is toggled.
     static func leadRows(of hunks: [DiffHunk], in rows: [DiffRow]) -> [Int: Int] {
-        var result: [Int: Int] = [:]
+        // Line on the old side, or on the new side for a hunk that starts with an addition, to the
+        // hunks still waiting for the first row that shows it.
+        var waitingForOld: [Int: [Int]] = [:]
+        var waitingForNew: [Int: [Int]] = [:]
         for (hunkIndex, hunk) in hunks.enumerated() {
-            let match = rows.firstIndex { row in
-                if let old = hunk.firstOld { return row.old == old }
-                return row.old == nil && row.new == hunk.firstNew
+            if let old = hunk.firstOld {
+                waitingForOld[old, default: []].append(hunkIndex)
+            } else if let new = hunk.firstNew {
+                waitingForNew[new, default: []].append(hunkIndex)
             }
-            if let match { result[match] = hunkIndex }
+        }
+
+        var result: [Int: Int] = [:]
+        for (index, row) in rows.enumerated() {
+            if waitingForOld.isEmpty, waitingForNew.isEmpty { break }
+            let found = if let old = row.old {
+                waitingForOld.removeValue(forKey: old)
+            } else if let new = row.new {
+                waitingForNew.removeValue(forKey: new)
+            } else {
+                [Int]?.none
+            }
+            if let last = found?.last { result[index] = last }
         }
         return result
     }

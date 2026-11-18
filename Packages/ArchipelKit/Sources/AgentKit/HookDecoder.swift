@@ -68,7 +68,10 @@ public enum HookDecoder {
                 return nil
             }
         case "Stop", "StopFailure":
-            return .turnFinished(message: nonEmptyString(payload["last_assistant_message"]))
+            return .turnFinished(
+                message: nonEmptyString(payload["last_assistant_message"]),
+                backgroundTasks: backgroundTaskCount(payload["background_tasks"])
+            )
         default:
             // SessionEnd included: the terminal reports the process exit with its real code.
             return nil
@@ -82,6 +85,14 @@ public enum HookDecoder {
         default:
             return nil
         }
+    }
+
+    /// Nil when the list is missing, as on StopFailure and older versions of Claude, so that what
+    /// an earlier Stop reported is kept. Subagents are left out because SubagentStart and
+    /// SubagentStop already track them.
+    private static func backgroundTaskCount(_ value: Any?) -> Int? {
+        guard let tasks = value as? [[String: Any]] else { return nil }
+        return tasks.count { $0["type"] as? String != "subagent" }
     }
 
     private static func nonEmptyString(_ value: Any?) -> String? {

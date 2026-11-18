@@ -22,6 +22,8 @@ public enum HookServerError: Error, Equatable, CustomStringConvertible {
     case pathTooLong(path: String, limit: Int)
     case alreadyStarted
     case stopped
+    /// Another process is listening on the socket, most likely a second copy of the app.
+    case socketInUse(path: String)
     case system(call: String, errno: Int32)
 
     public var description: String {
@@ -32,6 +34,8 @@ public enum HookServerError: Error, Equatable, CustomStringConvertible {
             "Hook server is already running"
         case .stopped:
             "Hook server was stopped and cannot be restarted"
+        case let .socketInUse(path):
+            "Another Archipel is already listening on \(path)"
         case let .system(call, code):
             "\(call) failed: \(String(cString: strerror(code)))"
         }
@@ -47,16 +51,31 @@ public final class HookServer: Sendable {
 
     private enum State {
         case idle
-        case running(any DispatchSourceRead)
+        case running(any DispatchSourceRead, socket: FileIdentity?)
         case stopped
+    }
+
+    /// Bounds on what clients may hold. The helper gives up after a second or two on its own, so an
+    /// honest connection never comes near the deadline; it is there for a client that connects and
+    /// then says nothing, which would otherwise keep its descriptor for good.
+    struct Limits: Sendable {
+        var readDeadline: TimeInterval = 5
+        /// Well under the 256 descriptors a GUI app gets by default, most of which the terminals need.
+        var maxConnections = 64
     }
 
     private let continuation: AsyncStream<HookMessage>.Continuation
     private let queue = DispatchQueue(label: "archipel.hook-server")
     private let state = Mutex<State>(.idle)
+    private let limits: Limits
 
-    public init(socketURL: URL) {
+    public convenience init(socketURL: URL) {
+        self.init(socketURL: socketURL, limits: Limits())
+    }
+
+    init(socketURL: URL, limits: Limits) {
         self.socketURL = socketURL
+        self.limits = limits
         (messages, continuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
     }
 
@@ -75,13 +94,14 @@ public final class HookServer: Sendable {
             let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
             let continuation = self.continuation
             let queue = self.queue
-            let scratch = ReadScratch()
+            let limits = self.limits
+            let clients = Clients()
             source.setEventHandler {
-                Self.acceptPending(on: fd, queue: queue, scratch: scratch, continuation: continuation)
+                Self.acceptPending(on: fd, queue: queue, clients: clients, limits: limits, continuation: continuation)
             }
             source.setCancelHandler { close(fd) }
             source.resume()
-            state = .running(source)
+            state = .running(source, socket: FileIdentity(path: socketURL.path))
         }
     }
 
@@ -90,9 +110,13 @@ public final class HookServer: Sendable {
             defer { state = .stopped }
             return state
         }
-        if case let .running(source) = previous {
+        if case let .running(source, socket) = previous {
             source.cancel()
-            unlink(socketURL.path)
+            // Someone may have cleared the path and started listening there since. Removing their
+            // socket would cut them off from every agent without either side noticing.
+            if let socket, FileIdentity(path: socketURL.path) == socket {
+                unlink(socketURL.path)
+            }
         }
         continuation.finish()
     }
@@ -106,7 +130,9 @@ public final class HookServer: Sendable {
             at: URL(fileURLWithPath: path).deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        // A previous run that crashed leaves the socket file behind and bind would fail.
+        // A previous run that crashed leaves the socket file behind and bind would fail. One that is
+        // still running answers, though, and taking the path from it would silence its agents.
+        guard !isAnswering(path: path) else { throw HookServerError.socketInUse(path: path) }
         unlink(path)
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -135,21 +161,59 @@ public final class HookServer: Sendable {
         }
     }
 
+    private static func isAnswering(path: String) -> Bool {
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: path.utf8) }
+
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        // A leftover file refuses at once, and so does anything that is not a socket. A listener
+        // accepts from its backlog even while its process is busy, so this never waits on it.
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        } == 0
+    }
+
     private static func acceptPending(
         on listener: Int32,
         queue: DispatchQueue,
-        scratch: ReadScratch,
+        clients: Clients,
+        limits: Limits,
         continuation: AsyncStream<HookMessage>.Continuation
     ) {
         while true {
             let fd = accept(listener, nil, nil)
-            guard fd >= 0 else { return }
+            guard fd >= 0 else {
+                switch errno {
+                case EINTR, ECONNABORTED:
+                    continue
+                case EAGAIN:
+                    return
+                default:
+                    // Out of descriptors, typically. The pending client keeps the listener readable,
+                    // so returning right away would have the source fire again at once and spin.
+                    // Sleeping holds up the queue, which is fine: nothing can be accepted anyway.
+                    usleep(100_000)
+                    return
+                }
+            }
+            guard clients.open < limits.maxConnections else {
+                close(fd)
+                continue
+            }
             _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
-            Connection(fd: fd, queue: queue, scratch: scratch) { line in
+            clients.open += 1
+            let connection = Connection(fd: fd, queue: queue, clients: clients) { line in
                 if let message = decodeEnvelope(line) {
                     continuation.yield(message)
                 }
-            }.start()
+            }
+            connection.start(deadline: limits.readDeadline)
         }
     }
 
@@ -170,10 +234,25 @@ public final class HookServer: Sendable {
     }
 }
 
-/// The status line connects on every redraw, so one read buffer per server is reused rather than a fresh
-/// 64 KiB per read. Shared only by connections on the same serial queue, hence the unchecked Sendable.
-private final class ReadScratch: @unchecked Sendable {
+/// Which file a path names right now, so a path that was cleared and reused is not taken for the original.
+private struct FileIdentity: Equatable {
+    var device: dev_t
+    var inode: ino_t
+
+    init?(path: String) {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return nil }
+        device = info.st_dev
+        inode = info.st_ino
+    }
+}
+
+/// What the connections of one server share. The status line connects on every redraw, so one read
+/// buffer is reused rather than a fresh 64 KiB per read. Only touched on the server's serial queue,
+/// hence the unchecked Sendable.
+private final class Clients: @unchecked Sendable {
     var bytes = [UInt8](repeating: 0, count: 64 * 1024)
+    var open = 0
 }
 
 /// One accepted client. Only touched on the server queue, which is what makes the
@@ -183,30 +262,41 @@ private final class Connection: @unchecked Sendable {
     private static let maxBytes = 4 << 20
 
     private let fd: Int32
+    private let queue: DispatchQueue
     private let source: any DispatchSourceRead
     private let onLine: (Data) -> Void
-    private let scratch: ReadScratch
+    private let clients: Clients
     private var buffer = Data()
+    private var isFinished = false
 
-    init(fd: Int32, queue: DispatchQueue, scratch: ReadScratch, onLine: @escaping (Data) -> Void) {
+    init(fd: Int32, queue: DispatchQueue, clients: Clients, onLine: @escaping (Data) -> Void) {
         self.fd = fd
-        self.scratch = scratch
+        self.queue = queue
+        self.clients = clients
         self.source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         self.onLine = onLine
     }
 
-    func start() {
+    func start(deadline: TimeInterval) {
         // The handlers keep the connection alive until the source is cancelled.
         source.setEventHandler { self.readAvailable() }
-        source.setCancelHandler { close(self.fd) }
+        source.setCancelHandler {
+            close(self.fd)
+            self.clients.open -= 1
+        }
         source.resume()
+        // Weak, so a connection that finished in time is not kept around until the deadline.
+        // Whatever arrived by then is dropped: a message only counts once its sender closed.
+        queue.asyncAfter(deadline: .now() + deadline) { [weak self] in
+            self?.finish(deliver: false)
+        }
     }
 
     private func readAvailable() {
-        while true {
-            let count = scratch.bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+        while !isFinished {
+            let count = clients.bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
             if count > 0 {
-                buffer.append(contentsOf: scratch.bytes[..<count])
+                buffer.append(contentsOf: clients.bytes[..<count])
                 if buffer.count > Self.maxBytes { return finish(deliver: false) }
             } else if count < 0, errno == EINTR {
                 continue
@@ -219,6 +309,8 @@ private final class Connection: @unchecked Sendable {
     }
 
     private func finish(deliver: Bool) {
+        guard !isFinished else { return }
+        isFinished = true
         if deliver {
             for line in buffer.split(separator: UInt8(ascii: "\n")) where !line.isEmpty {
                 onLine(Data(line))

@@ -11,6 +11,10 @@ public struct SessionActivity: Equatable, Sendable {
     public var completedTurn: Bool
     /// Subagents the agent has running, for the "+3" next to its status.
     public var subagents = SubagentRoster()
+    /// Shells and other tasks the agent left running when its last turn ended, so only as fresh
+    /// as that turn end. Left out of `isBusy` on purpose: a dev server never exits, and a session
+    /// running one would never get to show a finished turn.
+    public var backgroundTasks = 0
 
     public init(status: SessionStatus = .notStarted, unread: Bool = false, lastMessage: String? = nil, completedTurn: Bool = false) {
         self.status = status
@@ -20,6 +24,12 @@ public struct SessionActivity: Equatable, Sendable {
     }
 
     public var needsUser: Bool { status.needsUser }
+
+    /// Stopping the session now would throw something away: a turn, a pending answer, or work
+    /// the agent left running.
+    public var hasWorkInFlight: Bool {
+        isBusy || needsUser || backgroundTasks > 0
+    }
 
     /// A finished turn with background subagents still running is not done yet. `.starting` is
     /// left out on purpose: a tab that is only booting shouldn't hold back another tab's result.
@@ -48,6 +58,7 @@ public struct SessionActivity: Equatable, Sendable {
             unread = false
             lastMessage = nil
             completedTurn = false
+            backgroundTasks = 0
         case .sessionStarted:
             // Hooks can arrive late, so this must not pull a busy session back to idle.
             // It is also not a result worth badging, hence the early return.
@@ -71,10 +82,11 @@ public struct SessionActivity: Equatable, Sendable {
         case .attentionRequested(let reason, let message):
             status = .needsAttention(reason)
             lastMessage = message ?? lastMessage
-        case .turnFinished(let message):
+        case .turnFinished(let message, let backgroundTasks):
             status = .finished
             completedTurn = true
             lastMessage = message ?? lastMessage
+            if let backgroundTasks { self.backgroundTasks = backgroundTasks }
         case .terminalNotification(_, let body):
             lastMessage = body
             // Fallback for agents without hooks. Only a running turn is promoted, so a precise
@@ -84,6 +96,7 @@ public struct SessionActivity: Equatable, Sendable {
             if !isBeingViewed { unread = true }
         case .processExited(let code):
             status = .exited(code: code)
+            backgroundTasks = 0
         }
 
         markUnreadIfSettled(from: previous, wasBusy: wasBusy)

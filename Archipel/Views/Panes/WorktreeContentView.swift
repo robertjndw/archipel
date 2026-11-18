@@ -4,6 +4,9 @@ import EditorUI
 import SwiftUI
 import TerminalKit
 
+/// The narrowest a pane gets when the divider next to it is dragged.
+private let minimumPaneWidth: CGFloat = 260
+
 /// The content area of the selected worktree: its panes next to each other.
 struct WorktreeContentView: View {
     @Environment(AppModel.self) private var model
@@ -12,18 +15,21 @@ struct WorktreeContentView: View {
 
     var body: some View {
         if let worktree = model.selectedWorktree {
-            HSplitView {
-                ForEach(worktree.panes) { pane in
-                    PaneView(
-                        worktree: worktree,
-                        pane: pane,
-                        isFocused: pane.id == worktree.focusedPane?.id,
-                        showsSidebarToggle: isSidebarCollapsed && pane.id == worktree.panes.first?.id,
-                        toggleSidebar: toggleSidebar
-                    )
-                    .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea(.container, edges: .top)
-                    .snapsSplitDividerToCenter(enabled: pane.id == worktree.panes.first?.id)
+            Group {
+                if #available(macOS 27.2, *) {
+                    HSplitView {
+                        ForEach(worktree.panes) { pane in
+                            paneView(pane, in: worktree)
+                                .frame(minWidth: minimumPaneWidth, maxWidth: .infinity, maxHeight: .infinity)
+                                .ignoresSafeArea(.container, edges: .top)
+                                .snapsSplitDividerToCenter(enabled: pane.id == worktree.panes.first?.id)
+                        }
+                    }
+                } else {
+                    PaneStack(panes: worktree.panes) { pane in
+                        paneView(pane, in: worktree)
+                            .ignoresSafeArea(.container, edges: .top)
+                    }
                 }
             }
             .ignoresSafeArea(.container, edges: .top)
@@ -37,6 +43,98 @@ struct WorktreeContentView: View {
             // ends up halfway up the window.
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+extension WorktreeContentView {
+    private func paneView(_ pane: Pane, in worktree: Worktree) -> some View {
+        PaneView(
+            worktree: worktree,
+            pane: pane,
+            isFocused: pane.id == worktree.focusedPane?.id,
+            showsSidebarToggle: isSidebarCollapsed && pane.id == worktree.panes.first?.id,
+            toggleSidebar: toggleSidebar
+        )
+    }
+}
+
+/// Stands in for `HSplitView` before macOS 27.2. On 27.0.1 an `HSplitView` in the detail column
+/// asks for more room than the window has once a second pane is open, and the sidebar ends up
+/// partly outside the window. 27.2.1 lays it out fine; 27.1 was never tried, so it gets this too.
+///
+/// The GeometryReader is what prevents it: the panes inside report no minimum width to the
+/// columns around them.
+private struct PaneStack<Content: View>: View {
+    let panes: [Pane]
+    @ViewBuilder let content: (Pane) -> Content
+
+    /// Each pane's share of the width. A pane that was never resized counts as 1.
+    @State private var weights: [Pane.ID: CGFloat] = [:]
+    /// The widths of the two panes next to the divider being dragged, as they were when the drag began.
+    @State private var dragOrigin: (leading: CGFloat, trailing: CGFloat)?
+
+    private static var dividerWidth: CGFloat { 1 }
+    /// How far to either side of the hairline a drag may start.
+    private static var grabMargin: CGFloat { 4 }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let widths = widths(fitting: proxy.size.width)
+            HStack(spacing: 0) {
+                ForEach(Array(panes.enumerated()), id: \.element.id) { index, pane in
+                    content(pane)
+                        .frame(width: widths[index])
+                        .frame(maxHeight: .infinity)
+                    if index < panes.count - 1 {
+                        divider(after: index, widths: widths)
+                    }
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+        }
+    }
+
+    private func weight(of pane: Pane) -> CGFloat { weights[pane.id] ?? 1 }
+
+    private func widths(fitting total: CGFloat) -> [CGFloat] {
+        let available = max(0, total - Self.dividerWidth * CGFloat(panes.count - 1))
+        let sum = panes.reduce(0) { $0 + weight(of: $1) }
+        guard sum > 0 else { return panes.map { _ in 0 } }
+        return panes.map { available * weight(of: $0) / sum }
+    }
+
+    private func divider(after index: Int, widths: [CGFloat]) -> some View {
+        Divider()
+            .overlay {
+                Color.clear
+                    .frame(width: Self.dividerWidth + 2 * Self.grabMargin)
+                    .contentShape(.rect)
+                    .pointerStyle(.columnResize)
+                    .gesture(
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { drag in
+                                let origin = dragOrigin ?? (widths[index], widths[index + 1])
+                                dragOrigin = origin
+                                resize(index, origin: origin, by: drag.translation.width)
+                            }
+                            .onEnded { _ in dragOrigin = nil }
+                    )
+            }
+            // Above the pane that follows, which would otherwise take the clicks on its side of the hairline.
+            .zIndex(1)
+    }
+
+    /// Moves width between the two panes at the divider. Their combined share stays what it was, so
+    /// the other panes keep their widths.
+    private func resize(_ index: Int, origin: (leading: CGFloat, trailing: CGFloat), by offset: CGFloat) {
+        let pair = origin.leading + origin.trailing
+        guard pair > 0 else { return }
+        // Two panes squeezed under twice the minimum can only share what there is.
+        let minimum = min(minimumPaneWidth, pair / 2)
+        let leading = min(max(origin.leading + offset, minimum), pair - minimum)
+        let share = weight(of: panes[index]) + weight(of: panes[index + 1])
+        weights[panes[index].id] = share * leading / pair
+        weights[panes[index + 1].id] = share * (pair - leading) / pair
     }
 }
 
@@ -70,32 +168,46 @@ private struct PaneView: View {
     private var content: some View {
         switch pane.selectedTab?.content {
         case .session(let id):
-            SessionContent(sessionID: id)
+            if let tab = pane.selectedTab { SessionContent(sessionID: id, tabID: tab.id) }
         case .file(let url):
             FileEditor(url: url, store: model.documents)
         case .diff(let path, let staged):
-            DiffViewer(
-                root: worktree.path,
-                path: path,
-                staged: staged,
-                comments: model.reviewComments,
-                targets: model.reviewTargets(in: worktree),
-                onSend: { model.sendReviewComments(in: worktree.id, to: $0) }
-            )
+            if model.isGitAvailable {
+                DiffViewer(
+                    root: worktree.path,
+                    path: path,
+                    staged: staged,
+                    comments: model.reviewComments,
+                    targets: model.reviewTargets(in: worktree),
+                    onSend: { model.sendReviewComments(in: worktree.id, to: $0) }
+                )
+            } else {
+                // The viewer runs git of its own as soon as it is on screen, and a diff tab can be
+                // restored from the last launch. Without the developer tools every such call
+                // brings up the system's install dialog.
+                ContentUnavailableView {
+                    Label("Git Is Not Installed", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(AppModel.gitMissingMessage)
+                }
+            }
         case .web(let url):
             if let tab = pane.selectedTab { WebTabView(tabID: tab.id, url: url) }
         case nil:
             ContentUnavailableView {
                 Label("No Tabs", systemImage: "terminal")
             } description: {
-                Text("Start an agent or a shell in \(worktree.displayName), or open a file from the sidebar on the right.")
+                Text("Start an agent or a shell in \(worktree.displayName), or open a file from the inspector.")
             } actions: {
                 GlassEffectContainer {
                     HStack(spacing: 8) {
                         ForEach(AgentDefinition.builtIns) { agent in
+                            let canStart = model.canStartSession(with: agent)
                             Button(agent.displayName, symbol: agent.symbolName) {
                                 model.newSession(in: worktree.id, agent: agent, pane: pane.id)
                             }
+                            .disabled(!canStart)
+                            .help(canStart ? "" : agent.missingCommandHint)
                         }
                     }
                 }
@@ -108,10 +220,14 @@ private struct PaneView: View {
 
 private struct SessionContent: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let sessionID: Session.ID
+    let tabID: ArchipelCore.Tab.ID
 
     var body: some View {
         let activity = model.activity(for: sessionID)
+        let exitCode: Int32? = if case .exited(let code) = activity.status, model.terminals[sessionID] != nil { code } else { nil }
         Group {
             if let terminal = model.terminals[sessionID] {
                 TerminalView(session: terminal)
@@ -127,6 +243,12 @@ private struct SessionContent: View {
                     Button("Try Again") { model.restartSession(sessionID) }
                         .buttonStyle(.glassProminent)
                         .controlSize(.large)
+                    Button("Agent Settings…") {
+                        SettingsView.select(.agents)
+                        openSettings()
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.large)
                 }
             } else {
                 ProgressView()
@@ -134,9 +256,19 @@ private struct SessionContent: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if case .exited(let code) = activity.status, model.terminals[sessionID] != nil {
-                ExitedBar(code: code) { model.restartSession(sessionID) }
+            // The animation stays in here, so the bar fades in while the terminal above it takes
+            // its new height at once instead of reflowing its lines on every frame.
+            ZStack {
+                if let exitCode {
+                    ExitedBar(code: exitCode) {
+                        model.restartSession(sessionID)
+                    } close: {
+                        model.close(tab: tabID)
+                    }
+                    .transition(.opacity)
+                }
             }
+            .animation(reduceMotion ? nil : Motion.hover, value: exitCode)
         }
     }
 }
@@ -146,6 +278,7 @@ private struct SessionContent: View {
 private struct ExitedBar: View {
     let code: Int32
     let restart: () -> Void
+    let close: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -155,6 +288,8 @@ private struct ExitedBar: View {
             )
             .foregroundStyle(.secondary)
             Spacer(minLength: 0)
+            Button("Close", systemImage: "xmark", action: close)
+                .buttonStyle(.glass)
             Button("Restart", systemImage: "arrow.clockwise", action: restart)
                 .buttonStyle(.glassProminent)
         }
@@ -200,9 +335,9 @@ private struct ExitedBar: View {
 
 #Preview("Exited Bar") {
     VStack(spacing: 0) {
-        ExitedBar(code: 0) {}
-        ExitedBar(code: 1) {}
-        ExitedBar(code: 1) {}
+        ExitedBar(code: 0) {} close: {}
+        ExitedBar(code: 1) {} close: {}
+        ExitedBar(code: 1) {} close: {}
             .environment(\.colorScheme, .dark)
     }
     .frame(width: 600)

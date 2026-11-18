@@ -9,6 +9,7 @@ struct SidebarAttentionBadge: View {
     let signal: AttentionSummary.Signal
     /// The island switcher animates its symbol instead of showing a spinner.
     var showsWorking = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -32,7 +33,7 @@ struct SidebarAttentionBadge: View {
                 }
             }
         }
-        .transition(.scale.combined(with: .opacity))
+        .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
         .accessibilityHidden(true)
     }
 }

@@ -62,7 +62,7 @@ struct AboutSettingsView: View {
             .disabled(!Updater.isEnabled)
         }
         .formStyle(.grouped)
-        .animation(.default, value: updater.receivesBetaUpdates)
+        .animation(Motion.disclosure, value: updater.receivesBetaUpdates)
     }
 
     private static let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String

@@ -11,6 +11,9 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
     public var agent: AgentKind
     /// The agent's own conversation id, used to resume after a relaunch.
     public var agentSessionID: String?
+    /// Set on the tab a project script runs in, so Run finds that tab again after a relaunch. Only
+    /// the kind is kept: the command is read from the project each time, and nothing runs by itself.
+    public var script: ScriptKind?
     public var createdAt: Date
 
     public init(
@@ -20,6 +23,7 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         agentTitle: String? = nil,
         agent: AgentKind,
         agentSessionID: String? = nil,
+        script: ScriptKind? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -28,6 +32,7 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         self.agentTitle = agentTitle
         self.agent = agent
         self.agentSessionID = agentSessionID
+        self.script = script
         self.createdAt = createdAt
     }
 
@@ -39,6 +44,9 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         agentTitle = try c.decodeIfPresent(String.self, forKey: .agentTitle)
         agent = try c.decode(AgentKind.self, forKey: .agent)
         agentSessionID = try c.decodeIfPresent(String.self, forKey: .agentSessionID)
+        // Read as a string so a kind added by a later version makes this a plain session instead of
+        // failing the whole workspace file.
+        script = try c.decodeIfPresent(String.self, forKey: .script).flatMap(ScriptKind.init(rawValue:))
         createdAt = try c.decode(Date.self, forKey: .createdAt)
     }
 

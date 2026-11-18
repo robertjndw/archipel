@@ -66,3 +66,27 @@ func collect(_ count: Int, from server: HookServer, timeout: Duration = .seconds
         return first ?? []
     }
 }
+
+/// A raw client, for the things the helper never does. Reads give up after five seconds so a
+/// server that fails to hang up fails the test instead of blocking it.
+func connectClient(to socketURL: URL) throws -> Int32 {
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: socketURL.path.utf8) }
+
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    try #require(fd >= 0)
+    var timeout = timeval(tv_sec: 5, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard connected == 0 else {
+        close(fd)
+        throw HookServerError.system(call: "connect", errno: errno)
+    }
+    return fd
+}

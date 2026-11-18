@@ -29,8 +29,10 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
 - Work is grouped as islands > projects > worktrees. Switch islands with
   <kbd>Ctrl</kbd>+<kbd>1</kbd> to <kbd>9</kbd> or a two-finger swipe over the sidebar.
   Agents in other islands keep running, and the island gets a badge when one needs you.
-- Add a worktree from one search field: pick an existing branch, or type a name
-  to create a new one. Worktrees you made with `git worktree` yourself are picked
+  If "Switch to Desktop N" is turned on in the macOS keyboard settings, it takes
+  those keys first; <kbd>Ctrl</kbd><kbd>⌘</kbd><kbd>]</kbd> and <kbd>[</kbd> still work.
+- Add a worktree from one search field: pick an existing local or remote branch,
+  or type a name to create a new one. Worktrees you made with `git worktree` yourself are picked
   up too.
 - Switch the branch a worktree has checked out with <kbd>⇧</kbd><kbd>⌘</kbd><kbd>B</kbd>,
   from its context menu or by clicking the branch name in the Changes panel. Pick a
@@ -92,6 +94,7 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
 | Next / previous tab | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>]</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>[</kbd> |
 | Split right | <kbd>⌘</kbd><kbd>\\</kbd> |
 | Switch island | <kbd>Ctrl</kbd><kbd>1</kbd>...<kbd>9</kbd> |
+| Next / previous island | <kbd>Ctrl</kbd><kbd>⌘</kbd><kbd>]</kbd> / <kbd>Ctrl</kbd><kbd>⌘</kbd><kbd>[</kbd> |
 | Next session needing attention | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>U</kbd> |
 | Add worktree | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> |
 | Switch branch | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>B</kbd> |
@@ -101,6 +104,9 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
 | Save all files | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>S</kbd> |
 | Show Files / Changes / toggle inspector | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>1</kbd> / <kbd>2</kbd> / <kbd>0</kbd> |
 | Open in external editor | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>E</kbd> |
+
+<kbd>⌘</kbd><kbd>K</kbd> belongs to the palette everywhere, so it does not clear the
+terminal the way it does in other terminal apps. Use <kbd>Ctrl</kbd><kbd>L</kbd> for that.
 
 ## Installation
 
@@ -127,7 +133,7 @@ copy that is running, and leaves it untouched if the build fails. It replaces a
 copy installed from a DMG too.
 
 Copies installed from a DMG update themselves. Beta versions can be turned on
-under Settings > General > Updates.
+under Settings > About.
 
 ## How agent status works
 
@@ -185,9 +191,12 @@ open -n --env ARCHIPEL_SUPPORT_DIR=/tmp/archipel-dev path/to/Archipel.app
   share) and the `archipel-hook` helper that
   agents call. Run `swift test` here. `editor-demo` opens an editor or diff
   in a window of its own.
+- `ArchipelUITests/` - end-to-end tests that drive the real app against a
+  throwaway workspace and fixture git repositories. Run them with
+  `./scripts/ui-tests.sh`; see [CONTRIBUTING.md](CONTRIBUTING.md#ui-tests).
 - `Packages/TerminalKit` - the only code that talks to Ghostty. Includes
   `terminal-demo`, a one-window harness for testing a surface in isolation.
-- `scripts/` - `build-ghostty.sh`, `install.sh`, and `build-dmg.sh`,
+- `scripts/` - `build-ghostty.sh`, `install.sh`, `ui-tests.sh`, and `build-dmg.sh`,
   `notarize.sh` and `build-appcast.py`, which the release workflows use.
   Releases and in-app updates (beta and stable channels) are described in
   [docs/releasing.md](docs/releasing.md).

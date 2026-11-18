@@ -203,10 +203,18 @@ public struct Workspace: Codable, Equatable, Sendable {
     public mutating func moveProject(id: Project.ID, to islandID: Island.ID, at index: Int? = nil) {
         guard let dest = islands.firstIndex(where: { $0.id == islandID }),
               let loc = locate(projectID: id) else { return }
+        let source = islands[loc.island].id
         let project = islands[loc.island].projects.remove(at: loc.project)
+        // The old island may have remembered one of this project's worktrees. It moves on to the
+        // project that took this one's place rather than showing nothing while it still has some.
+        if dest != loc.island, let selected = selectedWorktreeIDByIsland[source],
+           project.worktrees.contains(where: { $0.id == selected }) {
+            let remaining = islands[loc.island].projects
+            let neighbour = remaining.isEmpty ? nil : remaining[min(loc.project, remaining.count - 1)]
+            selectedWorktreeIDByIsland[source] = (neighbour?.worktrees.first(where: \.isMain) ?? neighbour?.worktrees.first)?.id
+        }
         let count = islands[dest].projects.count
         islands[dest].projects.insert(project, at: min(max(index ?? count, 0), count))
-        // The old island may have remembered one of this project's worktrees.
         pruneSelections()
     }
 
