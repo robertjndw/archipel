@@ -12,12 +12,14 @@ class ArchipelUITestCase: XCTestCase {
     /// save. Generous, because a busy machine only makes a passing test slower.
     static let timeout: TimeInterval = 15
 
-    override func setUp() async throws {
+    // Not async: a CI run hung between "Start Test" and "Set Up", and the async variants' hop onto
+    // the main actor is the only thing that runs there.
+    override func setUpWithError() throws {
         continueAfterFailure = false
         sandbox = try Sandbox()
     }
 
-    override func tearDown() async throws {
+    override func tearDownWithError() throws {
         if let app, app.state != .notRunning {
             // What the windows looked like when the test gave up. xcodebuild's plain output has
             // nothing else to go on, and that output is all a CI log keeps.

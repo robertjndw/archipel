@@ -33,6 +33,8 @@ done
 results="$derived/ArchipelUITests.xcresult"
 rm -rf "$results"
 
+# No test needs anywhere near 5 minutes. A stuck one fails with a spindump in the result bundle
+# instead of holding the CI job until it times out.
 # ${only[@]+...}: an empty array counts as unset under `set -u` in the bash that macOS ships.
 xcodebuild test \
   -project "$root/Archipel.xcodeproj" \
@@ -40,4 +42,7 @@ xcodebuild test \
   -destination 'platform=macOS' \
   -derivedDataPath "$derived" \
   -resultBundlePath "$results" \
+  -test-timeouts-enabled YES \
+  -default-test-execution-time-allowance 300 \
+  -maximum-test-execution-time-allowance 300 \
   ${only[@]+"${only[@]}"}
