@@ -64,10 +64,11 @@ final class ChangesModelTests {
         #expect(model.activity == .commit)
         model.stage(b)
         try await idle(model)
-        for _ in 0..<300 where model.status.staged.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        // Idle can come before the stage's refresh lands, and until then the model may still show
+        // a.txt staged from before the commit.
+        try await until { model.status.staged.map(\.path) == ["b.txt"] }
 
         #expect(model.actionError == nil)
-        #expect(model.status.staged.map(\.path) == ["b.txt"])
         #expect(try git("show", "--name-only", "--format=%s", "HEAD") == "slow\n\na.txt")
     }
 
