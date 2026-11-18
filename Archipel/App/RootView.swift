@@ -75,6 +75,7 @@ struct RootView: View {
             IslandEditor(mode: .create)
         }
         .renameAlert($model.renameRequest)
+        .customModelAlert($model.customModelRequest)
         .alert("Archipel ran into a problem", item: $model.problem) { _ in
             Button("OK") {}
         } message: { problem in

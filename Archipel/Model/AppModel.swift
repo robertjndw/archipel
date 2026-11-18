@@ -110,6 +110,8 @@ final class AppModel {
     /// not delete, after the worktree has left the workspace.
     var worktreeAwaitingRemoval: Worktree?
     var isCreatingIsland = false
+    /// A new session waiting for the user to type a model name.
+    var customModelRequest: CustomModelRequest?
     /// The push, pull or fetch running per worktree for the Project menu and the palette, which
     /// offer one at a time. See AppModel+Sync.
     var syncsInFlight: [Worktree.ID: SyncAction] = [:]
@@ -1110,17 +1112,27 @@ final class AppModel {
 
     // MARK: Sessions
 
-    func newSession(in worktreeID: Worktree.ID, agent: AgentDefinition, pane: Pane.ID? = nil) {
+    /// `model` overrides the agent's default model for this session only.
+    func newSession(in worktreeID: Worktree.ID, agent: AgentDefinition, model: String? = nil, pane: Pane.ID? = nil) {
         guard let worktree = workspace.worktree(id: worktreeID) else { return }
+        let model = model?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let chosenModel = model?.isEmpty == false ? model : nil
         let count = worktree.sessions.count { $0.agent.rawValue == agent.id }
+        let baseTitle = chosenModel.map { "\(agent.displayName) (\(Self.modelTitle($0, agent: agent)))" } ?? agent.displayName
         let session = Session(
-            title: count == 0 ? agent.displayName : "\(agent.displayName) \(count + 1)",
-            agent: AgentKind(rawValue: agent.id)
+            title: count == 0 ? baseTitle : "\(baseTitle) \(count + 1)",
+            agent: AgentKind(rawValue: agent.id),
+            model: chosenModel
         )
         changingSelection {
             _ = $0.addSession(session, to: worktreeID, pane: pane)
             $0.selectSession(session.id)
         }
+    }
+
+    /// Listed aliases get capitalized ("Fable"), custom ids are shown as typed.
+    static func modelTitle(_ model: String, agent: AgentDefinition) -> String {
+        agent.modelChoices.contains(model) ? model.capitalized : model
     }
 
     func renameSession(_ id: Session.ID, to title: String) {
@@ -1492,7 +1504,7 @@ final class AppModel {
             command = resume
         }
         if definition.acceptsPrompts {
-            command.arguments += settings.extraArguments(for: definition.id)
+            command.arguments += AgentDefinition.arguments(settings.extraArguments(for: definition.id), model: session.model)
         }
         return command
     }

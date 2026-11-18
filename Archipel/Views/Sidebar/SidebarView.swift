@@ -305,6 +305,9 @@ struct NewSessionButtons: View {
             .disabled(!canStart)
             .help(canStart ? "" : agent.missingCommandHint)
         }
+        ForEach(AgentDefinition.builtIns) { agent in
+            NewSessionWithModelMenu(model: model, agent: agent, worktree: worktree, pane: pane)
+        }
     }
 }
 

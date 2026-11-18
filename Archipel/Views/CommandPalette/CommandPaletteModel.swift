@@ -48,6 +48,34 @@ struct PaletteCommand: Identifiable {
             }
         }
 
+        // Flat entries rather than a submenu, so typing "fable" finds the command.
+        let newSessionsWithModel = model.agentsInMenuOrder.flatMap { agent in
+            let isAvailable = hasSelection && model.canStartSession(with: agent)
+            let listed = agent.modelChoices.map { choice in
+                PaletteCommand(
+                    id: "new-\(agent.id)-model-\(choice)",
+                    title: "New \(agent.displayName) Session with \(AppModel.modelTitle(choice, agent: agent))",
+                    symbol: agent.symbolName,
+                    isAvailable: isAvailable
+                ) {
+                    if let worktreeID { model.newSession(in: worktreeID, agent: agent, model: choice) }
+                }
+            }
+            let custom = agent.modelChoices.isEmpty ? [] : [
+                PaletteCommand(
+                    id: "new-\(agent.id)-model-custom",
+                    title: "New \(agent.displayName) Session with Model…",
+                    symbol: agent.symbolName,
+                    isAvailable: isAvailable,
+                    refocusesTab: false
+                ) {
+                    guard let worktreeID, model.readyForSheet() else { return }
+                    model.customModelRequest = CustomModelRequest(worktree: worktreeID, agentID: agent.id)
+                },
+            ]
+            return listed + custom
+        }
+
         let stayAwake = model.stayAwake
         let stayAwakeModes = StayAwake.Mode.allCases.map { mode in
             PaletteCommand(
@@ -227,7 +255,7 @@ struct PaletteCommand: Identifiable {
             PaletteCommand(id: "help", title: "Archipel Help", symbol: "questionmark.circle", refocusesTab: false) {
                 NSWorkspace.shared.open(AppActions.helpURL)
             },
-        ]
+        ] + newSessionsWithModel
     }
 }
 
