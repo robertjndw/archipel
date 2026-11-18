@@ -172,12 +172,37 @@ final class AppSettings {
 
     // MARK: Agents
 
-    /// Extra command line arguments per agent id, as the user typed them.
-    var agentArguments: [String: String] { didSet { defaults.set(agentArguments, forKey: Key.agentArguments) } }
+    /// Named argument sets for File > New Session with Preset, in the user's order.
+    var launchPresets: [LaunchPreset] {
+        didSet {
+            defaults.set(try? JSONEncoder().encode(launchPresets), forKey: Key.launchPresets)
+            // Deleting the default preset leaves the agent without one rather than pointing at nothing.
+            let ids = Set(launchPresets.map(\.id))
+            if defaultPresetIDs.values.contains(where: { !ids.contains($0) }) {
+                defaultPresetIDs = defaultPresetIDs.filter { ids.contains($0.value) }
+            }
+        }
+    }
 
-    /// The user's extra arguments for an agent, already split into words.
+    /// The preset New Session (⌘T) uses, per agent id. An agent without one starts with no extra
+    /// arguments.
+    private(set) var defaultPresetIDs: [String: UUID] {
+        didSet { defaults.set(defaultPresetIDs.mapValues(\.uuidString), forKey: Key.defaultPresetIDs) }
+    }
+
+    func defaultPreset(for agentID: String) -> LaunchPreset? {
+        guard let id = defaultPresetIDs[agentID] else { return nil }
+        return launchPresets.first { $0.id == id }
+    }
+
+    /// Nil clears the agent's default.
+    func setDefaultPreset(_ id: LaunchPreset.ID?, for agentID: String) {
+        defaultPresetIDs[agentID] = id
+    }
+
+    /// The default preset's arguments for an agent, already split into words.
     func extraArguments(for agentID: String) -> [String] {
-        ArgumentSplitter.split(agentArguments[agentID] ?? "")
+        ArgumentSplitter.split(defaultPreset(for: agentID)?.arguments ?? "")
     }
 
     static let standardWorktreesRoot = URL.homeDirectory.appending(path: ".archipel/worktrees", directoryHint: .isDirectory)
@@ -219,7 +244,24 @@ final class AppSettings {
         showsMenuBarExtra = bool(Key.showsMenuBarExtra, true)
         suppressesNotificationsWhileActive = bool(Key.suppressesNotificationsWhileActive, false)
         holdsNotificationsWhileSharingScreen = bool(Key.holdsNotificationsWhileSharingScreen, true)
-        agentArguments = defaults.dictionary(forKey: Key.agentArguments) as? [String: String] ?? [:]
+        // Seeded only while the key is missing, so a list the user emptied stays empty. Data that
+        // no longer decodes also falls back to the defaults rather than losing the menu.
+        let presets = defaults.data(forKey: Key.launchPresets)
+            .flatMap { try? JSONDecoder().decode([LaunchPreset].self, from: $0) } ?? LaunchPreset.defaults
+        if let stored = defaults.dictionary(forKey: Key.defaultPresetIDs) as? [String: String] {
+            launchPresets = presets
+            defaultPresetIDs = stored.compactMapValues(UUID.init(uuidString:))
+        } else {
+            // First launch since presets replaced the "Extra arguments" field. Writing the new key
+            // here makes this run only once.
+            let old = defaults.dictionary(forKey: Key.agentArguments) as? [String: String] ?? [:]
+            let migrated = LaunchPreset.migrating(extraArguments: old, into: presets)
+            launchPresets = migrated.presets
+            defaultPresetIDs = migrated.defaultIDs
+            if !old.isEmpty { defaults.set(try? JSONEncoder().encode(launchPresets), forKey: Key.launchPresets) }
+            defaults.set(defaultPresetIDs.mapValues(\.uuidString), forKey: Key.defaultPresetIDs)
+            defaults.removeObject(forKey: Key.agentArguments)
+        }
     }
 
     private enum Key {
@@ -250,5 +292,7 @@ final class AppSettings {
         static let suppressesNotificationsWhileActive = "settings.suppressesNotificationsWhileActive"
         static let holdsNotificationsWhileSharingScreen = "settings.holdsNotificationsWhileSharingScreen"
         static let agentArguments = "settings.agentArguments"
+        static let launchPresets = "settings.launchPresets"
+        static let defaultPresetIDs = "settings.defaultPresetIDs"
     }
 }

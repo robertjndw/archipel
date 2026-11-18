@@ -110,8 +110,6 @@ final class AppModel {
     /// not delete, after the worktree has left the workspace.
     var worktreeAwaitingRemoval: Worktree?
     var isCreatingIsland = false
-    /// A new session waiting for the user to type its arguments.
-    var customArgumentsRequest: CustomArgumentsRequest?
     /// The push, pull or fetch running per worktree for the Project menu and the palette, which
     /// offer one at a time. See AppModel+Sync.
     var syncsInFlight: [Worktree.ID: SyncAction] = [:]
@@ -1112,35 +1110,22 @@ final class AppModel {
 
     // MARK: Sessions
 
-    /// `model` and `arguments` only affect this session. `arguments` replaces the default extra
-    /// arguments from Settings, and `model` replaces the `--model` in whichever set ends up used.
-    func newSession(
-        in worktreeID: Worktree.ID,
-        agent: AgentDefinition,
-        model: String? = nil,
-        arguments: String? = nil,
-        pane: Pane.ID? = nil
-    ) {
+    /// The preset's arguments are copied onto the session, so later edits to the preset don't
+    /// change it. Without a preset the session follows the agent's default preset.
+    func newSession(in worktreeID: Worktree.ID, agent: AgentDefinition, preset: LaunchPreset? = nil, pane: Pane.ID? = nil) {
         guard let worktree = workspace.worktree(id: worktreeID) else { return }
+        // Numbered per agent, not per preset, so "Claude Code (Opus) 2" means the second Claude tab.
         let count = worktree.sessions.count { $0.agent.rawValue == agent.id }
-        // Show the model in the title for custom arguments too, same as the model menu does.
-        let titleModel = model ?? arguments.flatMap { AgentDefinition.model(in: ArgumentSplitter.split($0)) }
-        let baseTitle = titleModel.map { "\(agent.displayName) (\(Self.modelTitle($0, agent: agent)))" } ?? agent.displayName
+        let baseTitle = preset.map { "\(agent.displayName) (\($0.title))" } ?? agent.displayName
         let session = Session(
             title: count == 0 ? baseTitle : "\(baseTitle) \(count + 1)",
             agent: AgentKind(rawValue: agent.id),
-            model: model,
-            arguments: arguments
+            arguments: preset?.arguments
         )
         changingSelection {
             _ = $0.addSession(session, to: worktreeID, pane: pane)
             $0.selectSession(session.id)
         }
-    }
-
-    /// Listed aliases get capitalized ("Fable"), custom ids are shown as typed.
-    static func modelTitle(_ model: String, agent: AgentDefinition) -> String {
-        agent.modelChoices.contains(model) ? model.capitalized : model
     }
 
     func renameSession(_ id: Session.ID, to title: String) {
@@ -1512,8 +1497,7 @@ final class AppModel {
             command = resume
         }
         if definition.acceptsPrompts {
-            let extra = session.arguments.map(ArgumentSplitter.split) ?? settings.extraArguments(for: definition.id)
-            command.arguments += AgentDefinition.arguments(extra, model: session.model)
+            command.arguments += session.arguments.map(ArgumentSplitter.split) ?? settings.extraArguments(for: definition.id)
         }
         return command
     }

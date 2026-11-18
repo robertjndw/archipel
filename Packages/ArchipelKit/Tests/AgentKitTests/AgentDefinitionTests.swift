@@ -121,31 +121,4 @@ struct AgentDefinitionTests {
         let words = data.split(separator: 0, omittingEmptySubsequences: false).dropLast().map { String(decoding: $0, as: UTF8.self) }
         #expect(words == command.arguments)
     }
-
-    @Test func modelArgumentsLeaveExtraArgumentsAloneWithoutAModel() {
-        #expect(AgentDefinition.arguments(["--model", "opus", "--verbose"], model: nil) == ["--model", "opus", "--verbose"])
-    }
-
-    @Test func modelArgumentsReplaceTheUsersModel() {
-        #expect(AgentDefinition.arguments(["--model", "opus", "--verbose"], model: "fable") == ["--verbose", "--model", "fable"])
-        #expect(AgentDefinition.arguments(["--model=opus", "--verbose"], model: "fable") == ["--verbose", "--model", "fable"])
-        #expect(AgentDefinition.arguments([], model: "fable") == ["--model", "fable"])
-        // A trailing --model with no value is dropped too.
-        #expect(AgentDefinition.arguments(["--verbose", "--model"], model: "fable") == ["--verbose", "--model", "fable"])
-    }
-
-    @Test func modelIsReadFromArguments() {
-        #expect(AgentDefinition.model(in: ["--verbose"]) == nil)
-        #expect(AgentDefinition.model(in: ["--model", "opus", "--verbose"]) == "opus")
-        #expect(AgentDefinition.model(in: ["--model=haiku"]) == "haiku")
-        #expect(AgentDefinition.model(in: ["--model", "opus", "--model=fable"]) == "fable")
-        #expect(AgentDefinition.model(in: ["--model"]) == nil)
-        #expect(AgentDefinition.model(in: ["--model="]) == nil)
-    }
-
-    @Test func onlyClaudeListsModels() {
-        #expect(!AgentDefinition.claude.modelChoices.isEmpty)
-        #expect(AgentDefinition.codex.modelChoices.isEmpty)
-        #expect(AgentDefinition.shell.modelChoices.isEmpty)
-    }
 }

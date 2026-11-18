@@ -15,6 +15,14 @@ extension AppModel {
         return [defaultAgent] + AgentDefinition.builtIns.filter { $0.id != defaultAgent.id }
     }
 
+    /// The presets the File menu and the palette offer, grouped by agent in menu order. Presets of
+    /// agents that take no arguments, like the shell, are left out.
+    var presetsInMenuOrder: [(agent: AgentDefinition, preset: LaunchPreset)] {
+        agentsInMenuOrder.filter(\.acceptsPrompts).flatMap { agent in
+            settings.launchPresets.filter { $0.agentID == agent.id }.map { (agent: agent, preset: $0) }
+        }
+    }
+
     /// False for an agent that is not installed. The default agent is let through regardless: ⌘T
     /// should never be a dead key, and the session it opens says what is missing.
     func canStartSession(with agent: AgentDefinition) -> Bool {

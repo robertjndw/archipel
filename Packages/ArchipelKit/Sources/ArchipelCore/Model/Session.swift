@@ -14,11 +14,8 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
     /// Set on the tab a project script runs in, so Run finds that tab again after a relaunch. Only
     /// the kind is kept: the command is read from the project each time, and nothing runs by itself.
     public var script: ScriptKind?
-    /// Set when the session was started on a non-default model. Stored so a resume after a
-    /// relaunch stays on that model.
-    public var model: String?
-    /// Raw extra arguments for this session only. Replaces the defaults from Settings, also on
-    /// resume. Empty means none.
+    /// Copied from the preset the session was started from, so editing or deleting the preset
+    /// later doesn't affect it. Nil means it follows the agent's default preset, also on resume.
     public var arguments: String?
     public var createdAt: Date
 
@@ -30,7 +27,6 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         agent: AgentKind,
         agentSessionID: String? = nil,
         script: ScriptKind? = nil,
-        model: String? = nil,
         arguments: String? = nil,
         createdAt: Date = Date()
     ) {
@@ -41,7 +37,6 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         self.agent = agent
         self.agentSessionID = agentSessionID
         self.script = script
-        self.model = model
         self.arguments = arguments
         self.createdAt = createdAt
     }
@@ -57,7 +52,6 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         // Read as a string so a kind added by a later version makes this a plain session instead of
         // failing the whole workspace file.
         script = try c.decodeIfPresent(String.self, forKey: .script).flatMap(ScriptKind.init(rawValue:))
-        model = try c.decodeIfPresent(String.self, forKey: .model)
         arguments = try c.decodeIfPresent(String.self, forKey: .arguments)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
     }

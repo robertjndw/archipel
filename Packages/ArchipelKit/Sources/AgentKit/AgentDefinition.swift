@@ -66,9 +66,6 @@ public struct AgentDefinition: Sendable, Identifiable {
     public let reportsLifecycleThroughHooks: Bool
     /// True when the session is an agent prompt the app may type text into. A shell would run it.
     public let acceptsPrompts: Bool
-    /// Aliases for `--model` offered in the "New Session With" menu. Empty means the agent only
-    /// gets the "with Arguments…" item.
-    public let modelChoices: [String]
 
     private let freshLaunch: @Sendable (LaunchContext) -> LaunchCommand
     private let resumeLaunch: (@Sendable (LaunchContext, String) -> LaunchCommand)?
@@ -81,7 +78,6 @@ public struct AgentDefinition: Sendable, Identifiable {
         presetsAgentSessionID: Bool,
         reportsLifecycleThroughHooks: Bool,
         acceptsPrompts: Bool,
-        modelChoices: [String] = [],
         launch: @escaping @Sendable (LaunchContext) -> LaunchCommand,
         resume: (@Sendable (LaunchContext, String) -> LaunchCommand)?
     ) {
@@ -92,7 +88,6 @@ public struct AgentDefinition: Sendable, Identifiable {
         self.presetsAgentSessionID = presetsAgentSessionID
         self.reportsLifecycleThroughHooks = reportsLifecycleThroughHooks
         self.acceptsPrompts = acceptsPrompts
-        self.modelChoices = modelChoices
         self.freshLaunch = launch
         self.resumeLaunch = resume
     }
@@ -105,38 +100,6 @@ public struct AgentDefinition: Sendable, Identifiable {
     public func resumeCommand(for context: LaunchContext) -> LaunchCommand? {
         guard let resumeLaunch, let agentSessionID = context.agentSessionID else { return nil }
         return resumeLaunch(context, agentSessionID)
-    }
-
-    /// The user's extra arguments, with the session's model replacing any `--model` in them.
-    /// We drop theirs instead of appending a second one so we don't rely on which value the
-    /// agent picks when a flag is repeated.
-    public static func arguments(_ extra: [String], model: String?) -> [String] {
-        guard let model else { return extra }
-        var result: [String] = []
-        var index = extra.startIndex
-        while index < extra.endIndex {
-            let word = extra[index]
-            if word == "--model" {
-                index += 2
-                continue
-            }
-            if !word.hasPrefix("--model=") { result.append(word) }
-            index += 1
-        }
-        return result + ["--model", model]
-    }
-
-    /// The `--model` value in a list of arguments, if any. Last one wins.
-    public static func model(in arguments: [String]) -> String? {
-        var found: String?
-        for (index, word) in arguments.enumerated() {
-            if word == "--model", index + 1 < arguments.count {
-                found = arguments[index + 1]
-            } else if word.hasPrefix("--model=") {
-                found = String(word.dropFirst("--model=".count))
-            }
-        }
-        return found.flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -155,7 +118,6 @@ extension AgentDefinition {
         presetsAgentSessionID: true,
         reportsLifecycleThroughHooks: true,
         acceptsPrompts: true,
-        modelChoices: ["fable", "opus", "sonnet", "haiku"],
         launch: { context in
             // Without a preset id Claude picks its own; the SessionStart hook reports it.
             let idArguments = context.agentSessionID.map { ["--session-id", $0] } ?? []

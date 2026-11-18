@@ -235,15 +235,44 @@ private struct FileMenuItems: View {
             .keyboardShortcut("t", modifiers: modifiers)
             .disabled(worktree == nil || !model.canStartSession(with: agent))
         }
-        ForEach(model.agentsInMenuOrder) { agent in
-            NewSessionWithMenu(model: model, agent: agent, worktree: worktree?.id)
-        }
+        PresetMenu(model: model, actions: actions, worktree: worktree?.id)
         Divider()
         Button("Add Project…", systemImage: "folder.badge.plus") { actions.addProject() }
             .keyboardShortcut("o", modifiers: [.command, .shift])
         Divider()
         Button(model.focusedTab == nil ? "Close" : "Close Tab", systemImage: "xmark") { actions.closeTabOrWindow() }
             .keyboardShortcut("w")
+    }
+}
+
+/// Launch presets as one submenu, so the File menu does not grow with every preset the user adds.
+private struct PresetMenu: View {
+    let model: AppModel
+    let actions: AppActions
+    let worktree: Worktree.ID?
+
+    var body: some View {
+        let entries = model.presetsInMenuOrder
+        Menu("New Session with Preset", systemImage: "rectangle.stack") {
+            ForEach(Array(entries.enumerated()), id: \.element.preset.id) { index, entry in
+                let button = Button("\(entry.agent.displayName): \(entry.preset.title)", symbol: entry.agent.symbolName) {
+                    if let worktree { model.newSession(in: worktree, agent: entry.agent, preset: entry.preset) }
+                }
+                .disabled(worktree == nil || !model.canStartSession(with: entry.agent))
+                // Only nine digit keys exist; the rest are reachable from the menu and the palette.
+                if index < 9 {
+                    button.keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: [.command, .control])
+                } else {
+                    button
+                }
+            }
+            if entries.isEmpty { Text("No Presets") }
+            Divider()
+            Button("Edit Presets…") {
+                SettingsView.select(.agents)
+                actions.openSettings()
+            }
+        }
     }
 }
 

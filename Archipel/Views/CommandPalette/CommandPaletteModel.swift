@@ -48,32 +48,17 @@ struct PaletteCommand: Identifiable {
             }
         }
 
-        // Flat entries rather than a submenu, so typing "fable" finds the command.
-        let newSessionsWith = model.agentsInMenuOrder.flatMap { agent in
-            let isAvailable = hasSelection && model.canStartSession(with: agent)
-            let listed = agent.modelChoices.map { choice in
-                PaletteCommand(
-                    id: "new-\(agent.id)-model-\(choice)",
-                    title: "New \(agent.displayName) Session with \(AppModel.modelTitle(choice, agent: agent))",
-                    symbol: agent.symbolName,
-                    isAvailable: isAvailable
-                ) {
-                    if let worktreeID { model.newSession(in: worktreeID, agent: agent, model: choice) }
-                }
+        // Flat entries rather than a submenu, so typing a preset's name finds the command.
+        let presetSessions = model.presetsInMenuOrder.enumerated().map { index, entry in
+            PaletteCommand(
+                id: "new-preset-\(entry.preset.id.uuidString)",
+                title: "New \(entry.agent.displayName) Session: \(entry.preset.title)",
+                symbol: entry.agent.symbolName,
+                shortcutHint: index < 9 ? "⌃⌘\(index + 1)" : nil,
+                isAvailable: hasSelection && model.canStartSession(with: entry.agent)
+            ) {
+                if let worktreeID { model.newSession(in: worktreeID, agent: entry.agent, preset: entry.preset) }
             }
-            let custom = !agent.acceptsPrompts ? [] : [
-                PaletteCommand(
-                    id: "new-\(agent.id)-arguments",
-                    title: "New \(agent.displayName) Session with Arguments…",
-                    symbol: agent.symbolName,
-                    isAvailable: isAvailable,
-                    refocusesTab: false
-                ) {
-                    guard let worktreeID, model.readyForSheet() else { return }
-                    model.customArgumentsRequest = CustomArgumentsRequest(worktree: worktreeID, agentID: agent.id)
-                },
-            ]
-            return listed + custom
         }
 
         let stayAwake = model.stayAwake
@@ -255,7 +240,7 @@ struct PaletteCommand: Identifiable {
             PaletteCommand(id: "help", title: "Archipel Help", symbol: "questionmark.circle", refocusesTab: false) {
                 NSWorkspace.shared.open(AppActions.helpURL)
             },
-        ] + newSessionsWith
+        ] + presetSessions
     }
 }
 
