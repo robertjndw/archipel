@@ -197,7 +197,8 @@ struct HookServerEdgeCaseTests {
             let written = bytes[offset...].withUnsafeBytes { write(client, $0.baseAddress, $0.count) }
             if written < 0, errno == EINTR { continue }
             if written <= 0 {
-                if toleratingHangUp && (errno == EPIPE || errno == ECONNRESET) { return }
+                // The error for a hang-up depends on how far the server got with closing the socket.
+                if toleratingHangUp && [EPIPE, ECONNRESET, ENOTCONN].contains(errno) { return }
                 throw HookServerError.system(call: "write", errno: errno)
             }
             offset += written
