@@ -110,8 +110,8 @@ final class AppModel {
     /// not delete, after the worktree has left the workspace.
     var worktreeAwaitingRemoval: Worktree?
     var isCreatingIsland = false
-    /// A new session waiting for the user to type a model name.
-    var customModelRequest: CustomModelRequest?
+    /// A new session waiting for the user to type its arguments.
+    var customArgumentsRequest: CustomArgumentsRequest?
     /// The push, pull or fetch running per worktree for the Project menu and the palette, which
     /// offer one at a time. See AppModel+Sync.
     var syncsInFlight: [Worktree.ID: SyncAction] = [:]
@@ -1112,17 +1112,25 @@ final class AppModel {
 
     // MARK: Sessions
 
-    /// `model` overrides the agent's default model for this session only.
-    func newSession(in worktreeID: Worktree.ID, agent: AgentDefinition, model: String? = nil, pane: Pane.ID? = nil) {
+    /// `model` and `arguments` only affect this session. `arguments` replaces the default extra
+    /// arguments from Settings, and `model` replaces the `--model` in whichever set ends up used.
+    func newSession(
+        in worktreeID: Worktree.ID,
+        agent: AgentDefinition,
+        model: String? = nil,
+        arguments: String? = nil,
+        pane: Pane.ID? = nil
+    ) {
         guard let worktree = workspace.worktree(id: worktreeID) else { return }
-        let model = model?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let chosenModel = model?.isEmpty == false ? model : nil
         let count = worktree.sessions.count { $0.agent.rawValue == agent.id }
-        let baseTitle = chosenModel.map { "\(agent.displayName) (\(Self.modelTitle($0, agent: agent)))" } ?? agent.displayName
+        // Show the model in the title for custom arguments too, same as the model menu does.
+        let titleModel = model ?? arguments.flatMap { AgentDefinition.model(in: ArgumentSplitter.split($0)) }
+        let baseTitle = titleModel.map { "\(agent.displayName) (\(Self.modelTitle($0, agent: agent)))" } ?? agent.displayName
         let session = Session(
             title: count == 0 ? baseTitle : "\(baseTitle) \(count + 1)",
             agent: AgentKind(rawValue: agent.id),
-            model: chosenModel
+            model: model,
+            arguments: arguments
         )
         changingSelection {
             _ = $0.addSession(session, to: worktreeID, pane: pane)
@@ -1504,7 +1512,8 @@ final class AppModel {
             command = resume
         }
         if definition.acceptsPrompts {
-            command.arguments += AgentDefinition.arguments(settings.extraArguments(for: definition.id), model: session.model)
+            let extra = session.arguments.map(ArgumentSplitter.split) ?? settings.extraArguments(for: definition.id)
+            command.arguments += AgentDefinition.arguments(extra, model: session.model)
         }
         return command
     }

@@ -236,7 +236,7 @@ private struct FileMenuItems: View {
             .disabled(worktree == nil || !model.canStartSession(with: agent))
         }
         ForEach(model.agentsInMenuOrder) { agent in
-            NewSessionWithModelMenu(model: model, agent: agent, worktree: worktree?.id)
+            NewSessionWithMenu(model: model, agent: agent, worktree: worktree?.id)
         }
         Divider()
         Button("Add Project…", systemImage: "folder.badge.plus") { actions.addProject() }

@@ -85,7 +85,7 @@ private struct AgentSection: View {
             Label(agent.displayName, symbol: agent.symbolName)
         } footer: {
             if showsFooter {
-                Text("Extra arguments are added to every launch and resume. Quote values that contain spaces. Running sessions keep the arguments they started with.")
+                Text("Extra arguments are added to every launch and resume. Quote values that contain spaces. Running sessions keep the arguments they started with, and sessions started with custom arguments use those instead.")
             }
         }
         .task {

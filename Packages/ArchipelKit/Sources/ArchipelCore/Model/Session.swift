@@ -17,6 +17,9 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
     /// Set when the session was started on a non-default model. Stored so a resume after a
     /// relaunch stays on that model.
     public var model: String?
+    /// Raw extra arguments for this session only. Replaces the defaults from Settings, also on
+    /// resume. Empty means none.
+    public var arguments: String?
     public var createdAt: Date
 
     public init(
@@ -28,6 +31,7 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         agentSessionID: String? = nil,
         script: ScriptKind? = nil,
         model: String? = nil,
+        arguments: String? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -38,6 +42,7 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         self.agentSessionID = agentSessionID
         self.script = script
         self.model = model
+        self.arguments = arguments
         self.createdAt = createdAt
     }
 
@@ -53,6 +58,7 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         // failing the whole workspace file.
         script = try c.decodeIfPresent(String.self, forKey: .script).flatMap(ScriptKind.init(rawValue:))
         model = try c.decodeIfPresent(String.self, forKey: .model)
+        arguments = try c.decodeIfPresent(String.self, forKey: .arguments)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
     }
 

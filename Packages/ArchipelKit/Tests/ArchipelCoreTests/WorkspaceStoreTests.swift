@@ -55,12 +55,15 @@ struct WorkspaceStoreTests {
 
     @Test func sessionModelDefaultsToNoneAndRoundTrips() throws {
         let json = #"{"id": "576782B3-1F07-40B8-AED6-EE5CFAEFE199", "title": "Claude Code", "agent": "claude", "createdAt": 0}"#
-        // Older workspace files don't have the key.
-        #expect(try JSONDecoder().decode(Session.self, from: Data(json.utf8)).model == nil)
+        // Older workspace files don't have the keys.
+        let old = try JSONDecoder().decode(Session.self, from: Data(json.utf8))
+        #expect(old.model == nil)
+        #expect(old.arguments == nil)
 
-        let session = Session(title: "Claude Code (Fable)", agent: .claude, model: "fable")
+        let session = Session(title: "Claude Code (Fable)", agent: .claude, model: "fable", arguments: "--verbose")
         let decoded = try JSONDecoder().decode(Session.self, from: JSONEncoder().encode(session))
         #expect(decoded.model == "fable")
+        #expect(decoded.arguments == "--verbose")
     }
 
     @Test func sessionScriptDefaultsToNoneAndRoundTrips() throws {

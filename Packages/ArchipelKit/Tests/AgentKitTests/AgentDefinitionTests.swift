@@ -134,6 +134,15 @@ struct AgentDefinitionTests {
         #expect(AgentDefinition.arguments(["--verbose", "--model"], model: "fable") == ["--verbose", "--model", "fable"])
     }
 
+    @Test func modelIsReadFromArguments() {
+        #expect(AgentDefinition.model(in: ["--verbose"]) == nil)
+        #expect(AgentDefinition.model(in: ["--model", "opus", "--verbose"]) == "opus")
+        #expect(AgentDefinition.model(in: ["--model=haiku"]) == "haiku")
+        #expect(AgentDefinition.model(in: ["--model", "opus", "--model=fable"]) == "fable")
+        #expect(AgentDefinition.model(in: ["--model"]) == nil)
+        #expect(AgentDefinition.model(in: ["--model="]) == nil)
+    }
+
     @Test func onlyClaudeListsModels() {
         #expect(!AgentDefinition.claude.modelChoices.isEmpty)
         #expect(AgentDefinition.codex.modelChoices.isEmpty)

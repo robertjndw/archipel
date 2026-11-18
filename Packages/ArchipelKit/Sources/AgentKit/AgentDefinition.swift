@@ -66,7 +66,8 @@ public struct AgentDefinition: Sendable, Identifiable {
     public let reportsLifecycleThroughHooks: Bool
     /// True when the session is an agent prompt the app may type text into. A shell would run it.
     public let acceptsPrompts: Bool
-    /// Aliases for `--model` offered in the "New Session With" menu. Empty hides the menu.
+    /// Aliases for `--model` offered in the "New Session With" menu. Empty means the agent only
+    /// gets the "with Arguments…" item.
     public let modelChoices: [String]
 
     private let freshLaunch: @Sendable (LaunchContext) -> LaunchCommand
@@ -123,6 +124,19 @@ public struct AgentDefinition: Sendable, Identifiable {
             index += 1
         }
         return result + ["--model", model]
+    }
+
+    /// The `--model` value in a list of arguments, if any. Last one wins.
+    public static func model(in arguments: [String]) -> String? {
+        var found: String?
+        for (index, word) in arguments.enumerated() {
+            if word == "--model", index + 1 < arguments.count {
+                found = arguments[index + 1]
+            } else if word.hasPrefix("--model=") {
+                found = String(word.dropFirst("--model=".count))
+            }
+        }
+        return found.flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
