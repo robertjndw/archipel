@@ -60,7 +60,9 @@ struct PaletteCommand: Identifiable {
 
         return newSessions + [
             PaletteCommand(id: "add-project", title: "Add Project…", symbol: "folder.badge.plus", shortcutHint: "⇧⌘O", refocusesTab: false) { actions.addProject() },
-            PaletteCommand(id: "new-island", title: "New Island…", symbol: "plus.square.on.square", refocusesTab: false) { model.isCreatingIsland = true },
+            PaletteCommand(id: "new-island", title: "New Island…", symbol: "plus.square.on.square", refocusesTab: false) {
+                if model.readyForSheet() { model.isCreatingIsland = true }
+            },
             PaletteCommand(
                 id: "toggle-inspector",
                 title: actions.isInspectorShown ? "Hide Inspector" : "Show Inspector",

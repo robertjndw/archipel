@@ -27,8 +27,9 @@ struct SwitchBranchSheet: View {
     @State private var isWorking = false
     @State private var failure: String?
     /// Set when the chosen branch is held by a worktree whose folder is missing, which the user
-    /// has to confirm was deleted before its registration is dropped.
-    @State private var leftover: AppModel.LeftoverWorktreeError?
+    /// has to confirm was deleted before its registration is dropped. Keeps the row that was
+    /// chosen, since the list can re-rank while the question is up.
+    @State private var leftover: (error: AppModel.LeftoverWorktreeError, suggestion: Suggestion)?
     /// Off only for previews, which fill the sheet themselves and have no repository to ask.
     private var asksGit = true
 
@@ -81,13 +82,13 @@ struct SwitchBranchSheet: View {
         }
         .task { if asksGit { await load() } }
         .confirmationDialog(
-            "Release \(leftover?.branch ?? "the branch")?",
+            "Release \(leftover?.error.branch ?? "the branch")?",
             isPresented: Binding { leftover != nil } set: { if !$0 { leftover = nil } },
             presenting: leftover
-        ) { _ in
-            Button("Release Branch", role: .destructive) { Task { await perform(releasingLeftover: true) } }
+        ) { leftover in
+            Button("Release Branch", role: .destructive) { Task { await perform(leftover.suggestion, releasingLeftover: true) } }
         } message: { leftover in
-            Text(leftover.question)
+            Text(leftover.error.question)
         }
     }
 
@@ -349,8 +350,8 @@ struct SwitchBranchSheet: View {
         createNameInvalid = !isValid
     }
 
-    private func perform(releasingLeftover: Bool = false) async {
-        guard let suggestion = selectedSuggestion, canPerform(suggestion), !isWorking else { return }
+    private func perform(_ chosen: Suggestion? = nil, releasingLeftover: Bool = false) async {
+        guard let suggestion = chosen ?? selectedSuggestion, canPerform(suggestion), !isWorking else { return }
         isWorking = true
         defer { isWorking = false }
         do {
@@ -370,7 +371,7 @@ struct SwitchBranchSheet: View {
             }
             dismiss()
         } catch let error as AppModel.LeftoverWorktreeError {
-            leftover = error
+            leftover = (error, suggestion)
         } catch {
             failure = error.localizedDescription
         }

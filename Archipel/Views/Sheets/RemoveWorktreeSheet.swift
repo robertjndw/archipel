@@ -33,8 +33,7 @@ struct RemoveWorktreeSheet: View {
                 ? "An agent is working in this worktree. Removing it stops that agent."
                 : "\(busy) agents are working in this worktree. Removing it stops them.")
         }
-        let root = worktree.path.standardizedFileURL.path
-        let unsaved = model.documents.dirtyURLs.count { $0.path.hasPrefix(root + "/") }
+        let unsaved = model.unsavedDocuments(under: worktree.path).count
         if unsaved > 0 {
             // What `AppModel.removeWorktree` does with them: edits to files that are deleted or
             // already gone are dropped, edits to files that stay are kept for Save All and the

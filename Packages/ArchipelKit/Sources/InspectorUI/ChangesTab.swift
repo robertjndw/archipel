@@ -268,6 +268,10 @@ final class ChangesModel {
         let outcome: PullRequestLookup.Outcome
         do {
             outcome = try await client.pullRequest(in: root).map { .found($0) } ?? .none
+        } catch is CancellationError {
+            // The tab went off screen and took gh down with it. That says nothing about the pull
+            // request, so what was known stays until the next lookup.
+            return
         } catch {
             // Not signed in or not a GitHub remote: the control just stays away instead of nagging.
             outcome = .unavailable
