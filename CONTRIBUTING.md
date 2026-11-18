@@ -78,8 +78,9 @@ A few things to know when writing one:
   test and wrap the failing expectation in `XCTExpectFailure` with a comment
   that describes the bug.
 
-CI does not run the UI tests on pull requests. The `ui-tests` job in the CI
-workflow can be started by hand from the Actions tab.
+CI does not run the UI tests on pull requests. They run on every push to
+`main` and before a release is built. To run them for a branch, start the CI
+workflow by hand: `gh workflow run ci.yml --ref <branch>`.
 
 ## Pull requests
 

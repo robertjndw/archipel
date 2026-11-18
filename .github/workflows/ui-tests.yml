@@ -1,0 +1,55 @@
+name: UI Tests
+
+# Called by ci.yml and release.yml, so both run the same steps.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  ui-tests:
+    # The tests drive the app through its real window, so the runner needs a logged-in desktop
+    # session. The xcode-27 image has one.
+    runs-on: xcode-27
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      XCODE_APP: /Applications/Xcode_27.2.app
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: Cache GhosttyKit
+        id: ghostty-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            Packages/TerminalKit/Frameworks
+            Vendor/ghostty-resources
+          key: ghostty-${{ runner.os }}-xcode-27.2-${{ hashFiles('scripts/build-ghostty.sh') }}
+
+      - name: Build GhosttyKit
+        if: steps.ghostty-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-ghostty.sh
+
+      - name: Run the UI tests
+        run: ./scripts/ui-tests.sh
+
+      # Screenshots and the accessibility tree at the point of failure.
+      - name: Keep the test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-test-results
+          path: .build/ui-tests/ArchipelUITests.xcresult

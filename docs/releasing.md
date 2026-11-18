@@ -1,9 +1,10 @@
 # Releasing
 
-Publishing a GitHub release runs `.github/workflows/release.yml`, which builds
-Archipel and attaches `Archipel-<version>.dmg` to the release. When the
-signing secrets below are set, the DMG is signed with Developer ID, notarized,
-and added to the [Sparkle](https://sparkle-project.org) appcast at
+Publishing a GitHub release runs `.github/workflows/release.yml`, which runs
+the UI tests, then builds Archipel and attaches `Archipel-<version>.dmg` to the
+release. If the tests fail, no DMG is built and the appcast is left alone.
+When the signing secrets below are set, the DMG is signed with Developer ID,
+notarized, and added to the [Sparkle](https://sparkle-project.org) appcast at
 `https://<owner>.github.io/<repo>/appcast.xml`, so installed copies update
 themselves.
 
@@ -44,7 +45,8 @@ too, since it was built later.
 
 To try the pipeline without a release, run the workflow by hand from the
 Actions tab (`gh workflow run release.yml`). The DMG is then a workflow
-artifact named `Archipel-0.0.0-dev.<run>`, and the appcast is left alone.
+artifact named `Archipel-0.0.0-dev.<run>`, the appcast is left alone, and the
+UI tests are skipped.
 
 To build the same DMG locally:
 

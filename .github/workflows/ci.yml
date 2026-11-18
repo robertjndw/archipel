@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Only for the ui-tests job, which is started by hand.
+  # Runs the ui-tests job for a branch, which pull requests skip.
   workflow_dispatch:
 
 permissions:
@@ -65,50 +65,8 @@ jobs:
             -derivedDataPath .build/ci-derived \
             -quiet
 
-  # The UI tests need a logged-in desktop session to drive the app in, which is not a given on a
-  # runner. Until they have proven themselves there they only run when started from the Actions
-  # tab, so they cannot hold up a pull request.
+  # Too slow to hold up every pull request, so they run once a change has landed on main. They can
+  # also be started by hand from the Actions tab for a branch that touches the flows they cover.
   ui-tests:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: xcode-27
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
-    env:
-      XCODE_APP: /Applications/Xcode_27.2.app
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Select Xcode
-        run: |
-          sudo xcode-select -s "$XCODE_APP"
-          xcodebuild -version
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.1
-
-      - name: Cache GhosttyKit
-        id: ghostty-cache
-        uses: actions/cache@v6
-        with:
-          path: |
-            Packages/TerminalKit/Frameworks
-            Vendor/ghostty-resources
-          key: ghostty-${{ runner.os }}-xcode-27.2-${{ hashFiles('scripts/build-ghostty.sh') }}
-
-      - name: Build GhosttyKit
-        if: steps.ghostty-cache.outputs.cache-hit != 'true'
-        run: ./scripts/build-ghostty.sh
-
-      - name: Run the UI tests
-        run: ./scripts/ui-tests.sh
-
-      # Screenshots and the accessibility tree at the point of failure.
-      - name: Keep the test results
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ui-test-results
-          path: .build/ui-tests/ArchipelUITests.xcresult
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/ui-tests.yml
