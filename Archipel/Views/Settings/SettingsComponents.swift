@@ -18,16 +18,16 @@ struct TilePicker<Value: Hashable, Preview: View>: View {
                 } label: {
                     VStack(spacing: 4) {
                         preview(option)
-                            .clipShape(.rect(cornerRadius: 5, style: .continuous))
+                            .clipShape(.rect(cornerRadius: Chrome.controlRadius - 3, style: .continuous))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                RoundedRectangle(cornerRadius: Chrome.controlRadius - 3, style: .continuous)
                                     .strokeBorder(.separator, lineWidth: 0.5)
                             }
                             // Gap between picture and ring so a dark preview doesn't swallow it.
                             // Outer radius = inner radius + padding.
                             .padding(3)
                             .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                RoundedRectangle(cornerRadius: Chrome.controlRadius, style: .continuous)
                                     .strokeBorder(Color.accentColor, lineWidth: 3)
                                     .opacity(isSelected ? 1 : 0)
                             }

@@ -16,8 +16,8 @@ struct StatusBar: View {
             }
             Spacer(minLength: 8)
             AgentsItem()
-            Divider()
-                .frame(height: 12)
+                // Room rather than a hairline between the agents and the machine's items.
+                .padding(.trailing, 6)
             ResourcesItem()
             StayAwakeButton()
         }
@@ -25,8 +25,9 @@ struct StatusBar: View {
         .monospacedDigit()
         // Extra room at the edges because the window's bottom corners are rounded.
         .padding(.horizontal, 14)
-        .frame(height: 28)
+        .frame(height: 2 * Chrome.bottomLineInset)
         .background(Chrome.windowSurface)
+        .padding(.top, -Chrome.statusBarOverlap(for: model.settings.paneStyle))
     }
 }
 

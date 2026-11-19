@@ -89,9 +89,11 @@ private struct SplitDividerSnapper: NSViewRepresentable {
 }
 
 extension View {
-    /// Turns the hairline of the enclosing `HSplitView`'s dividers invisible, for panes that keep a
-    /// gap of their own between them. The dividers stay where they are and can still be dragged.
-    /// Attach it to every child with the same value, so it holds whichever pane SwiftUI sets up last.
+    /// Turns the hairline of the dividers of the nearest enclosing split view invisible: an
+    /// `HSplitView`, or the columns of a `NavigationSplitView` or an inspector when attached to
+    /// their content. For views that sit on one surface and need no line between them. The
+    /// dividers stay where they are and can still be dragged. In an `HSplitView`, attach it to
+    /// every child with the same value, so it holds whichever pane SwiftUI sets up last.
     func hidesSplitDivider(_ isHidden: Bool) -> some View {
         background { SplitDividerHider(isHidden: isHidden) }
     }

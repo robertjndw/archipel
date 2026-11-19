@@ -12,6 +12,23 @@ extension View {
 private struct FolderDropModifier: ViewModifier {
     let model: AppModel
     @State private var isTargeted = false
+    @Environment(\.windowCornerRadius) private var windowRadius
+
+    private static let inset: CGFloat = 4
+
+    /// The outline's leading corners sit in the window's corners and nest in them; the trailing
+    /// ones face the content and take the plain control radius. The sidebar starts below the top
+    /// line's inset, which puts the top corner that much further from the window's.
+    private var outline: UnevenRoundedRectangle {
+        let top = Self.inset + WindowButtons.topInset(for: model.settings.paneStyle)
+        return UnevenRoundedRectangle(
+            topLeadingRadius: max(windowRadius - top, 4),
+            bottomLeadingRadius: windowRadius - Self.inset,
+            bottomTrailingRadius: Chrome.controlRadius,
+            topTrailingRadius: Chrome.controlRadius,
+            style: .continuous
+        )
+    }
 
     func body(content: Content) -> some View {
         content
@@ -23,10 +40,10 @@ private struct FolderDropModifier: ViewModifier {
             } isTargeted: { isTargeted = $0 }
             .overlay {
                 if isTargeted {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    outline
                         .fill(.tint.opacity(0.08))
                         .strokeBorder(.tint, lineWidth: 2)
-                        .padding(4)
+                        .padding(Self.inset)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }

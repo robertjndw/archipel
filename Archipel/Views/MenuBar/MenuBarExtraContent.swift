@@ -194,7 +194,7 @@ private struct MenuBarRowStyle: ButtonStyle {
             .padding(.vertical, 6)
             .background(
                 isHovering || configuration.isPressed ? Color.primary.opacity(0.1) : .clear,
-                in: .rect(cornerRadius: 6, style: .continuous)
+                in: .rect(cornerRadius: Chrome.controlRadius, style: .continuous)
             )
             .onHover { hovering in withAnimation(reduceMotion ? nil : Motion.hover) { isHovering = hovering } }
     }

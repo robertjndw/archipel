@@ -13,17 +13,48 @@ enum Chrome {
     /// Room around each pane in the comfortable pane style. Between two panes the gap is this plus
     /// the 1pt split divider, which stays there to be dragged.
     static let paneGap: CGFloat = 6
-    /// The smallest corner radius of a pane in the comfortable pane style. Panes use a
-    /// `ConcentricRectangle`, so a corner next to the window's own corner follows that one instead.
-    /// The window's corners measure about 16pt on macOS 27, and 16 minus the 6pt gap gives 10, so
-    /// the corners agree whether or not the system resolves the concentric shape.
-    static let paneRadius: CGFloat = 10
+    /// Corner radius of a pane in the comfortable pane style: concentric with the window's corners,
+    /// which sit `paneGap` away from the outer cards, and drawn with the same continuous curve.
+    /// Every corner gets it, the inner ones too, so all cards have one shape.
+    static func paneRadius(inWindowWithRadius windowRadius: CGFloat) -> CGFloat {
+        max(windowRadius - paneGap, 4)
+    }
     /// How far a file, diff or web pane without focus fades into its own background.
     /// Matches Ghostty's default unfocused-split-opacity of 0.7, which terminals follow.
     static let unfocusedPaneDim: Double = 0.3
     /// The one surface of the window around the content: between the panes, under the status bar,
     /// and in the inspector, which paints the same measured color.
     static let windowSurface = Color.inspectorBackground
+    /// Corner radius of small controls that stand on their own: selection fills in lists, search
+    /// fields, the symbol picker's cells, the settings tiles' rings. A shape nested inside one of
+    /// these takes this minus its inset, so the two stay concentric.
+    static let controlRadius: CGFloat = 8
+
+    /// Height of the controls on the bottom line, the island switcher's capsule among them: the
+    /// small control size.
+    static let bottomControlHeight: CGFloat = 22
+
+    /// The middle of the window's bottom line, from its bottom edge: the status bar's items, the
+    /// island switcher and its new island button. The strip under the cards is twice this, 30pt,
+    /// which leaves a small control 4pt above and below.
+    static let bottomLineInset: CGFloat = 15
+
+    /// How far the status bar reaches up into the cards' bottom gap. The gap and the bar together
+    /// are the strip under the cards, and the bar's items belong in the middle of that strip, which
+    /// is the bottom line. The gap is window surface like the bar, so nothing shows the overlap.
+    static func statusBarOverlap(for style: AppSettings.PaneStyle) -> CGFloat {
+        style == .comfortable ? paneGap : 0
+    }
+}
+
+extension View {
+    /// For a sheet's Cancel button and other plain buttons and menus in sheets. The window's island
+    /// tint reaches into sheets, and `tint` colors the text of every bordered button and menu,
+    /// where the system's accent color only fills the default button. Without this, Cancel reads
+    /// as the action to take.
+    func untinted() -> some View {
+        tint(nil)
+    }
 }
 
 /// The curves the chrome shares. The package has the same enum in UISupport, which the app target

@@ -25,13 +25,36 @@ struct PaneTabBar: View {
     let background: Color
     @State private var renaming: RenameTarget?
     @State private var dropSlot: Int?
+    /// Width of the scrolling part of the row, which the tabs share.
+    @State private var rowWidth: CGFloat = 0
 
     static let height: CGFloat = 36
+    /// Below this a tab stops shrinking and the row scrolls instead. It leaves the icon, the
+    /// status glyph and a few characters of title, and three tabs still fit in a pane of half a
+    /// default window (about 370pt).
+    static let minimumTabWidth: CGFloat = 100
+    private static let tabSpacing: CGFloat = 2
+    /// Inside the scroll view, so the selected tab's glass shadow is not clipped.
+    private static let rowInset = EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.showsWindowButtons) private var showsWindowButtons
 
     /// With one pane there is nothing to tell apart, so it always reads as active.
     private var isActive: Bool { isFocused || worktree.panes.count == 1 }
+
+    private var leadingRoomForWindowButtons: CGFloat {
+        let style = model.settings.paneStyle
+        return WindowButtons.trailingEdge(for: style) - WindowButtons.topInset(for: style)
+    }
+
+    /// Tabs split the row evenly, like the system window tab bar, down to `minimumTabWidth`.
+    /// A single tab fills the row too, so opening a second one halves it instead of moving it.
+    private var tabWidth: CGFloat {
+        let count = CGFloat(max(pane.tabs.count, 1))
+        let available = rowWidth - Self.rowInset.leading - Self.rowInset.trailing - Self.tabSpacing * (count - 1)
+        return max(Self.minimumTabWidth, (available / count).rounded(.down))
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -40,19 +63,21 @@ struct PaneTabBar: View {
                     Button("Show Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
                         .help("Show Sidebar")
                 }
-                // Leaves the window buttons their corner.
-                .padding(.leading, 78)
+                // Leaves the window buttons their corner. The bar starts at the card's edge, which
+                // the top gap also keeps from the window's edge.
+                .padding(.leading, showsWindowButtons ? leadingRoomForWindowButtons : 4)
             }
 
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    HStack(spacing: 2) {
+                    HStack(spacing: Self.tabSpacing) {
                         ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
                             TabButton(
                                 tab: tab,
                                 session: session(of: tab),
                                 isSelected: tab.id == pane.selectedTab?.id,
-                                isActive: isActive
+                                isActive: isActive,
+                                width: tabWidth
                             )
                             .anchorPreference(key: TabFrames.self, value: .bounds) { [tab.id: $0] }
                             .transition(reduceMotion ? .opacity : .tab)
@@ -86,12 +111,11 @@ struct PaneTabBar: View {
                     .animation(reduceMotion ? nil : Motion.selection, value: pane.tabs.map(\.id))
                     .animation(reduceMotion ? nil : Motion.selection, value: pane.selectedTab?.id)
                     .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isActive)
-                    // The scroll view clips, so the glass shadow needs room inside it.
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 6)
+                    .padding(Self.rowInset)
                 }
                 // .hidden still shows a scroller when the system is set to always show them.
                 .scrollIndicators(.never)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
                 .tabRowEdgeFade(background)
                 // Selecting a tab from elsewhere (Ctrl-Tab, the palette, a notification) can pick one
                 // scrolled out of view; without this the bar shows no selection at all.
@@ -216,11 +240,13 @@ private struct TabButton: View {
     let isSelected: Bool
     /// Whether this tab's pane has focus; only then does the selection get glass.
     let isActive: Bool
+    let width: CGFloat
 
     var body: some View {
-        TabButtonContent(tab: tab, label: label, isSelected: isSelected, isActive: isActive)
+        TabButtonContent(tab: tab, label: label, isSelected: isSelected, isActive: isActive, width: width)
             .equatable()
     }
+
 
     private var label: TabLabel {
         switch tab.content {
@@ -269,85 +295,128 @@ private struct TabButtonContent: View, Equatable {
     let label: TabLabel
     let isSelected: Bool
     let isActive: Bool
+    let width: CGFloat
     @State private var isHovered = false
     @State private var isOverClose = false
+    /// Width of the badges on the trailing side, so the title can stay centered without running
+    /// under them.
+    @State private var trailingWidth: CGFloat = 0
+
+    private static let iconSlot: CGFloat = 18
+    /// The narrowest tab that still shows its badges and dev server link next to a readable title.
+    private static let badgeWidth: CGFloat = 170
+    /// Below this the title is no longer kept centered, so it can use the space the badges leave.
+    private static let centeredWidth: CGFloat = 160
+    private static let edgePadding: CGFloat = 8
+    private static let gap: CGFloat = 6
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.tab == rhs.tab && lhs.label == rhs.label && lhs.isSelected == rhs.isSelected && lhs.isActive == rhs.isActive
+        lhs.tab == rhs.tab && lhs.label == rhs.label && lhs.isSelected == rhs.isSelected
+            && lhs.isActive == rhs.isActive && lhs.width == rhs.width
     }
 
     var body: some View {
-        HStack(spacing: 6) {
+        // The title is centered on the whole tab, as in the system tab bar, so it keeps the same
+        // distance from both sides whatever the badges add. A tab squeezed near its minimum
+        // width gives that up and lets the title use the room the badges leave free.
+        let leadingInset = Self.edgePadding + Self.iconSlot + Self.gap
+        let trailingInset = Self.edgePadding + (trailingWidth > 0 ? trailingWidth + Self.gap : 0)
+        let isCentered = width >= Self.centeredWidth
+        let insets = EdgeInsets(
+            top: 0,
+            leading: isCentered ? max(leadingInset, trailingInset) : leadingInset,
+            bottom: 0,
+            trailing: isCentered ? max(leadingInset, trailingInset) : trailingInset
+        )
+        Text(label.title)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .italic(tab.isPreview)
+            .fontWeight(label.activity?.unread == true ? .semibold : .regular)
+            // In a pane without focus the selected tab is told apart by its text alone.
+            .foregroundStyle(isSelected ? .primary : .secondary)
+            .padding(insets)
+            .frame(width: width, height: Chrome.controlHeight)
+            .overlay(alignment: .leading) { leading.padding(.leading, Self.edgePadding) }
+            .overlay(alignment: .trailing) {
+                trailing
+                    .padding(.trailing, Self.edgePadding)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width - Self.edgePadding } action: { trailingWidth = $0 }
+            }
+            .animation(.snappy(duration: 0.25), value: label.devServers)
+            .animation(.snappy(duration: 0.25), value: label.activity?.subagents.count)
+            .animation(.snappy(duration: 0.25), value: label.activity?.backgroundTasks)
+            // The same curve the sidebar row uses for this change, so a session's two glyphs move together.
+            .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.status)
+            .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.unread)
+            .background {
+                if isHovered && !isSelected {
+                    Capsule().fill(.quinary)
+                }
+            }
+            .animation(Motion.hover, value: isHovered)
+            .contentShape(.capsule)
+            // The tab-wide taps also fire for a click on the close button, which would select the tab
+            // being closed and make closing it pick a neighbour. A background tap target would not
+            // work instead: the title and icon sit on top of it and swallow the click.
+            .gesture(TapGesture(count: 2).onEnded { if !isOverClose { model.pin(tab: tab.id) } })
+            .simultaneousGesture(TapGesture().onEnded { if !isOverClose { model.select(tab: tab.id) } })
+            .onHover { isHovered = $0 }
+            .help(label.detail ?? label.title)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(label.title)
+            // The label above replaces what the children would say, the dot's and the badges' included.
+            .accessibilityValue(accessibilityValue)
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityIdentifier("pane.tab")
+            .accessibilityAction(.default) { model.select(tab: tab.id) }
+    }
+
+    /// The tab's icon, which gives way to the close button under the pointer, the way Safari swaps
+    /// a page's icon. Both share one slot so nothing moves.
+    private var leading: some View {
+        ZStack {
             Image(symbol: label.symbol)
                 .foregroundStyle(isSelected && isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-            Text(label.title)
-                .lineLimit(1)
-                .italic(tab.isPreview)
-                .fontWeight(label.activity?.unread == true ? .semibold : .regular)
-                // In a pane without focus the selected tab is told apart by its text alone; the
-                // dimmed pane says the rest.
-                .foregroundStyle(isSelected ? .primary : .secondary)
-            if !label.devServers.isEmpty {
-                DevServerPill(links: label.devServers)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-            }
-            BackgroundTaskBadge(count: label.activity?.backgroundTasks ?? 0)
-            SubagentBadge(count: label.activity?.subagents.count ?? 0)
-            // The close button takes the status glyph's place on hover, so
-            // tabs do not change width under the pointer.
-            ZStack {
-                Group {
-                    if let activity = label.activity {
-                        StatusGlyph(activity: activity)
-                    } else if label.hasUnsavedChanges {
-                        Image(systemName: "circle.fill")
-                            .imageScale(.small)
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel("Unsaved changes")
-                    }
-                }
                 .opacity(isHovered ? 0 : 1)
-                Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
+            Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .imageScale(.small)
+                .opacity(isHovered ? 1 : 0)
+                .onHover { isOverClose = $0 }
+        }
+        .frame(width: Self.iconSlot)
+    }
+
+    /// What the tab reports about itself. Always on the trailing side, so a status change never
+    /// moves the title.
+    private var trailing: some View {
+        HStack(spacing: 4) {
+            // A narrow tab keeps only the status glyph. The counts and the dev server link would
+            // take all of its room; the sidebar row and VoiceOver still report them.
+            if width >= Self.badgeWidth {
+                if !label.devServers.isEmpty {
+                    DevServerPill(links: label.devServers)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+                BackgroundTaskBadge(count: label.activity?.backgroundTasks ?? 0)
+                SubagentBadge(count: label.activity?.subagents.count ?? 0)
+            }
+            if let activity = label.activity {
+                if StatusGlyph.isVisible(for: activity) {
+                    StatusGlyph(activity: activity)
+                }
+            } else if label.hasUnsavedChanges {
+                Image(systemName: "circle.fill")
                     .imageScale(.small)
-                    .opacity(isHovered ? 1 : 0)
-                    .onHover { isOverClose = $0 }
-            }
-            .frame(width: 18)
-        }
-        .animation(.snappy(duration: 0.25), value: label.devServers)
-        .animation(.snappy(duration: 0.25), value: label.activity?.subagents.count)
-        .animation(.snappy(duration: 0.25), value: label.activity?.backgroundTasks)
-        // The same curve the sidebar row uses for this change, so a session's two glyphs move together.
-        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.status)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.unread)
-        .padding(.leading, 12)
-        .padding(.trailing, 6)
-        .frame(minWidth: 96, maxWidth: 220, minHeight: Chrome.controlHeight)
-        .background {
-            if isHovered && !isSelected {
-                Capsule().fill(.quinary)
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Unsaved changes")
             }
         }
-        .animation(Motion.hover, value: isHovered)
-        .contentShape(.capsule)
-        // The tab-wide taps also fire for a click on the close button, which would select the tab
-        // being closed and make closing it pick a neighbour. A background tap target would not
-        // work instead: the title and icon sit on top of it and swallow the click.
-        .gesture(TapGesture(count: 2).onEnded { if !isOverClose { model.pin(tab: tab.id) } })
-        .simultaneousGesture(TapGesture().onEnded { if !isOverClose { model.select(tab: tab.id) } })
-        .onHover { isHovered = $0 }
-        .help(label.detail ?? label.title)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(label.title)
-        // The label above replaces what the children would say, the dot's and the badges' included.
-        .accessibilityValue(accessibilityValue)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityIdentifier("pane.tab")
-        .accessibilityAction(.default) { model.select(tab: tab.id) }
+        .fixedSize()
     }
 
     private var accessibilityValue: String {
@@ -423,7 +492,7 @@ private struct TabRowControls<Content: View>: View {
         HStack(spacing: 0) {
             content
                 .labelStyle(.iconOnly)
-                .buttonStyle(TabRowButtonStyle())
+                .buttonStyle(GlyphButtonStyle())
                 .foregroundStyle(.secondary)
                 // For the menu, which the button style does not reach.
                 .frame(width: Chrome.controlHeight + 4, height: Chrome.controlHeight)
@@ -432,18 +501,23 @@ private struct TabRowControls<Content: View>: View {
 }
 
 /// A plain glyph with a faint round highlight under the pointer, like a borderless toolbar item.
-private struct TabRowButtonStyle: ButtonStyle {
+/// For icon buttons that sit straight on a surface: the ends of the tab rows, the new island button.
+struct GlyphButtonStyle: ButtonStyle {
+    /// The height of the controls around it, so the hover highlight matches them.
+    var height = Chrome.controlHeight
+
     func makeBody(configuration: Configuration) -> some View {
-        TabRowButton(configuration: configuration)
+        GlyphButton(configuration: configuration, height: height)
     }
 
-    private struct TabRowButton: View {
+    private struct GlyphButton: View {
         let configuration: ButtonStyleConfiguration
+        let height: CGFloat
         @State private var isHovered = false
 
         var body: some View {
             configuration.label
-                .frame(width: Chrome.controlHeight + 4, height: Chrome.controlHeight)
+                .frame(width: height + 4, height: height)
                 .background {
                     Capsule()
                         .fill(.quinary)
@@ -620,8 +694,8 @@ private func previewTabBars() -> some View {
     var unsaved = label
     unsaved.hasUnsavedChanges = true
     return HStack(spacing: 4) {
-        TabButtonContent(tab: tab, label: label, isSelected: false, isActive: true)
-        TabButtonContent(tab: tab, label: unsaved, isSelected: false, isActive: true)
+        TabButtonContent(tab: tab, label: label, isSelected: false, isActive: true, width: 180)
+        TabButtonContent(tab: tab, label: unsaved, isSelected: false, isActive: true, width: 180)
     }
     .padding()
     .environment(AppModel.preview())

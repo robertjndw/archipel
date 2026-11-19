@@ -174,6 +174,7 @@ private struct ProjectsDisclosureButton: View {
 private struct SidebarHeader: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.showsWindowButtons) private var showsWindowButtons
     @Binding var isAddingProject: Bool
     let toggleSidebar: () -> Void
 
@@ -234,7 +235,7 @@ private struct SidebarHeader: View {
         .foregroundStyle(.secondary)
         .animation(.snappy, value: waiting > 0)
         // Leaves the window buttons their corner.
-        .padding(.leading, 78)
+        .padding(.leading, showsWindowButtons ? WindowButtons.trailingEdge(for: model.settings.paneStyle) : 0)
         // Keeps the sidebar glyph 10pt from the edge; its slot is wider than the glyph.
         .padding(.trailing, 6.5)
         .frame(height: PaneTabBar.height)

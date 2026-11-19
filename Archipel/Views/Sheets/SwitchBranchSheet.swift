@@ -74,6 +74,7 @@ struct SwitchBranchSheet: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
+                    .untinted()
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(actionTitle(for: selected)) { Task { await perform() } }

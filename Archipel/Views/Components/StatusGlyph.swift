@@ -20,6 +20,16 @@ extension SessionStatus {
 struct StatusGlyph: View {
     let activity: SessionActivity
 
+    /// Whether the glyph draws anything. Rows keep its slot either way so their columns line up;
+    /// a tab leaves it out when empty so the title gets the room.
+    static func isVisible(for activity: SessionActivity) -> Bool {
+        switch activity.status {
+        case .starting, .working, .needsAttention, .exited: true
+        case .finished: activity.unread || activity.completedTurn
+        case .notStarted: false
+        }
+    }
+
     var body: some View {
         Group {
             switch activity.status {
@@ -54,10 +64,9 @@ struct StatusGlyph: View {
                     .accessibilityLabel(code == 0 ? "Ended" : "Exited with an error")
                     .help(activity.status.label)
             case .notStarted:
-                Image(systemName: "moon.zzz")
-                    .foregroundStyle(.tertiary)
-                    .accessibilityLabel(activity.status.label)
-                    .help(activity.status.label)
+                // Nothing: a session that has not started yet is the normal state of most of them,
+                // and a glyph on every one of them says nothing. Selecting it starts it.
+                EmptyView()
             }
         }
         .frame(width: 18)

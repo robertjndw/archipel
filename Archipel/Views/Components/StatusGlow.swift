@@ -182,7 +182,7 @@ private struct Backlight: View {
     /// sidebar's edges; the halo has faded out by then, so the list's edge does not cut it off.
     static let spill = CGSize(width: 10, height: 16)
     /// Matches the sidebar's selection card.
-    static let cornerRadius: CGFloat = 8
+    static let cornerRadius = Chrome.controlRadius
     /// The halo: a band along the outline, blurred so it fades out within the spill.
     private static let haloWidth: CGFloat = 8
     private static let haloBlur: CGFloat = 4.5

@@ -1,33 +1,47 @@
 import ArchipelCore
 import SwiftUI
 
-/// The islands ("spaces") at the bottom of the sidebar: one glass capsule floating over the list, the
-/// selected island spelled out, the others as icons that badge what is going on inside them.
+/// The island picker at the bottom of the sidebar. Built like the inspector's Files/Changes
+/// switcher: one glass capsule with a tinted fill under the selected island, which shows its name
+/// while the others show only their icon.
 ///
-/// The sidebar itself is already glass, so the capsule is the only glass here. The selection is a
-/// tinted fill inside it rather than glass of its own, which would stack glass on glass.
+/// The selection is a plain fill because glass inside the glass capsule renders badly. With a
+/// single island there is nothing to pick, so only its name is shown, as a button that still has
+/// the context menu.
+///
+/// If the name does not fit (narrow sidebar, many islands), the selected island shows only its
+/// icon too. The row scrolls only when the icons alone do not fit.
 struct IslandSwitcher: View {
     @Environment(AppModel.self) private var model
     @State private var editor: IslandEditor.Mode?
     @State private var deleting: Island?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The room between the gutters, and what the row needs with the selected island's name.
+    @State private var availableWidth: CGFloat = 0
+    @State private var widthWithName: CGFloat = 0
 
-    /// Room for the new island button on the trailing side, mirrored on the leading side so the
-    /// capsule stays centered in the sidebar.
-    private static let gutter: CGFloat = 34
+    /// Room for the new island button on the trailing side.
+    private static let trailingGutter: CGFloat = 32
+    /// Just enough to keep the capsule off the sidebar's edge. Mirroring the trailing gutter would
+    /// center the capsule but leaves too little room for the islands in a narrow sidebar.
+    private static let leadingGutter: CGFloat = 8
 
     var body: some View {
         let islands = model.workspace.islands
         let selectedID = model.selectedIsland?.id
         let summaries = model.islandSummaries()
+        let isSwitching = islands.count > 1
+        // Measured rather than left to ViewThatFits, so the name can fold away with an animation
+        // instead of the row being swapped for another one.
+        let showsName = widthWithName > 0 && widthWithName <= availableWidth
 
         // ViewThatFits takes the plain row while it fits, so the capsule hugs and centers the islands;
         // only when it does not does the scrolling variant take the full width.
         ViewThatFits(in: .horizontal) {
-            row(islands, selectedID: selectedID, summaries: summaries)
+            row(islands, selectedID: selectedID, summaries: summaries, showsSelection: isSwitching, showsName: showsName)
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    row(islands, selectedID: selectedID, summaries: summaries)
+                    row(islands, selectedID: selectedID, summaries: summaries, showsSelection: isSwitching, showsName: false)
                 }
                 // .hidden still shows a scroller when the system is set to always show them.
                 .scrollIndicators(.never)
@@ -37,18 +51,32 @@ struct IslandSwitcher: View {
                 }
             }
         }
-        .glassEffect(.regular, in: .capsule)
-        .padding(.horizontal, Self.gutter)
+        .glassEffect(isSwitching ? .regular : .identity, in: .capsule)
+        .background {
+            // The row as it would be with the name, laid out on its own and never shown.
+            row(islands, selectedID: selectedID, summaries: summaries, showsSelection: isSwitching, showsName: true)
+                .fixedSize()
+                .hidden()
+                .accessibilityHidden(true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { widthWithName = $0 }
+        }
         .frame(maxWidth: .infinity)
+        .background {
+            Color.clear.onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
+        }
+        .padding(.leading, Self.leadingGutter)
+        .padding(.trailing, Self.trailingGutter)
         .overlay(alignment: .trailing) {
             Button("New Island", systemImage: "plus") { editor = .create }
                 .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
+                .buttonStyle(GlyphButtonStyle(height: Chrome.bottomControlHeight))
                 .foregroundStyle(.secondary)
                 .help("New Island")
-                .frame(width: Self.gutter)
+                .frame(width: Self.trailingGutter)
         }
-        .padding(.vertical, 8)
+        .animation(reduceMotion ? nil : Motion.selection, value: showsName)
+        // The bottom line runs through the middle of this, as it does through the status bar.
+        .frame(height: 2 * Chrome.bottomLineInset)
         .animation(reduceMotion ? nil : Motion.selection, value: selectedID)
         .onChange(of: selectedID) { Haptics.levelChange() }
         .sheet(item: $editor) { mode in
@@ -67,13 +95,14 @@ struct IslandSwitcher: View {
         }
     }
 
-    private func row(_ islands: [Island], selectedID: Island.ID?, summaries: [Island.ID: AttentionSummary]) -> some View {
+    private func row(_ islands: [Island], selectedID: Island.ID?, summaries: [Island.ID: AttentionSummary], showsSelection: Bool, showsName: Bool) -> some View {
         let selectedTint = islands.first { $0.id == selectedID }?.tint.color
         return HStack(spacing: 2) {
             ForEach(Array(islands.enumerated()), id: \.element.id) { index, island in
                 IslandButton(
                     island: island,
                     isSelected: island.id == selectedID,
+                    showsName: showsName,
                     summary: summaries[island.id] ?? .zero,
                     shortcutIndex: index < 9 ? index + 1 : nil
                 ) {
@@ -88,18 +117,20 @@ struct IslandSwitcher: View {
         // and the two sources fight over the frame mid-animation.
         .backgroundPreferenceValue(SelectedIslandBounds.self) { anchor in
             GeometryReader { proxy in
-                if let anchor, let selectedTint {
+                if let anchor, let selectedTint, showsSelection {
                     let rect = proxy[anchor]
+                    // A fill and nothing else, like the Files/Changes switcher's.
                     Capsule()
                         .fill(selectedTint.opacity(0.18))
-                        .strokeBorder(selectedTint.opacity(0.22), lineWidth: 0.5)
                         .frame(width: rect.width, height: rect.height)
                         .offset(x: rect.minX, y: rect.minY)
                 }
             }
         }
-        .padding(3)
+        .padding(2)
     }
+
+
 
     @ViewBuilder
     private func menu(for island: Island) -> some View {
@@ -118,6 +149,8 @@ struct IslandSwitcher: View {
 private struct IslandButton: View {
     let island: Island
     let isSelected: Bool
+    /// Off when the switcher is too narrow for it; the island is then marked by the fill alone.
+    let showsName: Bool
     let summary: AttentionSummary
     let shortcutIndex: Int?
     let action: () -> Void
@@ -128,6 +161,7 @@ private struct IslandButton: View {
 
     var body: some View {
         let tint = island.tint.color
+        let isNamed = isSelected && showsName
         Button(action: action) {
             HStack(spacing: 0) {
                 // Two images faded against each other instead of switching symbolVariant. Swapping
@@ -151,6 +185,10 @@ private struct IslandButton: View {
                     SpringKeyframe(1.0, duration: 0.4, spring: .bouncy(extraBounce: 0.15))
                 }
                 .frame(width: 16)
+                .overlay(alignment: .topTrailing) {
+                    StatusDot(summary: summary)
+                        .offset(x: 3, y: -2)
+                }
                 // Always in the tree and unrolled by width instead of inserted with a transition: a
                 // removed view keeps drawing at its old spot while the stack closes up, so the
                 // outgoing name would slide over its neighbours' icons.
@@ -161,22 +199,21 @@ private struct IslandButton: View {
                     .frame(maxWidth: 96)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.leading, 4)
-                    .opacity(isSelected ? 1 : 0)
-                    .blur(radius: isSelected ? 0 : 3)
-                    .modifier(HorizontalReveal(progress: isSelected ? 1 : 0))
+                    .opacity(isNamed ? 1 : 0)
+                    .blur(radius: isNamed ? 0 : 3)
+                    .modifier(HorizontalReveal(progress: isNamed ? 1 : 0))
                     .accessibilityHidden(true)
             }
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(isSelected ? AnyShapeStyle(tint) : AnyShapeStyle(.secondary))
-            .padding(.horizontal, isSelected ? 8 : 5)
+            .padding(.horizontal, isNamed ? 8 : 5)
             // Needed on top of the switcher's animation. On a mouse click the clicked button
             // otherwise skips it, so its name pops open at once and the next island slides over it.
             .animation(reduceMotion ? nil : Motion.selection, value: isSelected)
-            .frame(height: 22)
+            // Inside the row's 2pt inset, so the capsule is a small control: the strip under the
+            // cards has no room for more.
+            .frame(height: Chrome.bottomControlHeight - 4)
             .anchorPreference(key: SelectedIslandBounds.self, value: .bounds) { isSelected ? $0 : nil }
-            .overlay(alignment: .topTrailing) {
-                badge()
-            }
             .contentShape(.capsule)
         }
         .buttonStyle(.plain)
@@ -190,24 +227,46 @@ private struct IslandButton: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    @ViewBuilder
-    private func badge() -> some View {
-        switch summary.dominant {
-        case .needsAttention(let count):
-            SidebarAttentionBadge(signal: .needsAttention(count))
-                .offset(x: 3, y: -3)
-        case .unread:
-            SidebarAttentionBadge(signal: .unread)
-                .offset(x: -2, y: 2)
-        case .working, nil:
-            EmptyView()
-        }
-    }
-
     private var help: String {
         let shortcut = shortcutIndex.map { " (⌃\($0))" } ?? ""
         let state = summary.accessibilityDescription
         return state.isEmpty ? island.name + shortcut : "\(island.name)\(shortcut): \(state)"
+    }
+}
+
+/// What is going on inside an island, as a dot on the corner of its icon: orange while something
+/// waits for you, green for a result you have not seen, the colors the sidebar uses for the same
+/// states. No count: at this size a number covers the icon, and the tooltip, VoiceOver and the Dock
+/// badge carry it. The ring is cut out in the surface's color so the dot sits on the icon instead of
+/// running into its strokes.
+private struct StatusDot: View {
+    let summary: AttentionSummary
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            if let color {
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+                    .background {
+                        Circle()
+                            .fill(Chrome.windowSurface)
+                            .padding(-1.5)
+                    }
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.4).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: color)
+        .accessibilityHidden(true)
+    }
+
+    private var color: Color? {
+        switch summary.dominant {
+        case .needsAttention: StatusPulse.needsInput.color
+        case .unread: StatusPulse.finished.color
+        case .working, nil: nil
+        }
     }
 }
 
@@ -306,10 +365,13 @@ struct IslandEditor: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
+                    .untinted()
             }
             ToolbarItem(placement: .confirmationAction) {
+                // The island's own color, as it is being chosen, rather than the selected island's.
                 Button(isEditing ? "Save" : "Create") { commit() }
                     .disabled(trimmedName.isEmpty)
+                    .tint(tint.color)
             }
         }
         .onAppear {

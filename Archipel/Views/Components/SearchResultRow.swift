@@ -33,7 +33,7 @@ struct SearchResultRow: View {
             if isSelected {
                 // The same soft accent as the command palette. A solid fill needs white text, which
                 // is unreadable on a light accent such as yellow.
-                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.tint.opacity(0.22))
+                RoundedRectangle(cornerRadius: Chrome.controlRadius, style: .continuous).fill(.tint.opacity(0.22))
             }
         }
     }

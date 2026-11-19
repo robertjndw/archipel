@@ -179,6 +179,27 @@ extension GitPullRequest {
     }
 }
 
+/// Glass only while the button is enabled. A disabled glass button still draws a full-width
+/// outline right under the message field, so while disabled it is only its dimmed title, at the
+/// same height so nothing moves when it becomes enabled.
+private struct PrimaryActionStyle: ViewModifier {
+    let isEnabled: Bool
+
+    /// The height of a large prominent glass button, so nothing below moves when it switches.
+    private static let height: CGFloat = 29
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.buttonStyle(.glassProminent)
+        } else {
+            content
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .frame(height: Self.height)
+        }
+    }
+}
+
 /// Pinned under the file list: message, the primary action and the pull request control.
 struct CommitArea: View {
     @Bindable var model: ChangesModel
@@ -200,7 +221,10 @@ struct CommitArea: View {
                 .accessibilityIdentifier("changes.commitMessage")
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                // Half the one-line height (a 16pt line plus 7pt above and below), so a single
+                // line is a capsule. Fixed rather than .capsule, which would keep rounding the
+                // whole side as a longer message grows the field.
+                .glassEffect(.regular, in: .rect(cornerRadius: 15))
                 .disabled(model.activity == .commit)
                 // `initial` too: the request usually arrives while the Changes tab is still being built.
                 .onChange(of: focusRequest, initial: true) {
@@ -237,7 +261,7 @@ struct CommitArea: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.glassProminent)
+            .modifier(PrimaryActionStyle(isEnabled: action.isEnabled))
             .controlSize(.large)
             .disabled(!action.isEnabled)
             .accessibilityIdentifier("changes.primaryAction")

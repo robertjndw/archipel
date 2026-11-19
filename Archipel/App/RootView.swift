@@ -18,10 +18,14 @@ struct RootView: View {
     @AppStorage(LayoutDefaults.showsInspector) private var showInspector = true
     @AppStorage(LayoutDefaults.collapsesSidebar) private var isSidebarCollapsed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var window = WindowMetrics()
 
     var body: some View {
         @Bindable var model = model
         layout
+        .windowButtons(center: WindowButtons.center(for: model.settings.paneStyle), metrics: $window)
+        .environment(\.showsWindowButtons, !window.isFullScreen)
+        .environment(\.windowCornerRadius, window.cornerRadius)
         .overlay { CommandPalette() }
         .overlay { TabSwitcher() }
         .background {
@@ -94,16 +98,21 @@ struct RootView: View {
             columns
                 .inspector(isPresented: $showInspector) {
                     inspector
+                        .modifier(TopLineInset())
                         .inspectorColumnWidth(min: 220, ideal: RootView.inspectorWidth, max: 420)
                         .ignoresSafeArea(.container, edges: .top)
+                        // The inspector already paints the window surface; its divider would be the
+                        // only line between it and the content. Dragging still resizes the column.
+                        .hidesSplitDivider(true)
                 }
         } else {
+            // No divider before the inspector: it sits on the same surface as the content, and the
+            // gap around the pane cards already sets them apart.
             HStack(spacing: 0) {
                 columns
                 if showInspector {
-                    Divider()
-                        .ignoresSafeArea(.container, edges: .top)
                     inspector
+                        .modifier(TopLineInset())
                         .frame(width: RootView.inspectorWidth)
                         .ignoresSafeArea(.container, edges: .top)
                 }
@@ -122,6 +131,13 @@ struct RootView: View {
     private var columns: some View {
         NavigationSplitView(columnVisibility: columnVisibility) {
             SidebarView(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
+                // Same background as the inspector and the space around the panes instead of the
+                // system's sidebar material. The divider is hidden for the same reason and can
+                // still be dragged.
+                .scrollContentBackground(.hidden)
+                .modifier(TopLineInset())
+                .background { Chrome.windowSurface.ignoresSafeArea() }
+                .hidesSplitDivider(true)
                 // The column width below is not enough on its own: with no saved split positions
                 // (a first launch) the sidebar came up about 160 points wide, well under its minimum.
                 .frame(minWidth: 220)
@@ -237,3 +253,16 @@ private func previewRoot(_ model: AppModel) -> some View {
     previewRoot(AppModel.emptyPreview())
 }
 #endif
+
+/// Moves a column's header down to the top line of the window, the middle of the tab rows, which
+/// sits lower when the pane cards keep a gap above them.
+private struct TopLineInset: ViewModifier {
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.top, WindowButtons.topInset(for: model.settings.paneStyle))
+            .background(Chrome.windowSurface)
+    }
+}
+

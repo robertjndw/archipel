@@ -10,6 +10,7 @@ private let minimumPaneWidth: CGFloat = 260
 /// The content area of the selected worktree: its panes next to each other.
 struct WorktreeContentView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(LayoutDefaults.showsInspector) private var showsInspector = true
     let isSidebarCollapsed: Bool
     let toggleSidebar: () -> Void
 
@@ -64,7 +65,9 @@ extension WorktreeContentView {
         .modifier(PaneCard(
             style: style,
             isFirst: pane.id == worktree.panes.first?.id,
-            isLast: pane.id == worktree.panes.last?.id
+            isLast: pane.id == worktree.panes.last?.id,
+            hasColumnBefore: !isSidebarCollapsed,
+            hasColumnAfter: showsInspector
         ))
     }
 }
@@ -76,20 +79,35 @@ extension WorktreeContentView {
 /// modifier works in `HSplitView` and in `PaneStack`, and the split divider keeps its place (and
 /// its drag) in the middle of the gap, with its hairline hidden. Neighbours each give half the gap,
 /// which keeps the divider centered for the snap.
+///
+/// Next to the sidebar or the inspector the outer card gives up its gap: those columns sit on the
+/// same surface and keep their own content inset, which already makes about the room two cards
+/// leave between them. Only against the window edge does the card need the gap itself.
 private struct PaneCard: ViewModifier {
     let style: AppSettings.PaneStyle
     let isFirst: Bool
     let isLast: Bool
+    let hasColumnBefore: Bool
+    let hasColumnAfter: Bool
+    @Environment(\.windowCornerRadius) private var windowRadius
 
     // One modifier chain for both styles rather than a branch: a branch would give the pane a new
     // identity on every switch and remount the terminals inside it.
     func body(content: Content) -> some View {
         let isCard = style == .comfortable
         let gap = isCard ? Chrome.paneGap : 0
-        let shape = ConcentricRectangle(corners: isCard ? .concentric(minimum: .fixed(Chrome.paneRadius)) : .fixed(0))
+        // A plain rounded rectangle rather than ConcentricRectangle, so every corner gets the same
+        // radius and it comes from the window's real corner radius instead of a fallback value.
+        let radius = isCard ? Chrome.paneRadius(inWindowWithRadius: windowRadius) : 0
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content
             .clipShape(shape)
-            .padding(EdgeInsets(top: gap, leading: isFirst ? gap : gap / 2, bottom: gap, trailing: isLast ? gap : gap / 2))
+            .padding(EdgeInsets(
+                top: gap,
+                leading: isFirst ? (hasColumnBefore ? 0 : gap) : gap / 2,
+                bottom: gap,
+                trailing: isLast ? (hasColumnAfter ? 0 : gap) : gap / 2
+            ))
     }
 }
 
