@@ -45,18 +45,15 @@ struct AppearanceSettingsView: View {
                 } label: {
                     Text("Density")
                     Text(settings.sidebarDensity.summary)
+                        .frame(maxWidth: Self.besideTilesWidth, alignment: .leading)
                 }
-                Toggle(isOn: $settings.showsGitStatusInSidebar) {
-                    Text("Git status")
-                    Text("Changed files and ahead or behind counts next to each worktree.")
-                }
-                Toggle(isOn: $settings.showsPullRequests) {
-                    Text("Pull requests")
-                    Text("Looked up with the gh command line tool, which must be installed and signed in.")
-                }
-                Toggle(isOn: $settings.showsAgentMessagesInSidebar) {
-                    Text("Agent messages")
-                    Text("The latest thing each session said.")
+                LabeledContent {
+                    SidebarRowsPreview(settings: settings)
+                        .padding(.vertical, 4)
+                } label: {
+                    Text("Rows")
+                    Text("Right-click the preview to choose what rows show.")
+                        .frame(maxWidth: Self.besideTilesWidth, alignment: .leading)
                 }
             }
 
@@ -79,6 +76,10 @@ struct AppearanceSettingsView: View {
         .animation(Motion.disclosure, value: settings.hiddenStatusBarItems)
     }
 
+    /// Max width for a summary next to tiles. Any wider and the form moves the tiles to their own
+    /// line, which made this page too tall for a 13" screen.
+    private static let besideTilesWidth: CGFloat = 110
+
     @ViewBuilder private func usageStyle(_ settings: AppSettings) -> some View {
         @Bindable var settings = settings
         LabeledContent {
@@ -92,7 +93,8 @@ struct AppearanceSettingsView: View {
             .padding(.vertical, 4)
         } label: {
             Text("Style")
-            Text("How usage limits and the context ring are drawn.")
+            Text("For usage limits and the context ring.")
+                .frame(maxWidth: Self.besideTilesWidth, alignment: .leading)
         }
         if settings.usageDisplay == .bars {
             // fixedSize only on the control. On the whole picker the form can't stretch the
@@ -119,9 +121,9 @@ struct AppearanceSettingsView: View {
 extension AppSettings.SidebarDensity {
     var summary: String {
         switch self {
-        case .compact: "One line per worktree. Agent messages show on hover."
-        case .comfortable: "Two lines per worktree: the branch, then what needs you or its changes."
-        case .spacious: "More room around projects, and two lines for a waiting agent's question."
+        case .compact: "One line per worktree. Messages on hover."
+        case .comfortable: "Branch, then what needs you or its changes."
+        case .spacious: "More room, and two lines for an agent's question."
         }
     }
 }

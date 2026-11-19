@@ -215,6 +215,100 @@ struct StatusBarPreview: View {
     }
 }
 
+/// Real sidebar rows with sample data, using the current density and row options. Right-click to
+/// choose what rows show, same as the status bar preview.
+struct SidebarRowsPreview: View {
+    let settings: AppSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Default sidebar width, so the rows truncate like the real ones.
+    static let width: CGFloat = 250
+
+    // Never read from disk. A row only shows the folder name when it has nothing else to show.
+    private static let root = URL(fileURLWithPath: "/Users/you/orbit-worktrees", isDirectory: true)
+    private static let waiting = Worktree(
+        path: root.appending(path: "onboarding", directoryHint: .isDirectory),
+        branch: "feat/onboarding-copy",
+        sessions: [Session(title: "Claude Code", agentTitle: "Rewrite onboarding copy", agent: .claude)]
+    )
+    private static let changed = Worktree(
+        path: root.appending(path: "cache-expiry", directoryHint: .isDirectory),
+        branch: "fix/cache-expiry"
+    )
+    private static let waitingActivity = SessionActivity(
+        status: .needsAttention(.question), unread: true, lastMessage: "Should the welcome screen mention pricing?"
+    )
+    private static let changedGit = WorktreeGitState(
+        changedFiles: 3, ahead: 2, insertions: 40, deletions: 9,
+        pullRequest: PullRequestBadge(number: 42, state: .open)
+    )
+
+    var body: some View {
+        let options = WorktreeRowContent.Options(
+            showsGitStatus: settings.showsGitStatusInSidebar,
+            showsPullRequests: settings.showsPullRequests,
+            showsMessages: settings.showsAgentMessagesInSidebar
+        )
+        let shape = RoundedRectangle(cornerRadius: Chrome.controlRadius, style: .continuous)
+        VStack(alignment: .leading, spacing: 0) {
+            row(Self.waiting, activity: Self.waitingActivity, git: nil, options: options)
+            row(Self.changed, activity: nil, git: Self.changedGit, options: options)
+        }
+        .padding(.vertical, 6)
+        .padding(.trailing, 10)
+        .frame(width: Self.width, alignment: .leading)
+        .environment(\.sidebarDensity, settings.sidebarDensity)
+        // Display only, otherwise the rows' hover buttons would start real sessions.
+        .allowsHitTesting(false)
+        .background(.background.secondary, in: shape)
+        .overlay { shape.strokeBorder(.separator, lineWidth: 0.5) }
+        .contentShape(shape)
+        .contextMenu {
+            Toggle("Git Status", isOn: binding(\.showsGitStatusInSidebar))
+            Toggle("Pull Requests", isOn: binding(\.showsPullRequests))
+            Toggle("Agent Messages", isOn: binding(\.showsAgentMessagesInSidebar))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Sidebar preview")
+        .accessibilityValue(shownParts)
+        .accessibilityHint("Its actions show or hide each part of a row.")
+        // VoiceOver can't open a menu that only a right-click brings up.
+        .accessibilityActions {
+            Button((settings.showsGitStatusInSidebar ? "Hide" : "Show") + " Git Status") { settings.showsGitStatusInSidebar.toggle() }
+            Button((settings.showsPullRequests ? "Hide" : "Show") + " Pull Requests") { settings.showsPullRequests.toggle() }
+            Button((settings.showsAgentMessagesInSidebar ? "Hide" : "Show") + " Agent Messages") { settings.showsAgentMessagesInSidebar.toggle() }
+        }
+        .accessibilityIdentifier("settings.sidebarPreview")
+        .animation(reduceMotion ? nil : Motion.disclosure, value: options)
+        .animation(reduceMotion ? nil : Motion.disclosure, value: settings.sidebarDensity)
+    }
+
+    private func row(_ worktree: Worktree, activity: SessionActivity?, git: WorktreeGitState?, options: WorktreeRowContent.Options) -> some View {
+        SidebarWorktreeRow(
+            worktree: worktree,
+            content: WorktreeRowContent(worktree: worktree, activity: activity, git: git, options: options),
+            sessions: [],
+            isSelected: false,
+            tint: .accentColor,
+            removing: .constant(nil),
+            renaming: .constant(nil)
+        )
+    }
+
+    private func binding(_ keyPath: ReferenceWritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {
+        Binding { settings[keyPath: keyPath] } set: { settings[keyPath: keyPath] = $0 }
+    }
+
+    private var shownParts: String {
+        let parts = [
+            settings.showsGitStatusInSidebar ? "Git status" : nil,
+            settings.showsPullRequests ? "Pull requests" : nil,
+            settings.showsAgentMessagesInSidebar ? "Agent messages" : nil,
+        ].compactMap(\.self)
+        return parts.isEmpty ? "Branch names only" : parts.formatted(.list(type: .and))
+    }
+}
+
 extension NSImage {
     /// The Finder icon of an app or folder at menu size. A copy, because the workspace may hand out
     /// a shared instance and resizing that would shrink it everywhere.
