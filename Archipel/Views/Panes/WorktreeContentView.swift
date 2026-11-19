@@ -24,7 +24,7 @@ struct WorktreeContentView: View {
                             paneView(pane, in: worktree, style: style)
                                 .frame(minWidth: minimumPaneWidth, maxWidth: .infinity, maxHeight: .infinity)
                                 .ignoresSafeArea(.container, edges: .top)
-                                .snapsSplitDividerToCenter(enabled: pane.id == worktree.panes.first?.id)
+                                .centersSplitDivider(enabled: pane.id == worktree.panes.first?.id)
                                 .hidesSplitDivider(style == .comfortable)
                         }
                     }

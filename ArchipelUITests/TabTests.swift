@@ -58,6 +58,11 @@ final class TabTests: ArchipelUITestCase {
         chooseMenu("Tab", "Split Right")
 
         waitUntil("there are two panes") { self.panes.count == 2 }
+        // Before 27.2 the panes are laid out by hand, without a split view, and always start out equal.
+        if #available(macOS 27.2, *) {
+            let position = try XCTUnwrap(paneDividerPosition, "The panes should sit in a split view.")
+            XCTAssertEqual(position, 0.5, accuracy: 0.02, "A new split should give both panes half the width.")
+        }
         // Each pane shows one of the two sessions now, so both tabs are the selected one of theirs.
         XCTAssertTrue(tab("One").isSelected)
         XCTAssertTrue(tab("Two").isSelected)

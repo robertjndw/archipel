@@ -53,6 +53,25 @@ extension ArchipelUITestCase {
         mainWindow.descendants(matching: .any).matching(identifier: "pane.newSession")
     }
 
+    /// Where the divider between two panes sits, as a fraction of their combined width (0.5 is the
+    /// middle). Nil if there is no divider, e.g. before macOS 27.2, which has no split view there.
+    ///
+    /// The panes' split group reports the whole window as its frame, so the width is measured
+    /// between the sidebar and inspector dividers instead, or the window edges if those are hidden.
+    var paneDividerPosition: CGFloat? {
+        let buttons = panes.allElementsBoundByIndex.map(\.frame)
+        guard buttons.count == 2 else { return nil }
+        let dividers = mainWindow.splitGroups.allElementsBoundByIndex
+            .flatMap { $0.splitters.allElementsBoundByIndex.map(\.frame.midX) }
+        let window = mainWindow.frame
+        let firstTab = tabs.allElementsBoundByIndex.map(\.frame.minX).min() ?? buttons[0].minX
+        let leading = dividers.filter { $0 < firstTab }.max() ?? window.minX
+        let trailing = dividers.filter { $0 > buttons[1].maxX }.min() ?? window.maxX
+        guard let divider = dividers.first(where: { $0 > buttons[0].maxX && $0 < buttons[1].minX }),
+              trailing > leading else { return nil }
+        return (divider - leading) / (trailing - leading)
+    }
+
     // MARK: Inspector
 
     func showChanges() {

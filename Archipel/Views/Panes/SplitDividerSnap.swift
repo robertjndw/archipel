@@ -3,31 +3,49 @@ import ArchipelCore
 import SwiftUI
 
 extension View {
-    /// Makes the divider of the enclosing `HSplitView` catch on the middle while it is dragged, with
-    /// a tick from the trackpad. Attach it to one child only, or every child would react.
-    func snapsSplitDividerToCenter(enabled: Bool) -> some View {
+    /// Gives the panes of the enclosing `HSplitView` equal widths whenever one is added or closed,
+    /// and makes a single divider catch on the middle while it is dragged, with a tick from the
+    /// trackpad. Attach it to one child only, or every child would react.
+    func centersSplitDivider(enabled: Bool) -> some View {
         background { if enabled { SplitDividerSnapper() } }
     }
 }
 
 /// HSplitView hides its NSSplitView, so this finds it from inside and listens for its resizes. Only
 /// a plain two-pane split snaps; with more panes there is no single middle.
+///
+/// HSplitView only lays out the panes it starts with evenly. A pane added later ends up wherever
+/// AppKit puts it, which was about 40/60 for a fresh split.
 private struct SplitDividerSnapper: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+    func makeNSView(context: Context) -> Anchor {
+        let view = Anchor()
+        view.coordinator = context.coordinator
         context.coordinator.anchor = view
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
+    func updateNSView(_ view: Anchor, context: Context) {
         // The view has no superview yet when it is made, so the split view is looked up on updates.
         context.coordinator.attachIfNeeded()
     }
 
-    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+    static func dismantleNSView(_ view: Anchor, coordinator: Coordinator) {
         coordinator.detach()
+    }
+
+    final class Anchor: NSView {
+        weak var coordinator: Coordinator?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // Adding a pane moves the existing ones into a new split view, and SwiftUI doesn't call
+            // updateNSView for that, so this is the only place to notice.
+            if window != nil { coordinator?.attachIfNeeded() }
+        }
     }
 
     @MainActor
@@ -37,14 +55,17 @@ private struct SplitDividerSnapper: NSViewRepresentable {
         private var observer: Any?
         private var isSnapped = false
         private var isAdjusting = false
+        /// The pane count the widths were last evened out for, so it happens once per change.
+        private var balancedCount = 0
 
         func attachIfNeeded() {
-            guard split == nil || split?.window == nil, let anchor else { return }
+            guard let anchor else { return }
             var candidate = anchor.superview
             while let view = candidate, !(view is NSSplitView) { candidate = view.superview }
-            guard let found = candidate as? NSSplitView else { return }
+            guard let found = candidate as? NSSplitView, found !== split else { return }
             detach()
             split = found
+            balancedCount = 0
             observer = NotificationCenter.default.addObserver(
                 forName: NSSplitView.didResizeSubviewsNotification, object: found, queue: .main
             ) { [weak self] note in
@@ -53,6 +74,7 @@ private struct SplitDividerSnapper: NSViewRepresentable {
                 let isDividerDrag = note.userInfo?["NSSplitViewDividerIndex"] != nil
                 MainActor.assumeIsolated { self?.resized(isDividerDrag: isDividerDrag) }
             }
+            balanceIfPanesChanged()
         }
 
         func detach() {
@@ -62,28 +84,71 @@ private struct SplitDividerSnapper: NSViewRepresentable {
         }
 
         private func resized(isDividerDrag: Bool) {
-            guard let split, !isAdjusting, split.isVertical, split.arrangedSubviews.count == 2 else { return }
+            guard let split, !isAdjusting, split.isVertical else { return }
+            // Adding a pane also reports a divider index, so it looks like a drag here. Only the
+            // pane count tells them apart.
+            balanceIfPanesChanged()
+            guard split.arrangedSubviews.count == 2 else { return }
             guard isDividerDrag, NSEvent.pressedMouseButtons & 1 != 0 else {
                 isSnapped = false
                 return
             }
+            let visible = Self.visibleRange(of: split)
             let position = split.arrangedSubviews[0].frame.maxX
             let result = SplitSnap.resolve(
-                position: position,
-                total: split.bounds.width,
+                position: position - visible.lowerBound,
+                total: visible.upperBound - visible.lowerBound,
                 thickness: split.dividerThickness
             )
             if result.snapped {
                 if !isSnapped { Haptics.alignment() }
                 isSnapped = true
-                if abs(result.position - position) >= 0.5 {
+                let snapped = result.position + visible.lowerBound
+                if abs(snapped - position) >= 0.5 {
                     isAdjusting = true
-                    split.setPosition(result.position, ofDividerAt: 0)
+                    split.setPosition(snapped, ofDividerAt: 0)
                     isAdjusting = false
                 }
             } else {
                 isSnapped = false
             }
+        }
+
+        /// Runs on the next pass of the main queue. Right after a pane is added SwiftUI is still
+        /// laying out the split and would undo dividers moved any earlier.
+        private func balanceIfPanesChanged() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let split = self.split, split.isVertical, split.bounds.width > 0 else { return }
+                let count = split.arrangedSubviews.count
+                guard count != self.balancedCount else { return }
+                self.balancedCount = count
+                self.balance(split, count: count)
+            }
+        }
+
+        private func balance(_ split: NSSplitView, count: Int) {
+            guard count > 1 else { return }
+            let visible = Self.visibleRange(of: split)
+            let thickness = split.dividerThickness
+            let available = visible.upperBound - visible.lowerBound - thickness * CGFloat(count - 1)
+            guard available > 0 else { return }
+            let width = available / CGFloat(count)
+            isAdjusting = true
+            // Left to right, so each divider is placed next to a pane that already has its width.
+            for index in 0..<(count - 1) {
+                let position = visible.lowerBound + width * CGFloat(index + 1) + thickness * CGFloat(index)
+                split.setPosition(position, ofDividerAt: index)
+            }
+            isAdjusting = false
+        }
+
+        /// The part of the split that isn't covered by the sidebar or the inspector. The split runs
+        /// underneath both and reports them as its safe area. Splitting the full width in half would
+        /// make the pane next to the narrower column visibly wider.
+        private static func visibleRange(of split: NSSplitView) -> ClosedRange<CGFloat> {
+            let insets = split.safeAreaInsets
+            let lower = insets.left
+            return lower...max(lower, split.bounds.width - insets.right)
         }
     }
 }
