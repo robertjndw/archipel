@@ -307,7 +307,7 @@ private struct TabButtonContent: View, Equatable {
     private static let badgeWidth: CGFloat = 170
     /// Below this the title is no longer kept centered, so it can use the space the badges leave.
     private static let centeredWidth: CGFloat = 160
-    private static let edgePadding: CGFloat = 8
+    nonisolated private static let edgePadding: CGFloat = 8
     private static let gap: CGFloat = 6
 
     static func == (lhs: Self, rhs: Self) -> Bool {
