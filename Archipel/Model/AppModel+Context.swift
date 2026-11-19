@@ -12,9 +12,12 @@ extension AppModel {
             if unchanged == context { return }
         }
         // A new transcript is a new conversation, and the old one's cache says nothing about it.
-        if previous?.transcriptPath != context.transcriptPath { promptCaches[id] = nil }
+        let isNewTranscript = previous?.transcriptPath != context.transcriptPath
+        if isNewTranscript { promptCaches[id] = nil }
         sessionContexts[id] = context
-        refreshPromptCache(for: id)
+        // The cache is hidden while the agent works, and the turn-finished event reads the
+        // transcript anyway. No point re-reading up to 1 MB on every request in between.
+        if isNewTranscript || !activity(for: id).isBusy { refreshPromptCache(for: id) }
     }
 
     /// Reads when the session's prompt cache goes cold from the end of its transcript, which can

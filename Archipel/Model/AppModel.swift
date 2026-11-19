@@ -23,7 +23,16 @@ final class AppModel {
     /// The sidebar lists only the worktrees that need the user, from every island. Not persisted: a
     /// filter that hides every project would greet the next launch as a broken sidebar.
     var showsOnlyNeedsMe = false {
-        didSet { if showsOnlyNeedsMe != oldValue { needsMePin = nil } }
+        didSet {
+            guard showsOnlyNeedsMe != oldValue else { return }
+            needsMePin = nil
+            // Pin the worktree that's already open, or answering its request would pull the row
+            // out from under the user.
+            guard showsOnlyNeedsMe, let selected = selectedWorktree?.id,
+                  worktreesNeedingAttention(in: workspace, activities: activities).contains(selected)
+            else { return }
+            needsMePin = selected
+        }
     }
     /// The worktree last selected while the filter was on. It stays listed for as long as it is the
     /// selection, since opening it is what clears its request and the row would vanish under the

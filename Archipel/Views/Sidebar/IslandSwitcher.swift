@@ -130,8 +130,6 @@ struct IslandSwitcher: View {
         .padding(2)
     }
 
-
-
     @ViewBuilder
     private func menu(for island: Island) -> some View {
         Button("Edit Island…", systemImage: "pencil") { editor = .edit(island) }

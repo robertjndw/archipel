@@ -247,7 +247,6 @@ private struct TabButton: View {
             .equatable()
     }
 
-
     private var label: TabLabel {
         switch tab.content {
         case .session(let id):

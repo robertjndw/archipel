@@ -151,10 +151,12 @@ struct CacheCountdown {
 enum ContextFormat {
     /// "122k", "1M": the precision of a status line, not of a bill.
     static func tokens(_ count: Int) -> String {
-        if count >= 1_000_000 {
+        let thousands = Int((Double(count) / 1000).rounded())
+        // Anything from 999,500 up would otherwise show as "1000k".
+        if thousands >= 1000 {
             return (Double(count) / 1_000_000).formatted(.number.precision(.fractionLength(0...1))) + "M"
         }
-        if count >= 1000 { return "\(Int((Double(count) / 1000).rounded()))k" }
+        if count >= 1000 { return "\(thousands)k" }
         return "\(count)"
     }
 
