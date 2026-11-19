@@ -409,5 +409,10 @@ private struct TabMenuItems: View {
         Divider()
         Button("Next Session Needing Attention", systemImage: "bell.badge") { model.selectNextNeedingAttention() }
             .keyboardShortcut("u", modifiers: [.command, .shift])
+        Button(
+            model.showsOnlyNeedsMe ? "Show All in Sidebar" : "Show Only What Needs Me",
+            systemImage: model.showsOnlyNeedsMe ? "bell.fill" : "bell"
+        ) { model.showsOnlyNeedsMe.toggle() }
+            .keyboardShortcut("u", modifiers: [.command, .option])
     }
 }

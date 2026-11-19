@@ -81,4 +81,29 @@ struct AttentionTests {
         let acts = [a.id: SessionActivity(status: .starting), b.id: SessionActivity(status: .finished)]
         #expect(attentionSummary(of: [a, b], activities: acts) == .init(working: 1))
     }
+
+    @Test func attentionWorktreesSpanIslandsAndMatchTheJump() {
+        let ws = workspace()
+        var acts = activities()
+        let first = ws.islands[0].projects[0].worktrees[0].id
+        let other = ws.islands[1].projects[0].worktrees[0].id
+        #expect(worktreesNeedingAttention(in: ws, activities: acts) == [first, other])
+
+        // The jump only lands on sessions that this filter lists too.
+        acts[a.id] = nil
+        acts[d.id] = nil
+        #expect(worktreesNeedingAttention(in: ws, activities: acts) == [first])
+        #expect(ws.worktree(containing: nextSessionNeedingAttention(after: nil, in: ws, activities: acts)!)?.id == first)
+
+        acts[b.id]?.markViewed()
+        #expect(worktreesNeedingAttention(in: ws, activities: acts).isEmpty)
+        #expect(nextSessionNeedingAttention(after: nil, in: ws, activities: acts) == nil)
+    }
+
+    @Test func workingAndFreshSessionsDoNotNeedMe() {
+        #expect(!SessionActivity(status: .working, unread: true).needsMe)
+        #expect(!SessionActivity(status: .finished).needsMe)
+        #expect(SessionActivity(status: .finished, unread: true).needsMe)
+        #expect(SessionActivity(status: .needsAttention(.question)).needsMe)
+    }
 }

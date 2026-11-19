@@ -74,6 +74,15 @@ public func attentionSummary(of workspace: Workspace, activities: [Session.ID: S
     workspace.islands.reduce(.zero) { $0 + attentionSummary(of: $1, activities: activities) }
 }
 
+extension SessionActivity {
+    /// A turn that ran to its end and has not been looked at yet.
+    public var hasUnreadResult: Bool { status == .finished && unread }
+
+    /// What the jump to the next session lands on and the "Needs Me" filter lists: a request waiting
+    /// for an answer, or a finished turn nobody has read. Only the jump ranks the two.
+    public var needsMe: Bool { needsUser || hasUnreadResult }
+}
+
 /// Walks sessions in sidebar order starting after `current`, wrapping around (and ending on
 /// `current` itself). Sessions waiting on the user win over unread finished ones.
 public func nextSessionNeedingAttention(
@@ -86,8 +95,12 @@ public func nextSessionNeedingAttention(
     let ordered = ids[start...] + ids[..<start]
 
     if let hit = ordered.first(where: { activities[$0]?.needsUser == true }) { return hit }
-    return ordered.first { id in
-        guard let activity = activities[id] else { return false }
-        return activity.status == .finished && activity.unread
-    }
+    return ordered.first { activities[$0]?.hasUnreadResult == true }
+}
+
+/// The worktrees holding a session that the jump to the next session could land on, in any island.
+public func worktreesNeedingAttention(in workspace: Workspace, activities: [Session.ID: SessionActivity]) -> Set<Worktree.ID> {
+    Set(workspace.allWorktrees.filter { worktree in
+        worktree.sessions.contains { activities[$0.id]?.needsMe == true }
+    }.map(\.id))
 }

@@ -20,6 +20,15 @@ final class AppModel {
     /// switcher read a stored value instead of each walking every session in their view bodies.
     private(set) var workspaceAttention = AttentionSummary.zero
     private(set) var islandAttention: [Island.ID: AttentionSummary] = [:]
+    /// The sidebar lists only the worktrees that need the user, from every island. Not persisted: a
+    /// filter that hides every project would greet the next launch as a broken sidebar.
+    var showsOnlyNeedsMe = false {
+        didSet { if showsOnlyNeedsMe != oldValue { needsMePin = nil } }
+    }
+    /// The worktree last selected while the filter was on. It stays listed for as long as it is the
+    /// selection, since opening it is what clears its request and the row would vanish under the
+    /// pointer otherwise.
+    private(set) var needsMePin: Worktree.ID?
     private(set) var terminals: [Session.ID: TerminalSession] = [:]
     private(set) var launchFailures: [Session.ID: String] = [:]
     /// Counts the launches asked for per session. A launch waits for the login PATH, and a restart
@@ -137,6 +146,8 @@ final class AppModel {
     @ObservationIgnored var gitRefresh = GitRefreshState()
     private let store: WorkspaceStore
     private let terminalApp: TerminalApp?
+    /// The Ghostty colors the panes draw around terminals; nil without a terminal engine.
+    private(set) var terminalColors: TerminalColors?
     private let hookServer: HookServer
     let notifier = AttentionNotifier()
     /// Most recently focused tabs first, for Ctrl-Tab. Not observed: nothing on screen draws from it
@@ -257,6 +268,8 @@ final class AppModel {
         devServers.start { [weak self] in self?.terminals ?? [:] }
         resources.start { [weak self] in self?.resourceSources() ?? [:] }
         terminalApp?.acceptsDroppedText = { [weak self] in !(self?.isInternalDragPayload($0) ?? false) }
+        terminalColors = terminalApp?.colors
+        terminalApp?.onColorsChange = { [weak self] in self?.terminalColors = $0 }
     }
 
     #if DEBUG
@@ -485,6 +498,7 @@ final class AppModel {
         let previous = Set(visibleSessionIDs)
         let previousPlace = (selectedIsland?.id, selectedWorktree?.id)
         mutate(change)
+        if showsOnlyNeedsMe { needsMePin = selectedWorktree?.id }
         if previousPlace != (selectedIsland?.id, selectedWorktree?.id) {
             refreshGitStatus(lookingUpPullRequests: true)
         }

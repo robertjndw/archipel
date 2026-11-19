@@ -87,3 +87,51 @@ private struct SplitDividerSnapper: NSViewRepresentable {
         }
     }
 }
+
+extension View {
+    /// Turns the hairline of the enclosing `HSplitView`'s dividers invisible, for panes that keep a
+    /// gap of their own between them. The dividers stay where they are and can still be dragged.
+    /// Attach it to every child with the same value, so it holds whichever pane SwiftUI sets up last.
+    func hidesSplitDivider(_ isHidden: Bool) -> some View {
+        background { SplitDividerHider(isHidden: isHidden) }
+    }
+}
+
+/// HSplitView has no say over its divider color, and NSSplitView only exposes a getter. The setter
+/// exists all the same, and nil hands the color back to AppKit. If a later AppKit drops it, the
+/// hairline simply shows in the gap.
+private struct SplitDividerHider: NSViewRepresentable {
+    let isHidden: Bool
+
+    func makeNSView(context: Context) -> Anchor { Anchor() }
+
+    func updateNSView(_ view: Anchor, context: Context) {
+        view.hidesDivider = isHidden
+    }
+
+    final class Anchor: NSView {
+        var hidesDivider = false {
+            didSet { if hidesDivider != oldValue { apply() } }
+        }
+
+        // It sits behind the pane and must never take a click meant for it.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // SwiftUI builds a new split view when the panes change, and this lands in it here.
+            if window != nil { apply() }
+        }
+
+        private func apply() {
+            var candidate = superview
+            while let view = candidate, !(view is NSSplitView) { candidate = view.superview }
+            guard let split = candidate as? NSSplitView, split.responds(to: Self.setter) else { return }
+            split.perform(Self.setter, with: hidesDivider ? NSColor.clear : nil)
+            split.needsDisplay = true
+            split.subviews.forEach { $0.needsDisplay = true }
+        }
+
+        private static let setter = NSSelectorFromString("setDividerColor:")
+    }
+}

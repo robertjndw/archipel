@@ -26,8 +26,7 @@ struct StatusBar: View {
         // Extra room at the edges because the window's bottom corners are rounded.
         .padding(.horizontal, 14)
         .frame(height: 28)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+        .background(Chrome.windowSurface)
     }
 }
 

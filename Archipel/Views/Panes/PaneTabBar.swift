@@ -7,6 +7,10 @@ import SwiftUI
 /// The tab row of one pane. With the window's own title bar gone this is the
 /// top edge of the content area, so the first and last pane also carry the
 /// controls that would otherwise sit in a toolbar.
+///
+/// The row is part of the pane, not of the window: it takes the color of what
+/// the pane shows and has no line under it, so row and content read as one
+/// surface. Only the focused pane's selected tab gets glass.
 struct PaneTabBar: View {
     @Environment(AppModel.self) private var model
     @AppStorage(LayoutDefaults.showsInspector) private var showInspector = true
@@ -17,6 +21,8 @@ struct PaneTabBar: View {
     /// buttons then sit over this bar and need room.
     let showsSidebarToggle: Bool
     let toggleSidebar: () -> Void
+    /// The color of what the pane shows, which the row is filled with.
+    let background: Color
     @State private var renaming: RenameTarget?
     @State private var dropSlot: Int?
 
@@ -30,7 +36,7 @@ struct PaneTabBar: View {
     var body: some View {
         HStack(spacing: 6) {
             if showsSidebarToggle {
-                GlassToolbarGroup {
+                TabRowControls {
                     Button("Show Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
                         .help("Show Sidebar")
                 }
@@ -86,7 +92,7 @@ struct PaneTabBar: View {
                 }
                 // .hidden still shows a scroller when the system is set to always show them.
                 .scrollIndicators(.never)
-                .tabRowEdgeFade()
+                .tabRowEdgeFade(background)
                 // Selecting a tab from elsewhere (Ctrl-Tab, the palette, a notification) can pick one
                 // scrolled out of view; without this the bar shows no selection at all.
                 .onChange(of: pane.selectedTab?.id) { _, id in
@@ -105,13 +111,16 @@ struct PaneTabBar: View {
                 return drop(items, at: nil)
             }
 
-            GlassToolbarGroup {
+            TabRowControls {
                 Menu {
                     NewSessionButtons(worktree: worktree.id, pane: pane.id)
                 } label: {
                     Image(systemName: "plus")
                 }
                 .toolbarGroupMenu()
+                // A borderless menu draws its label in the tint, which would make it the loudest
+                // thing in the row.
+                .tint(.secondary)
                 .help("New Session")
                 .accessibilityLabel("New Session")
                 .accessibilityIdentifier("pane.newSession")
@@ -132,8 +141,7 @@ struct PaneTabBar: View {
             .padding(.trailing, 8)
         }
         .frame(height: Self.height)
-        .background(.windowBackground)
-        .overlay(alignment: .bottom) { Divider() }
+        .background(background)
         .renameAlert($renaming)
     }
 
@@ -276,7 +284,9 @@ private struct TabButtonContent: View, Equatable {
                 .lineLimit(1)
                 .italic(tab.isPreview)
                 .fontWeight(label.activity?.unread == true ? .semibold : .regular)
-                .foregroundStyle(isSelected && isActive ? .primary : .secondary)
+                // In a pane without focus the selected tab is told apart by its text alone; the
+                // dimmed pane says the rest.
+                .foregroundStyle(isSelected ? .primary : .secondary)
             if !label.devServers.isEmpty {
                 DevServerPill(links: label.devServers)
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
@@ -355,6 +365,8 @@ private struct TabButtonContent: View, Equatable {
 /// inspector's lists fade (`scrollEdgeFade` in InspectorUI, which is vertical only and uses the
 /// inspector's background).
 private struct TabRowEdgeFade: ViewModifier {
+    /// What the row is filled with, so the fade lands on the same color.
+    let background: Color
     @State private var clipped = ClippedEdges()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -381,9 +393,7 @@ private struct TabRowEdgeFade: ViewModifier {
     }
 
     private func fade(from edge: HorizontalEdge) -> some View {
-        // What the bar itself is filled with (`.windowBackground`), as a color a gradient can fade.
-        let background = Color(nsColor: .windowBackgroundColor)
-        return LinearGradient(
+        LinearGradient(
             stops: [
                 .init(color: background, location: 0),
                 .init(color: background, location: 0.3),
@@ -398,14 +408,57 @@ private struct TabRowEdgeFade: ViewModifier {
 }
 
 private extension View {
-    func tabRowEdgeFade() -> some View {
-        modifier(TabRowEdgeFade())
+    func tabRowEdgeFade(_ background: Color) -> some View {
+        modifier(TabRowEdgeFade(background: background))
+    }
+}
+
+/// Icon buttons at the ends of the tab row, drawn straight onto the pane's color. Glass here would
+/// compete with the selected tab's glass. The squares match
+/// `GlassToolbarGroup`, so the buttons sit where they did.
+private struct TabRowControls<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            content
+                .labelStyle(.iconOnly)
+                .buttonStyle(TabRowButtonStyle())
+                .foregroundStyle(.secondary)
+                // For the menu, which the button style does not reach.
+                .frame(width: Chrome.controlHeight + 4, height: Chrome.controlHeight)
+        }
+    }
+}
+
+/// A plain glyph with a faint round highlight under the pointer, like a borderless toolbar item.
+private struct TabRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        TabRowButton(configuration: configuration)
+    }
+
+    private struct TabRowButton: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var isHovered = false
+
+        var body: some View {
+            configuration.label
+                .frame(width: Chrome.controlHeight + 4, height: Chrome.controlHeight)
+                .background {
+                    Capsule()
+                        .fill(.quinary)
+                        .opacity(configuration.isPressed ? 1 : isHovered ? 0.7 : 0)
+                }
+                .contentShape(.capsule)
+                .onHover { isHovered = $0 }
+                .animation(Motion.hover, value: isHovered)
+        }
     }
 }
 
 /// The focused pane's selected tab is the one piece of glass in the row,
-/// like Safari's compact tabs. An unfocused pane falls back to a flat fill,
-/// which is what tells the panes apart at a glance.
+/// like Safari's compact tabs. An unfocused pane shows none: its dimmed content
+/// already tells the panes apart.
 ///
 /// One view that slides under the selected tab instead of glass on every tab.
 /// Per-tab glass merges with its neighbours when a tab opens or closes and
@@ -415,8 +468,7 @@ private struct SelectionCapsule: View {
 
     var body: some View {
         Capsule()
-            .fill(.quaternary)
-            .opacity(isActive ? 0 : 1)
+            .fill(.clear)
             .glassEffect(isActive ? .regular : .identity, in: .capsule)
     }
 }
@@ -503,6 +555,7 @@ private struct PaneTabBarPreview: View {
     let model: AppModel
     var paneIndex = 0
     var showsSidebarToggle = false
+    var background = Color(nsColor: .textBackgroundColor)
 
     var body: some View {
         if let worktree = model.selectedWorktree {
@@ -512,7 +565,8 @@ private struct PaneTabBarPreview: View {
                 pane: pane,
                 isFocused: pane.id == worktree.focusedPane?.id,
                 showsSidebarToggle: showsSidebarToggle,
-                toggleSidebar: {}
+                toggleSidebar: {},
+                background: background
             )
             .environment(model)
         }
@@ -537,6 +591,12 @@ private func previewTabBars() -> some View {
 #Preview("Tab Bars, Dark") {
     previewTabBars()
         .preferredColorScheme(.dark)
+}
+
+#Preview("On a Black Terminal") {
+    PaneTabBarPreview(model: PanePreviews.model(selecting: PanePreviews.mixedTabs()), background: .black)
+        .environment(\.colorScheme, .dark)
+        .frame(width: 1100)
 }
 
 #Preview("Overflowing") {

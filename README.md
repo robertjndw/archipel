@@ -61,6 +61,8 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
   without switching to Archipel. They are held back while you share your screen.
 - The Dock icon gets a badge, and the menu bar icon lists every session, the ones
   waiting for you first. <kbd>⇧</kbd><kbd>⌘</kbd><kbd>U</kbd> jumps to the next one.
+- The bell in the sidebar header (<kbd>⌥</kbd><kbd>⌘</kbd><kbd>U</kbd>) narrows the
+  sidebar to the worktrees that need you, from every island.
 - Claude sessions show how many subagents they are running.
 
 ### Reviewing and committing
@@ -96,6 +98,7 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
 | Switch island | <kbd>Ctrl</kbd><kbd>1</kbd>...<kbd>9</kbd> |
 | Next / previous island | <kbd>Ctrl</kbd><kbd>⌘</kbd><kbd>]</kbd> / <kbd>Ctrl</kbd><kbd>⌘</kbd><kbd>[</kbd> |
 | Next session needing attention | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>U</kbd> |
+| Show only what needs me in the sidebar | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>U</kbd> |
 | Add worktree | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> |
 | Switch branch | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>B</kbd> |
 | Add project | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>O</kbd> |

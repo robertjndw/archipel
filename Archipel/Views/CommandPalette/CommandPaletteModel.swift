@@ -130,6 +130,12 @@ struct PaletteCommand: Identifiable {
                 symbol: "bell.badge",
                 shortcutHint: "⇧⌘U"
             ) { model.selectNextNeedingAttention() },
+            PaletteCommand(
+                id: "needs-me-filter",
+                title: model.showsOnlyNeedsMe ? "Show All in Sidebar" : "Show Only What Needs Me",
+                symbol: model.showsOnlyNeedsMe ? "bell.fill" : "bell",
+                shortcutHint: "⌥⌘U"
+            ) { model.showsOnlyNeedsMe.toggle() },
             PaletteCommand(id: "mark-read", title: "Mark as Read", symbol: "envelope.open", isAvailable: actions.selectedWorktreeHasUnread) {
                 actions.markSelectedWorktreeRead()
             },

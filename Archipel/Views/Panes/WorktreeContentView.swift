@@ -15,22 +15,28 @@ struct WorktreeContentView: View {
 
     var body: some View {
         if let worktree = model.selectedWorktree {
+            let style = model.settings.paneStyle
             Group {
                 if #available(macOS 27.2, *) {
                     HSplitView {
                         ForEach(worktree.panes) { pane in
-                            paneView(pane, in: worktree)
+                            paneView(pane, in: worktree, style: style)
                                 .frame(minWidth: minimumPaneWidth, maxWidth: .infinity, maxHeight: .infinity)
                                 .ignoresSafeArea(.container, edges: .top)
                                 .snapsSplitDividerToCenter(enabled: pane.id == worktree.panes.first?.id)
+                                .hidesSplitDivider(style == .comfortable)
                         }
                     }
                 } else {
-                    PaneStack(panes: worktree.panes) { pane in
-                        paneView(pane, in: worktree)
+                    PaneStack(panes: worktree.panes, showsHairline: style == .compact) { pane in
+                        paneView(pane, in: worktree, style: style)
                             .ignoresSafeArea(.container, edges: .top)
                     }
                 }
+            }
+            .background {
+                Chrome.windowSurface
+                    .ignoresSafeArea(.container, edges: .top)
             }
             .ignoresSafeArea(.container, edges: .top)
         } else {
@@ -47,7 +53,7 @@ struct WorktreeContentView: View {
 }
 
 extension WorktreeContentView {
-    private func paneView(_ pane: Pane, in worktree: Worktree) -> some View {
+    private func paneView(_ pane: Pane, in worktree: Worktree, style: AppSettings.PaneStyle) -> some View {
         PaneView(
             worktree: worktree,
             pane: pane,
@@ -55,6 +61,35 @@ extension WorktreeContentView {
             showsSidebarToggle: isSidebarCollapsed && pane.id == worktree.panes.first?.id,
             toggleSidebar: toggleSidebar
         )
+        .modifier(PaneCard(
+            style: style,
+            isFirst: pane.id == worktree.panes.first?.id,
+            isLast: pane.id == worktree.panes.last?.id
+        ))
+    }
+}
+
+/// The comfortable pane style: each pane a rounded card on the window surface. No border: the card
+/// is the color of its content, and the gap is all that separates two of them.
+///
+/// The gaps come from padding inside each pane rather than from the split itself, so the same
+/// modifier works in `HSplitView` and in `PaneStack`, and the split divider keeps its place (and
+/// its drag) in the middle of the gap, with its hairline hidden. Neighbours each give half the gap,
+/// which keeps the divider centered for the snap.
+private struct PaneCard: ViewModifier {
+    let style: AppSettings.PaneStyle
+    let isFirst: Bool
+    let isLast: Bool
+
+    // One modifier chain for both styles rather than a branch: a branch would give the pane a new
+    // identity on every switch and remount the terminals inside it.
+    func body(content: Content) -> some View {
+        let isCard = style == .comfortable
+        let gap = isCard ? Chrome.paneGap : 0
+        let shape = ConcentricRectangle(corners: isCard ? .concentric(minimum: .fixed(Chrome.paneRadius)) : .fixed(0))
+        content
+            .clipShape(shape)
+            .padding(EdgeInsets(top: gap, leading: isFirst ? gap : gap / 2, bottom: gap, trailing: isLast ? gap : gap / 2))
     }
 }
 
@@ -66,6 +101,8 @@ extension WorktreeContentView {
 /// columns around them.
 private struct PaneStack<Content: View>: View {
     let panes: [Pane]
+    /// Off in the comfortable style, where the gap between the cards already parts them.
+    let showsHairline: Bool
     @ViewBuilder let content: (Pane) -> Content
 
     /// Each pane's share of the width. A pane that was never resized counts as 1.
@@ -105,6 +142,7 @@ private struct PaneStack<Content: View>: View {
 
     private func divider(after index: Int, widths: [CGFloat]) -> some View {
         Divider()
+            .opacity(showsHairline ? 1 : 0)
             .overlay {
                 Color.clear
                     .frame(width: Self.dividerWidth + 2 * Self.grabMargin)
@@ -140,24 +178,63 @@ private struct PaneStack<Content: View>: View {
 
 private struct PaneView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let worktree: Worktree
     let pane: Pane
     let isFocused: Bool
     let showsSidebarToggle: Bool
     let toggleSidebar: () -> Void
 
+    /// A single pane has nothing to stand out from.
+    private var isDimmed: Bool { !isFocused && worktree.panes.count > 1 }
+
+    /// The tab row and the card take the color of what the pane shows, so they read as one surface.
+    /// A terminal also dims the way Ghostty dims its own splits. Everything else is drawn on the
+    /// text background and fades into it.
+    private var surface: PaneSurface {
+        if case .session = pane.selectedTab?.content, let colors = model.terminalColors {
+            let background = colors.background
+            return PaneSurface(
+                color: Color(background),
+                veil: Color(colors.unfocusedSplitFill),
+                veilOpacity: 1 - colors.unfocusedSplitOpacity,
+                // Where black and white text have the same contrast.
+                colorScheme: background.luminance < 0.18 ? .dark : .light
+            )
+        }
+        let text = Color(nsColor: .textBackgroundColor)
+        return PaneSurface(color: text, veil: text, veilOpacity: Chrome.unfocusedPaneDim, colorScheme: nil)
+    }
+
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
+        let surface = surface
         VStack(spacing: 0) {
             PaneTabBar(
                 worktree: worktree,
                 pane: pane,
                 isFocused: isFocused,
                 showsSidebarToggle: showsSidebarToggle,
-                toggleSidebar: toggleSidebar
+                toggleSidebar: toggleSidebar,
+                background: surface.color
             )
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(surface.color)
+        .overlay {
+            // So the eye finds the pane that takes the keys. It must never take a click: the click
+            // is what focuses the pane, and the terminal under it needs it too.
+            surface.veil
+                .opacity(isDimmed ? surface.veilOpacity : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .animation(reduceMotion ? nil : Motion.hover, value: isDimmed)
+        }
+        // A dark terminal in a light window needs light text and dark glass in its tab row, and
+        // the other way round. Always set, so a change of tab never changes the view's identity.
+        .environment(\.colorScheme, surface.colorScheme ?? colorScheme)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             model.paneFrames[pane.id] = frame
         }
@@ -215,6 +292,22 @@ private struct PaneView: View {
                 .controlSize(.large)
             }
         }
+    }
+}
+
+private struct PaneSurface {
+    var color: Color
+    /// Laid over a pane without focus at `veilOpacity`.
+    var veil: Color
+    var veilOpacity: Double
+    /// Set when the surface is not in the window's own light or dark, like a dark terminal in a
+    /// light window.
+    var colorScheme: ColorScheme?
+}
+
+private extension Color {
+    init(_ rgb: TerminalColors.RGB) {
+        self.init(.sRGB, red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 }
 
@@ -295,7 +388,6 @@ private struct ExitedBar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.windowBackground)
         .overlay(alignment: .top) { Divider() }
     }
 }
@@ -318,6 +410,14 @@ private struct ExitedBar: View {
 #Preview("Split Panes") {
     WorktreeContentView(isSidebarCollapsed: false, toggleSidebar: {})
         .environment(PanePreviews.model(selecting: PanePreviews.split()))
+        .frame(width: 1000, height: 500)
+}
+
+#Preview("Split Panes, Compact") {
+    let model = PanePreviews.model(selecting: PanePreviews.split())
+    model.settings.paneStyle = .compact
+    return WorktreeContentView(isSidebarCollapsed: false, toggleSidebar: {})
+        .environment(model)
         .frame(width: 1000, height: 500)
 }
 

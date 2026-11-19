@@ -24,6 +24,20 @@ final class AppSettings {
         }
     }
 
+    /// How split panes sit next to each other: flush with a hairline between them, or as rounded
+    /// cards with a gap.
+    enum PaneStyle: String, CaseIterable, Identifiable {
+        case compact, comfortable
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .compact: "Compact"
+            case .comfortable: "Comfortable"
+            }
+        }
+    }
+
     /// How the status bar draws subscription usage.
     enum UsageDisplay: String, CaseIterable, Identifiable {
         case numbers, bars
@@ -94,6 +108,7 @@ final class AppSettings {
 
     var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) } }
     var sidebarDensity: SidebarDensity { didSet { defaults.set(sidebarDensity.rawValue, forKey: Key.sidebarDensity) } }
+    var paneStyle: PaneStyle { didSet { defaults.set(paneStyle.rawValue, forKey: Key.paneStyle) } }
     var showsGitStatusInSidebar: Bool { didSet { defaults.set(showsGitStatusInSidebar, forKey: Key.showsGitStatusInSidebar) } }
     /// Also decides whether `gh` is asked at all.
     var showsPullRequests: Bool { didSet { defaults.set(showsPullRequests, forKey: Key.showsPullRequests) } }
@@ -149,6 +164,7 @@ final class AppSettings {
         webLinkDestination = defaults.string(forKey: Key.webLinkDestination).flatMap(LinkDestination.init) ?? .defaultApp
         appearance = defaults.string(forKey: Key.appearance).flatMap(Appearance.init) ?? .system
         sidebarDensity = defaults.string(forKey: Key.sidebarDensity).flatMap(SidebarDensity.init) ?? .comfortable
+        paneStyle = defaults.string(forKey: Key.paneStyle).flatMap(PaneStyle.init) ?? .comfortable
         showsGitStatusInSidebar = bool(Key.showsGitStatusInSidebar, true)
         showsPullRequests = bool(Key.showsPullRequests, true)
         showsAgentMessagesInSidebar = bool(Key.showsAgentMessagesInSidebar, true)
@@ -176,6 +192,7 @@ final class AppSettings {
         static let webLinkDestination = "settings.webLinkDestination"
         static let appearance = "settings.appearance"
         static let sidebarDensity = "settings.sidebarDensity"
+        static let paneStyle = "settings.paneStyle"
         static let showsGitStatusInSidebar = "settings.showsGitStatusInSidebar"
         static let showsPullRequests = "settings.showsPullRequests"
         static let showsAgentMessagesInSidebar = "settings.showsAgentMessagesInSidebar"

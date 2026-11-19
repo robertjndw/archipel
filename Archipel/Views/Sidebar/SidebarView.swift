@@ -15,23 +15,31 @@ struct SidebarView: View {
 
     var body: some View {
         let island = model.selectedIsland
+        let needsMe = model.showsOnlyNeedsMe ? model.needsMeGroups() : []
         List(selection: selection) {
-            ForEach(island?.projects ?? []) { project in
+            if model.showsOnlyNeedsMe {
+                ForEach(needsMe) { group in
+                    Section {
+                        ForEach(group.projects) { entry in
+                            let tint = model.tint(of: entry.project).color
+                            SidebarProjectHeader(project: entry.project, renaming: $renaming)
+                                .selectionDisabled()
+                                .listRowSeparator(.hidden)
+                            ForEach(entry.worktrees) { worktree in
+                                worktreeRow(worktree, tint: tint)
+                            }
+                        }
+                    } header: {
+                        NeedsMeIslandHeader(island: group.island)
+                    }
+                }
+            }
+            // Empty while filtered, when the groups above stand in for the island.
+            ForEach(model.showsOnlyNeedsMe ? [] : island?.projects ?? []) { project in
                 Section(isExpanded: expansion(of: project)) {
                     let tint = model.tint(of: project).color
                     ForEach(project.worktrees) { worktree in
-                        SidebarWorktreeRow(
-                            worktree: worktree,
-                            content: model.rowContent(for: worktree),
-                            sessions: model.sessionRows(for: worktree),
-                            isSelected: worktree.id == model.selectedWorktree?.id,
-                            tint: tint,
-                            removing: $removing,
-                            renaming: $renaming
-                        )
-                        .tag(worktree.id)
-                        .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
-                        .sidebarPeek(peek, worktree: worktree.id)
+                        worktreeRow(worktree, tint: tint)
                     }
                     let suggested = model.suggestedWorktrees(for: project)
                     if !suggested.isEmpty {
@@ -50,7 +58,16 @@ struct SidebarView: View {
         .onChange(of: model.selectedIsland?.id) { peek.close() }
         // Before the swipe content, so an empty island's placeholder moves with the list.
         .overlay {
-            if let island, island.projects.isEmpty {
+            if model.showsOnlyNeedsMe {
+                if needsMe.isEmpty {
+                    ContentUnavailableView {
+                        Label("Nothing Needs You", systemImage: "bell.slash")
+                    } description: {
+                        Text("Sessions that wait for an answer or have a result you have not read show up here, from every island.")
+                    }
+                    .accessibilityIdentifier("sidebar.needsMe.empty")
+                }
+            } else if let island, island.projects.isEmpty {
                 ContentUnavailableView {
                     Label("No Projects", systemImage: "folder")
                 } description: {
@@ -75,9 +92,10 @@ struct SidebarView: View {
             SidebarHeader(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            IslandSwitcher()
+            // Hidden rather than disabled: while the list spans every island there is no current one to move from.
+            if !model.showsOnlyNeedsMe { IslandSwitcher() }
         }
-        .islandSwipe(swipe)
+        .islandSwipe(swipe, isEnabled: !model.showsOnlyNeedsMe)
         .folderDropsAddProjects(to: model)
         .renameAlert($renaming)
         .sheet(item: $islandEditor) { mode in
@@ -86,6 +104,21 @@ struct SidebarView: View {
         .sheet(item: $removing) { worktree in
             RemoveWorktreeSheet(worktree: worktree)
         }
+    }
+
+    private func worktreeRow(_ worktree: Worktree, tint: Color) -> some View {
+        SidebarWorktreeRow(
+            worktree: worktree,
+            content: model.rowContent(for: worktree),
+            sessions: model.sessionRows(for: worktree),
+            isSelected: worktree.id == model.selectedWorktree?.id,
+            tint: tint,
+            removing: $removing,
+            renaming: $renaming
+        )
+        .tag(worktree.id)
+        .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
+        .sidebarPeek(peek, worktree: worktree.id)
     }
 
     private var selection: Binding<Worktree.ID?> {
@@ -100,6 +133,18 @@ struct SidebarView: View {
             get: { project.isExpanded },
             set: { model.setProject(project.id, expanded: $0) }
         )
+    }
+}
+
+/// Names the island a group of the "Needs Me" list belongs to, in its symbol and color.
+private struct NeedsMeIslandHeader: View {
+    let island: Island
+
+    var body: some View {
+        Label(island.name, systemImage: island.symbol)
+            .foregroundStyle(island.tint.color)
+            .font(.subheadline.weight(.semibold))
+            .accessibilityIdentifier("sidebar.needsMe.island")
     }
 }
 
@@ -141,6 +186,17 @@ private struct SidebarHeader: View {
         HStack(spacing: 4) {
             // No title: the switcher at the bottom already names the island.
             Spacer(minLength: 0)
+            Button {
+                model.showsOnlyNeedsMe.toggle()
+            } label: {
+                Label("Show Only What Needs Me", systemImage: model.showsOnlyNeedsMe ? "bell.fill" : "bell")
+                    .contentTransition(.symbolEffect(.replace))
+                    .foregroundStyle(model.showsOnlyNeedsMe ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            }
+            .help(model.showsOnlyNeedsMe ? "Show everything again (⌥⌘U)" : "Show only the worktrees that need you, from every island (⌥⌘U)")
+            .accessibilityIdentifier("sidebar.needsMe")
+            .accessibilityValue(model.showsOnlyNeedsMe ? "On" : "Off")
+            .frame(width: Self.slotWidth)
             if waiting > 0 {
                 // Jumps anywhere, other islands included, so it counts the whole workspace.
                 Button {
@@ -159,11 +215,14 @@ private struct SidebarHeader: View {
             ProjectsDisclosureButton()
                 .labelStyle(.iconOnly)
                 .frame(width: Self.slotWidth)
+                // Its target is the selected island, which the filtered list does not show.
+                .disabled(model.showsOnlyNeedsMe)
             Button("Add Project", systemImage: "folder.badge.plus") { isAddingProject = true }
                 .help("Add a folder to this island (⇧⌘O)")
                 // The badge shifts the drawn folder about 1.3pt right of and 0.3pt below the symbol's
                 // center, which puts it close to the sidebar icon and below its neighbours.
                 .offset(x: -1.5, y: -0.5)
+                .disabled(model.showsOnlyNeedsMe)
                 .frame(width: Self.slotWidth)
             Button("Hide Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
                 .help("Hide Sidebar")

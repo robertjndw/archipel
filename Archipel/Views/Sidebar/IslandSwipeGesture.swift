@@ -27,8 +27,8 @@ extension View {
     }
 
     /// Listens for two-finger horizontal swipes over this view.
-    func islandSwipe(_ state: IslandSwipeState) -> some View {
-        modifier(IslandSwipeDriver(state: state))
+    func islandSwipe(_ state: IslandSwipeState, isEnabled: Bool = true) -> some View {
+        modifier(IslandSwipeDriver(state: state, isEnabled: isEnabled))
     }
 }
 
@@ -49,29 +49,35 @@ private struct IslandSwipeContent: ViewModifier {
 
 private struct IslandSwipeDriver: ViewModifier {
     let state: IslandSwipeState
+    let isEnabled: Bool
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content.background {
-            IslandSwipeMonitor(
-                begin: { width in
-                    state.width = width
-                    let islands = model.workspace.islands
-                    let selected = islands.firstIndex { $0.id == model.selectedIsland?.id } ?? 0
-                    return IslandSwipe(islandCount: islands.count, selectedIndex: selected, width: width)
-                },
-                changed: {
-                    // Vertical scrolls also call begin, so only a gesture that turned out
-                    // horizontal may claim the state and cancel a settle in flight.
-                    if !state.ownsGesture { state.generation += 1; state.ownsGesture = true }
-                    state.offset = $0.offset
-                },
-                ended: { settle($0) }
-            )
+            // Dropping the monitor stops it from claiming scroll events, which a list that spans every
+            // island has no use for.
+            if isEnabled {
+                IslandSwipeMonitor(
+                    begin: { width in
+                        state.width = width
+                        let islands = model.workspace.islands
+                        let selected = islands.firstIndex { $0.id == model.selectedIsland?.id } ?? 0
+                        return IslandSwipe(islandCount: islands.count, selectedIndex: selected, width: width)
+                    },
+                    changed: {
+                        // Vertical scrolls also call begin, so only a gesture that turned out
+                        // horizontal may claim the state and cancel a settle in flight.
+                        if !state.ownsGesture { state.generation += 1; state.ownsGesture = true }
+                        state.offset = $0.offset
+                    },
+                    ended: { settle($0) }
+                )
+            }
         }
         .onChange(of: model.selectedIsland?.id) { old, new in
-            enter(from: old, to: new)
+            // Picking a row of the filtered list switches islands behind the one list it shows.
+            if isEnabled { enter(from: old, to: new) }
         }
     }
 

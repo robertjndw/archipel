@@ -17,6 +17,19 @@ struct AppearanceSettingsView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                LabeledContent {
+                    TilePicker(
+                        selection: $settings.paneStyle,
+                        options: AppSettings.PaneStyle.allCases,
+                        title: \.title
+                    ) { style in
+                        PaneStylePreview(style: style)
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    Text("Panes")
+                    Text(settings.paneStyle.summary)
+                }
             }
 
             Section("Sidebar") {
@@ -95,6 +108,15 @@ extension AppSettings.SidebarDensity {
         case .compact: "One line per worktree. Agent messages show on hover."
         case .comfortable: "Two lines per worktree: the branch, then what needs you or its changes."
         case .spacious: "More room around projects, and two lines for a waiting agent's question."
+        }
+    }
+}
+
+extension AppSettings.PaneStyle {
+    var summary: String {
+        switch self {
+        case .compact: "Split panes sit edge to edge with a thin line between them."
+        case .comfortable: "Split panes get rounded corners and a little room around them."
         }
     }
 }

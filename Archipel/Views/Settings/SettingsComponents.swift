@@ -250,10 +250,59 @@ struct SidebarDensityPreview: View {
     }
 }
 
+/// Two panes side by side in each pane style, the second one dimmed the way an unfocused pane is.
+struct PaneStylePreview: View {
+    let style: AppSettings.PaneStyle
+
+    var body: some View {
+        let isComfortable = style == .comfortable
+        let gap: CGFloat = isComfortable ? 3 : 0
+        HStack(spacing: isComfortable ? gap : 0) {
+            pane(lines: [24, 16, 20], isDimmed: false)
+            if !isComfortable { Divider() }
+            pane(lines: [14, 22, 10], isDimmed: true)
+        }
+        .padding(gap)
+        .frame(width: AppearancePreview.size.width, height: AppearancePreview.size.height)
+        .background(Chrome.windowSurface)
+    }
+
+    /// One surface from the tab row down, with the selected tab as the only mark in the row.
+    private func pane(lines: [CGFloat], isDimmed: Bool) -> some View {
+        let surface = Color(nsColor: .textBackgroundColor)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 3) {
+                Capsule()
+                    .fill(.quaternary)
+                    .opacity(isDimmed ? 0 : 1)
+                    .frame(width: 14, height: 5)
+                    .overlay { Capsule().fill(.secondary).frame(width: 8, height: 2) }
+                Capsule().fill(.tertiary).frame(width: 8, height: 2)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 3)
+            .frame(height: 10)
+            VStack(alignment: .leading, spacing: 2.5) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, width in
+                    Capsule().fill(.secondary).frame(width: width, height: 2.5)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(surface)
+        .overlay { surface.opacity(isDimmed ? Chrome.unfocusedPaneDim : 0) }
+        .clipShape(.rect(cornerRadius: style == .comfortable ? 4 : 0, style: .continuous))
+    }
+}
+
 #if DEBUG
 private struct ComponentGallery: View {
     @State private var appearance = AppSettings.Appearance.system
     @State private var density = AppSettings.SidebarDensity.comfortable
+    @State private var paneStyle = AppSettings.PaneStyle.comfortable
     @State private var usage = AppSettings.UsageDisplay.bars
     @State private var fill = AppSettings.UsageBarFill.used
 
@@ -277,6 +326,11 @@ private struct ComponentGallery: View {
             labeled("TilePicker with SidebarDensityPreview") {
                 TilePicker(selection: $density, options: AppSettings.SidebarDensity.allCases, title: \.title) {
                     SidebarDensityPreview(density: $0)
+                }
+            }
+            labeled("TilePicker with PaneStylePreview") {
+                TilePicker(selection: $paneStyle, options: AppSettings.PaneStyle.allCases, title: \.title) {
+                    PaneStylePreview(style: $0)
                 }
             }
             labeled("TilePicker with UsageDisplayPreview, \(fill.title.lowercased())") {
