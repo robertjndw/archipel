@@ -26,6 +26,25 @@ final class IslandTests: ArchipelUITestCase {
         assertExists(mainWindow(titled: "fixture - main"), "The island remembers which worktree was selected in it.")
     }
 
+    func testEachIslandKeepsItsScrollPosition() throws {
+        // Enough projects that the list scrolls in the test window.
+        let long = try (1...24).map { try sandbox.makeRepository(named: String(format: "repo%02d", $0)) }
+        let other = try sandbox.makeRepository(named: "other")
+        try launch(with: islandWorkspace([("Personal", long), ("Work", [other])]))
+        assertExists(sidebarProject("repo01"), "The first island's projects should be listed.")
+
+        mainWindow.outlines["sidebar"].scroll(byDeltaX: 0, deltaY: -2000)
+        assertExists(sidebarProject("repo24"), "Scrolling should reach the last project.")
+        waitUntil("the first project is scrolled out of sight") { !sidebarProject("repo01").isHittable }
+
+        chooseMenu("Islands", "Work")
+        assertExists(sidebarProject("other"), "The second island's project should be listed.")
+        chooseMenu("Islands", "Personal")
+        assertExists(sidebarProject("repo24"), "The first island's projects should be back.")
+        XCTAssertTrue(sidebarProject("repo24").isHittable, "The list should come back where it was scrolled to.")
+        XCTAssertFalse(sidebarProject("repo01").isHittable, "The list should not jump back to the top.")
+    }
+
     func testSwitchingIslandsFromTheMenu() throws {
         let alpha = try sandbox.makeRepository(named: "alpha")
         let beta = try sandbox.makeRepository(named: "beta")

@@ -77,7 +77,7 @@ struct IslandSwitcher: View {
         .animation(reduceMotion ? nil : Motion.selection, value: showsName)
         // The bottom line runs through the middle of this, as it does through the status bar.
         .frame(height: 2 * Chrome.bottomLineInset)
-        .animation(reduceMotion ? nil : Motion.selection, value: selectedID)
+        .animation(reduceMotion ? nil : Motion.page, value: selectedID)
         .onChange(of: selectedID) { Haptics.levelChange() }
         .sheet(item: $editor) { mode in
             IslandEditor(mode: mode)
@@ -207,7 +207,7 @@ private struct IslandButton: View {
             .padding(.horizontal, isNamed ? 8 : 5)
             // Needed on top of the switcher's animation. On a mouse click the clicked button
             // otherwise skips it, so its name pops open at once and the next island slides over it.
-            .animation(reduceMotion ? nil : Motion.selection, value: isSelected)
+            .animation(reduceMotion ? nil : Motion.page, value: isSelected)
             // Inside the row's 2pt inset, so the capsule is a small control: the strip under the
             // cards has no room for more.
             .frame(height: Chrome.bottomControlHeight - 4)

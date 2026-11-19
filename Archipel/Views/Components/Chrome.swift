@@ -68,6 +68,9 @@ enum Motion {
     static let selection = Animation.spring(duration: 0.35, bounce: 0.15)
     /// Hover highlights and the reveal of hover-only controls.
     static let hover = Animation.easeOut(duration: 0.15)
+    /// The island switcher's pill. Matches the sidebar strip's spring (same response, no bounce),
+    /// so the pill and the lists arrive together.
+    static let page = Animation.spring(duration: 0.4, bounce: 0)
     /// Expanding and collapsing a section in place.
     static let disclosure = Animation.snappy(duration: 0.2)
 }
