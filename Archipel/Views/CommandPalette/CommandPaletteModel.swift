@@ -466,7 +466,7 @@ final class CommandPaletteModel {
             perform = { app.select(worktree: worktreeID) }
         case .session(let sessionID):
             id = "session:\(sessionID)"
-            symbol = (app.workspace.session(id: sessionID)?.agent.definition ?? .shell).symbolName
+            symbol = (app.effectiveAgent(for: sessionID)?.definition ?? .shell).symbolName
             activity = app.activity(for: sessionID)
             perform = { app.select(session: sessionID) }
         }

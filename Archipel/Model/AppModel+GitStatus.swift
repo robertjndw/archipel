@@ -149,7 +149,13 @@ extension AppModel {
             showsPullRequests: settings.showsPullRequests,
             showsMessages: settings.showsAgentMessagesInSidebar
         )
-        return WorktreeRowContent(worktree: worktree, activity: activity(for: worktree), git: git, options: options)
+        return WorktreeRowContent(
+            worktree: worktree,
+            activity: activity(for: worktree),
+            git: git,
+            options: options,
+            agentOverrides: agentOverrides
+        )
     }
 
     private static func badge(for pullRequest: GitPullRequest) -> PullRequestBadge {

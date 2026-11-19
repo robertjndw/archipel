@@ -147,6 +147,11 @@ final class AppModel {
     /// Review comments waiting for their target session to be ready for input, by session.
     @ObservationIgnored var pendingReviews: [Session.ID: PendingReview] = [:]
     @ObservationIgnored var terminalStartTimes: [Session.ID: ContinuousClock.Instant] = [:]
+    /// Agents the user started by hand in shell tabs. See AppModel+DetectedAgents.
+    var runtimeAgents: [Session.ID: RuntimeAgentState] = [:]
+    @ObservationIgnored var progressTurns: [Session.ID: ProgressTurn] = [:]
+    @ObservationIgnored var progressChecks: [Session.ID: Task<Void, Never>] = [:]
+    @ObservationIgnored var foregroundChecks: [Session.ID: Task<Void, Never>] = [:]
 
     /// Transient repository state for the sidebar rows of the selected island.
     var gitSummaries: [Worktree.ID: GitSummary] = [:]
@@ -171,6 +176,8 @@ final class AppModel {
     /// The Ghostty colors the panes draw around terminals; nil without a terminal engine.
     private(set) var terminalColors: TerminalColors?
     private let hookServer: HookServer
+    /// Claude hooks in the user's own settings, for Claude started by hand in a shell tab.
+    let claudeUserHooks: ClaudeUserHooksController
     let notifier = AttentionNotifier()
     /// Most recently focused tabs first, for Ctrl-Tab. Not observed: nothing on screen draws from it
     /// until the switcher opens, and it changes on every focus move.
@@ -224,6 +231,12 @@ final class AppModel {
         reviewComments = ReviewCommentStore(fileURL: support.appending(path: "review-comments.json"))
         hookServer = HookServer(socketURL: support.appending(path: "hook.sock"))
         hookExecutableURL = Bundle.main.bundleURL.appending(path: "Contents/Helpers/archipel-hook")
+        claudeUserHooks = ClaudeUserHooksController(
+            supportDirectory: support,
+            bundledHelper: hookExecutableURL,
+            socketURL: hookServer.socketURL,
+            settings: settings
+        )
         loginPATH = Task.detached { await LoginEnvironment.resolvePATH() }
 
         var problems: [String] = []
@@ -293,10 +306,12 @@ final class AppModel {
         refreshCodexUsage()
         watchSessionInteraction()
         devServers.start { [weak self] in self?.terminals ?? [:] }
+        resources.onScan = { [weak self] in self?.reconcileDetectedAgents() }
         resources.start { [weak self] in self?.resourceSources() ?? [:] }
         terminalApp?.acceptsDroppedText = { [weak self] in !(self?.isInternalDragPayload($0) ?? false) }
         terminalColors = terminalApp?.colors
         terminalApp?.onColorsChange = { [weak self] in self?.terminalColors = $0 }
+        claudeUserHooks.refreshAtLaunch()
     }
 
     #if DEBUG
@@ -321,6 +336,12 @@ final class AppModel {
         let defaults = UserDefaults(suiteName: "ArchipelPreview")!
         defaults.removePersistentDomain(forName: "ArchipelPreview")
         settings = AppSettings(defaults: defaults)
+        claudeUserHooks = ClaudeUserHooksController(
+            supportDirectory: scratch,
+            bundledHelper: hookExecutableURL,
+            socketURL: hookServer.socketURL,
+            settings: settings
+        )
         self.workspace = workspace
         self.activities = activities
         self.launchFailures = launchFailures
@@ -632,7 +653,7 @@ final class AppModel {
     /// A request from an agent that will not say when it was answered.
     private func hasUnreportedRequest(_ id: Session.ID) -> Bool {
         activities[id]?.needsUser == true
-            && workspace.session(id: id)?.agent.definition.reportsLifecycleThroughHooks == false
+            && effectiveAgent(for: id)?.reportsLifecycleThroughHooks == false
     }
 
     private func clearUnread(_ id: Session.ID) {
@@ -648,7 +669,7 @@ final class AppModel {
         for session in workspace.worktree(id: id)?.sessions ?? [] { clearUnread(session.id) }
     }
 
-    private func isBeingViewed(_ id: Session.ID) -> Bool {
+    func isBeingViewed(_ id: Session.ID) -> Bool {
         NSApp.isActive && visibleSessionIDs.contains(id)
     }
 
@@ -1306,18 +1327,26 @@ final class AppModel {
             activity.backgroundTasks == 1 ? "running a background task" : "running background tasks"
         }
         // A script or a shell has no conversation to lose or to come back to.
-        let isAgent = scriptSessions[id] == nil && session.agent.definition.acceptsPrompts
+        let agent = effectiveAgent(for: session)
+        let isAgent = scriptSessions[id] == nil && agent.acceptsPrompts
         let title: String
         let message: String
         switch action {
         case .close:
             title = "Close \"\(session.displayTitle)\" while it is \(state)?"
-            message = isAgent
-                ? "The agent will be stopped. Closing the tab removes the session, so its conversation can no longer be resumed in Archipel."
-                : "The running command will be stopped."
+            message = if agent.isDetected {
+                // Archipel never resumes a hand-started Claude, so closing loses no conversation.
+                "\(agent.definition.displayName) will be stopped."
+            } else if isAgent {
+                "The agent will be stopped. Closing the tab removes the session, so its conversation can no longer be resumed in Archipel."
+            } else {
+                "The running command will be stopped."
+            }
         case .restart(let fresh):
             title = "Restart \"\(session.displayTitle)\" while it is \(state)?"
-            message = if !isAgent {
+            message = if agent.isDetected {
+                "\(agent.definition.displayName) will be stopped and the shell starts again."
+            } else if !isAgent {
                 "The running command will be stopped and started again."
             } else if fresh || session.agentSessionID == nil {
                 "The agent will be stopped and starts again with a new conversation."
@@ -1512,12 +1541,19 @@ final class AppModel {
                 case .bell:
                     self.apply(.bell, to: id)
                 case .childExited(let exitCode):
+                    // After `exec claude` the tab ends with the agent. That is an exit, not the shell returning.
+                    self.forgetRuntimeAgent(id)
                     self.apply(.processExited(code: Int32(truncatingIfNeeded: exitCode)), to: id)
                 case .titleChanged(let title):
                     self.receiveTerminalTitle(title, for: id)
+                    // Shells retitle the tab for each command, so a title change is the quickest sign
+                    // that the user started or left an agent.
+                    self.checkForegroundSoon(id)
+                case .progress(let progress):
+                    self.receiveProgress(progress, for: id)
                 case .openLink(let link, let alternate):
                     self.openTerminalLink(link, alternate: alternate, from: id)
-                case .workingDirectoryChanged, .progress, .closeRequested:
+                case .workingDirectoryChanged, .closeRequested:
                     break
                 }
             }
@@ -1525,13 +1561,18 @@ final class AppModel {
     }
 
     private func receiveTerminalNotification(_ body: String, for id: Session.ID) {
-        guard let agent = workspace.session(id: id)?.agent,
+        guard let agent = effectiveAgent(for: id),
               // Hooks report the same moments with more detail, and Claude's
               // "waiting for input" notification would turn a finished turn
               // back into an attention state.
-              !agent.definition.reportsLifecycleThroughHooks
+              !agent.reportsLifecycleThroughHooks
         else { return }
-        switch agent {
+        if agent.isDetected {
+            guard let reason = ClaudeTerminalNotification.reason(forBody: body) else { return }
+            apply(.attentionRequested(reason, message: body), to: id)
+            return
+        }
+        switch agent.kind {
         case .codex:
             // The launch overrides restrict Codex to approval notifications.
             apply(.attentionRequested(.permission, message: body), to: id)
@@ -1552,6 +1593,7 @@ final class AppModel {
     /// A restart keeps what belongs to the session rather than its process: the script it reruns and
     /// review comments still waiting to be delivered.
     private func tearDown(_ id: Session.ID, restarting: Bool = false) {
+        forgetRuntimeAgent(id)
         eventTasks.removeValue(forKey: id)?.cancel()
         terminals.removeValue(forKey: id)?.close()
         terminalStartTimes[id] = nil
@@ -1571,6 +1613,12 @@ final class AppModel {
         // Limits belong to the account, so a reading counts even if its session was closed meanwhile.
         if let reading = message.usage { recordUsage(reading) }
         guard let session = workspace.session(id: message.sessionID) else { return }
+        if message.origin == .userSettings {
+            // The user's hooks also fire for a hand-started Claude in a Codex or script tab. Only
+            // plain shells track one.
+            if isPlainShell(session) { receiveUserSettingsHook(message, for: session.id) }
+            return
+        }
         if let context = message.context {
             recordContext(context, for: session.id)
         } else if message.usage != nil {
@@ -1593,7 +1641,7 @@ final class AppModel {
         if case .turnFinished? = message.event { refreshPromptCache(for: session.id) }
     }
 
-    private func apply(_ event: AgentEvent, to id: Session.ID) {
+    func apply(_ event: AgentEvent, to id: Session.ID) {
         guard workspace.session(id: id) != nil else { return }
         var activity = activities[id] ?? SessionActivity()
         let before = activity
@@ -1602,7 +1650,7 @@ final class AppModel {
         commit(activity, replacing: before, of: id, viewed: viewed)
     }
 
-    private func commit(_ activity: SessionActivity, replacing before: SessionActivity, of id: Session.ID, viewed: Bool) {
+    func commit(_ activity: SessionActivity, replacing before: SessionActivity, of id: Session.ID, viewed: Bool) {
         // Most hook events (a tool call while already working) change nothing, and writing anyway would
         // re-render every view that reads `activities`.
         guard activity != before, let session = workspace.session(id: id) else { return }

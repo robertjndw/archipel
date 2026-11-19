@@ -234,3 +234,110 @@ extension ArchipelUITestCase {
         XCTAssertEqual(process.terminationStatus, 0, "The hook helper must never fail the agent's hook.", file: file, line: line)
     }
 }
+
+/// A stand-in for a Claude the user typed into a shell tab, driven through files in the sandbox.
+struct ManualClaudeStub {
+    fileprivate let root: URL
+    let executable: URL
+
+    /// Written once the stub is running: its pid and the session id the tab gave it.
+    var record: URL { root.appending(path: "manual-claude-record.txt") }
+    fileprivate var hookCommand: URL { root.appending(path: "manual-claude-hook-command.txt") }
+    fileprivate var hookPayload: URL { root.appending(path: "manual-claude-hook-payload.json") }
+
+    /// The stub's pid and the session id the tab gave it, or nil before it has started.
+    func started() -> (pid: Int32, sessionID: String)? {
+        guard let text = try? String(contentsOf: record, encoding: .utf8) else { return nil }
+        var pid: Int32?
+        var session: String?
+        for line in text.split(separator: "\n") {
+            if line.hasPrefix("pid=") { pid = Int32(line.dropFirst(4)) }
+            if line.hasPrefix("session=") { session = String(line.dropFirst(8)) }
+        }
+        // Both lines, so a record caught half way through its write does not count.
+        guard let pid, let session else { return nil }
+        return (pid, session)
+    }
+
+    func progressOn() throws { try trigger("progress-on") }
+    func progressOff() throws { try trigger("progress-off") }
+    func exit() throws { try trigger("exit") }
+
+    /// Has the stub run `command` the way Claude runs a hook: through `sh -c`, with the payload on
+    /// standard input. That puts the stub's pid above the hook helper, which is how the app tells
+    /// whose hook it is.
+    func runHook(_ payload: [String: Any], command: String) throws {
+        try JSONSerialization.data(withJSONObject: payload).write(to: hookPayload)
+        try command.write(to: hookCommand, atomically: true, encoding: .utf8)
+        try trigger("hook")
+    }
+
+    private func trigger(_ name: String) throws {
+        try Data().write(to: root.appending(path: "manual-claude-\(name)"))
+    }
+}
+
+extension Sandbox {
+    /// A fake `claude` that looks like the real one in the process table. It is a Perl script
+    /// because a `#!/bin/sh` one shows up in the process table as `sh`, which the app takes for a
+    /// shell. For an interpreter the app names the process after its script, and `perl` is one of
+    /// the interpreters it knows.
+    ///
+    /// It acts on trigger files, each removed as it is read so it fires once.
+    func installManualClaudeStub() throws -> ManualClaudeStub {
+        let stub = ManualClaudeStub(root: root, executable: bin.appending(path: "claude"))
+        let script = #"""
+            #!/usr/bin/perl
+            use strict;
+            use warnings;
+            $| = 1;
+            # The hook's shell may be gone before it reads the payload.
+            $SIG{PIPE} = 'IGNORE';
+            my $root = '\#(root.path)';
+
+            sub slurp {
+                my ($path) = @_;
+                open(my $handle, '<', $path) or return '';
+                local $/;
+                my $text = <$handle>;
+                close($handle);
+                return defined $text ? $text : '';
+            }
+
+            sub take {
+                my ($name) = @_;
+                my $path = "$root/manual-claude-$name";
+                return 0 unless -e $path;
+                unlink($path);
+                return 1;
+            }
+
+            # Renamed into place so a poll never sees half a record.
+            my $partial = "$root/manual-claude-record.partial";
+            open(my $record, '>', $partial) or die "cannot write the record: $!";
+            print $record "pid=$$\nsession=" . ($ENV{ARCHIPEL_SESSION_ID} // '') . "\n";
+            close($record);
+            rename($partial, "$root/manual-claude-record.txt");
+
+            while (1) {
+                select(undef, undef, undef, 0.1);
+                print "\e]9;4;3\a" if take('progress-on');
+                print "\e]9;4;0\a" if take('progress-off');
+                if (take('hook')) {
+                    my $command = slurp("$root/manual-claude-hook-command.txt");
+                    my $payload = slurp("$root/manual-claude-hook-payload.json");
+                    # The list form runs sh directly, with nothing in between.
+                    if (open(my $pipe, '|-', '/bin/sh', '-c', $command)) {
+                        print $pipe $payload;
+                        close($pipe);
+                    }
+                }
+                exit 0 if take('exit');
+            }
+
+            """#
+        try script.write(to: stub.executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.executable.path)
+        return stub
+    }
+}

@@ -56,6 +56,20 @@ struct AgentDefinitionTests {
         #expect(statusLine["command"] as? String == ShellQuoting.quote(hook.path) + " statusline")
     }
 
+    @Test func onlyClaudeLaunchesCarryTheUserHooksFlag() throws {
+        let variable = ClaudeUserHooks.launchedByArchipelVariable
+        let fresh = AgentDefinition.claude.launchCommand(for: context(agentSessionID: nil))
+        let resumed = try #require(AgentDefinition.claude.resumeCommand(for: context(agentSessionID: "id")))
+        #expect(fresh.environment[variable] == "settings")
+        #expect(resumed.environment[variable] == "settings")
+        expectHookEnvironment(fresh)
+
+        #expect(AgentDefinition.shell.launchCommand(for: context(agentSessionID: nil)).environment[variable] == nil)
+        #expect(AgentDefinition.codex.launchCommand(for: context(agentSessionID: nil)).environment[variable] == nil)
+        let codexResume = try #require(AgentDefinition.codex.resumeCommand(for: context(agentSessionID: "t")))
+        #expect(codexResume.environment[variable] == nil)
+    }
+
     @Test func claudeResume() throws {
         let agentID = "0F8E3C2A-5B6D-4E7F-8091-A2B3C4D5E6F7"
         let command = try #require(AgentDefinition.claude.resumeCommand(for: context(agentSessionID: agentID)))

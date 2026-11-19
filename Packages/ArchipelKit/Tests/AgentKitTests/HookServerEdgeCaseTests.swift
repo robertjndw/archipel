@@ -198,6 +198,37 @@ struct HookServerEdgeCaseTests {
         #expect(decode(#"{"context_window": {"total_input_tokens": 0, "context_window_size": 200000, "current_usage": null}}"#) == nil)
     }
 
+    @Test(arguments: [
+        (#", "origin": "user-settings""#, HookOrigin.userSettings),
+        ("", .launch),
+        (#", "origin": "somewhere-else""#, .launch),
+        (#", "origin": 3"#, .launch),
+    ])
+    func envelopeOrigin(field: String, expected: HookOrigin) throws {
+        let session = UUID()
+        let json = #"{"session": "\#(session.uuidString)", "source": "claude"\#(field), "payload": \#(Fixtures.sessionEnd)}"#
+        let message = try #require(HookServer.decodeEnvelope(Data(json.utf8)))
+        #expect(message.origin == expected)
+        #expect(message.event == nil)
+        #expect(message.lifecycle == .ended(reason: "prompt_input_exit"))
+        #expect(message.agentSessionID == Fixtures.claudeSessionID)
+        #expect(message.ancestorPIDs.isEmpty)
+    }
+
+    @Test(arguments: [
+        (#", "ancestorPIDs": [812, 811, 1]"#, [Int32(812), 811, 1]),
+        ("", []),
+        (#", "ancestorPIDs": "812""#, []),
+        // Whatever is not a pid is dropped rather than failing the whole hook.
+        (#", "ancestorPIDs": [812, "x", 99999999999, 7]"#, [812, 7]),
+    ])
+    func envelopeAncestors(field: String, expected: [Int32]) throws {
+        let json = #"{"session": "\#(UUID().uuidString)", "source": "claude", "origin": "user-settings"\#(field), "payload": \#(Fixtures.stop)}"#
+        let message = try #require(HookServer.decodeEnvelope(Data(json.utf8)))
+        #expect(message.ancestorPIDs == expected)
+        #expect(message.event == .turnFinished(message: "I've completed the refactoring.", backgroundTasks: 0))
+    }
+
     // MARK: Helpers
 
     private func envelope(_ session: UUID, message: String) -> String {

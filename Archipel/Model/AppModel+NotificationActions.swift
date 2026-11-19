@@ -34,7 +34,7 @@ extension AppModel {
     /// Buttons only where the app knows how to answer: an agent prompt, not a shell or a script (which
     /// always runs as one), since those could take a reply as a command.
     private func notificationCategory(for session: Session, activity: SessionActivity) -> AttentionNotifier.Category? {
-        guard session.agent.definition.acceptsPrompts else { return nil }
+        guard effectiveAgent(for: session).acceptsPrompts else { return nil }
         switch activity.status {
         case .needsAttention(.permission):
             // Claude asks its multiple choice questions through the permission hook; they have no Yes and No.
@@ -54,9 +54,11 @@ extension AppModel {
     func answer(_ response: AttentionNotifier.Response) {
         let id = response.sessionID
         let status = activity(for: id).status
-        guard let session = workspace.session(id: id), session.agent.definition.acceptsPrompts,
+        guard let session = workspace.session(id: id), effectiveAgent(for: session).acceptsPrompts,
               let terminal = terminals[id],
-              notifier.isCurrent(response), AttentionNotifier.statusKey(status) == response.status
+              notifier.isCurrent(response), AttentionNotifier.statusKey(status) == response.status,
+              // A hand-started Claude may have exited since, and the shell would run the answer as a command.
+              detectedAgentHoldsTerminal(id)
         else { return bringForward(id) }
 
         // The live grid, not the viewport: if the user scrolled back, the viewport may show an old,
@@ -85,8 +87,9 @@ extension AppModel {
             terminal.sendText(message)
             Task { [weak self] in
                 try? await Task.sleep(for: Self.replySubmitDelay)
-                // A restart in the meantime would send Return to a fresh process.
-                guard let self, self.terminals[id] === terminal else { return }
+                // A restart in the meantime would send Return to a fresh process, and if a hand-started
+                // Claude exited, the shell would run the reply as a command.
+                guard let self, self.terminals[id] === terminal, self.detectedAgentHoldsTerminal(id) else { return }
                 terminal.sendKey(.enter)
             }
             resolveAttention(of: id, to: .working)

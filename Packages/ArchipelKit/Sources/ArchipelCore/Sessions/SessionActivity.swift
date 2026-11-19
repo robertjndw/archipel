@@ -97,6 +97,12 @@ public struct SessionActivity: Equatable, Sendable {
         case .processExited(let code):
             status = .exited(code: code)
             backgroundTasks = 0
+        case .agentLeft:
+            // Idle, but with no completed turn to show. What the agent did is in the scrollback,
+            // not in a result the sidebar could link to.
+            status = .finished
+            completedTurn = false
+            backgroundTasks = 0
         }
 
         markUnreadIfSettled(from: previous, wasBusy: wasBusy)

@@ -3,25 +3,53 @@ import Darwin
 import Foundation
 import Synchronization
 
+/// Which hook configuration a message came through.
+public enum HookOrigin: String, Sendable {
+    /// The `--settings` the app passes to an agent it launches.
+    case launch
+    /// The user's own Claude settings, for a Claude started by hand in a shell tab.
+    case userSettings = "user-settings"
+}
+
+/// The start or end of a Claude conversation, with Claude's `source` or `reason` for it.
+public enum HookLifecycle: Equatable, Sendable {
+    case started(source: String?)
+    case ended(reason: String?)
+}
+
 public struct HookMessage: Equatable, Sendable {
     public var sessionID: UUID
     public var event: AgentEvent?
     public var agentSessionID: String?
     /// Subscription limits, from Claude's status line. Never set together with an event.
     public var usage: ProviderUsage?
+    public var origin: HookOrigin
+    public var lifecycle: HookLifecycle?
+    /// The processes above the hook helper, its parent first, so the app can tell which Claude sent
+    /// it. Only hooks from the user's settings carry them, and older helpers send none.
+    public var ancestorPIDs: [Int32]
 
     /// Context window fill, from Claude's status line. Never set together with an event.
     public var context: SessionContext?
 
     public init(
-        sessionID: UUID, event: AgentEvent?, agentSessionID: String?,
-        usage: ProviderUsage? = nil, context: SessionContext? = nil
+        sessionID: UUID,
+        event: AgentEvent?,
+        agentSessionID: String?,
+        usage: ProviderUsage? = nil,
+        context: SessionContext? = nil,
+        origin: HookOrigin = .launch,
+        lifecycle: HookLifecycle? = nil,
+        ancestorPIDs: [Int32] = []
     ) {
         self.sessionID = sessionID
         self.event = event
         self.agentSessionID = agentSessionID
         self.usage = usage
         self.context = context
+        self.origin = origin
+        self.lifecycle = lifecycle
+        self.ancestorPIDs = ancestorPIDs
     }
 }
 
@@ -240,7 +268,17 @@ public final class HookServer: Sendable {
         }
         guard let source = (envelope["source"] as? String).flatMap(HookSource.init(rawValue:)) else { return nil }
         let decoded = HookDecoder.decode(source: source, payload: payload)
-        return HookMessage(sessionID: session, event: decoded.event, agentSessionID: decoded.agentSessionID)
+        // Older helpers send no origin. Treat a missing or unknown one as `.launch`, which the app
+        // only acts on for sessions it launched.
+        let origin = (envelope["origin"] as? String).flatMap(HookOrigin.init(rawValue:)) ?? .launch
+        return HookMessage(
+            sessionID: session,
+            event: decoded.event,
+            agentSessionID: decoded.agentSessionID,
+            origin: origin,
+            lifecycle: HookDecoder.lifecycle(source: source, payload: payload),
+            ancestorPIDs: ((envelope["ancestorPIDs"] as? [Any]) ?? []).compactMap { ($0 as? Int).flatMap(Int32.init(exactly:)) }
+        )
     }
 }
 

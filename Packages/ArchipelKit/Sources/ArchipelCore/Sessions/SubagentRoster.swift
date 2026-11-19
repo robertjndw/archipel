@@ -31,7 +31,7 @@ public struct SubagentRoster: Equatable, Sendable {
             lastSeen[id] = now
         case .subagentFinished(let id):
             lastSeen[id] = nil
-        case .launched, .sessionStarted, .processExited:
+        case .launched, .sessionStarted, .processExited, .agentLeft:
             lastSeen = [:]
         case .promptSubmitted, .activity, .attentionRequested, .turnFinished, .terminalNotification, .bell:
             break

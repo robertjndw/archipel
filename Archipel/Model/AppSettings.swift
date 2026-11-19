@@ -160,6 +160,12 @@ final class AppSettings {
     var playsNotificationSound: Bool { didSet { defaults.set(playsNotificationSound, forKey: Key.playsNotificationSound) } }
     var showsDockBadge: Bool { didSet { defaults.set(showsDockBadge, forKey: Key.showsDockBadge) } }
     var bouncesDockForAttention: Bool { didSet { defaults.set(bouncesDockForAttention, forKey: Key.bouncesDockForAttention) } }
+    /// Adds Archipel's hook entries to the user's Claude settings so a Claude started by hand in a
+    /// shell tab reports its status. Off until the user asks, since it edits a file they own.
+    var claudeUserHooksEnabled: Bool { didSet { defaults.set(claudeUserHooksEnabled, forKey: Key.claudeUserHooksEnabled) } }
+    /// The settings file the entries were written to. CLAUDE_CONFIG_DIR is read from a login shell,
+    /// which can time out, so checks and removal use this path instead of guessing again.
+    var claudeUserHooksFilePath: String? { didSet { defaults.set(claudeUserHooksFilePath, forKey: Key.claudeUserHooksFilePath) } }
     var showsMenuBarExtra: Bool { didSet { defaults.set(showsMenuBarExtra, forKey: Key.showsMenuBarExtra) } }
     /// Banners for a session you are not looking at are redundant while Archipel itself is frontmost.
     var suppressesNotificationsWhileActive: Bool {
@@ -241,6 +247,8 @@ final class AppSettings {
         playsNotificationSound = bool(Key.playsNotificationSound, true)
         showsDockBadge = bool(Key.showsDockBadge, true)
         bouncesDockForAttention = bool(Key.bouncesDockForAttention, false)
+        claudeUserHooksEnabled = bool(Key.claudeUserHooksEnabled, false)
+        claudeUserHooksFilePath = defaults.string(forKey: Key.claudeUserHooksFilePath)
         showsMenuBarExtra = bool(Key.showsMenuBarExtra, true)
         suppressesNotificationsWhileActive = bool(Key.suppressesNotificationsWhileActive, false)
         holdsNotificationsWhileSharingScreen = bool(Key.holdsNotificationsWhileSharingScreen, true)
@@ -288,6 +296,8 @@ final class AppSettings {
         static let playsNotificationSound = "settings.playsNotificationSound"
         static let bouncesDockForAttention = "settings.bouncesDockForAttention"
         static let showsDockBadge = "settings.showsDockBadge"
+        static let claudeUserHooksEnabled = "settings.claudeUserHooksEnabled"
+        static let claudeUserHooksFilePath = "settings.claudeUserHooksFilePath"
         static let showsMenuBarExtra = "settings.showsMenuBarExtra"
         static let suppressesNotificationsWhileActive = "settings.suppressesNotificationsWhileActive"
         static let holdsNotificationsWhileSharingScreen = "settings.holdsNotificationsWhileSharingScreen"

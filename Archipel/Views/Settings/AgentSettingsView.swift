@@ -1,4 +1,5 @@
 import AgentKit
+import AppKit
 import SwiftUI
 
 struct AgentSettingsView: View {
@@ -70,13 +71,18 @@ private struct AgentSection: View {
             if agent.acceptsPrompts {
                 PresetsEditor(agent: agent)
             }
+            if agent.id == AgentDefinition.claude.id {
+                ShellHooksRows(controller: model.claudeUserHooks)
+            }
         } header: {
             Label(agent.displayName, symbol: agent.symbolName)
         } footer: {
-            if showsFooter {
+            if showsFooter || agent.id == AgentDefinition.claude.id {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("New Session (⌘T) uses the agent's default preset, or no extra arguments if it has none. Quote values that contain spaces.")
-                    Text("All presets show up under File > New Session with Preset, and the first nine get ⌃⌘1 to ⌃⌘9. A session started from one keeps its arguments even if you edit the preset later.")
+                    if agent.id == AgentDefinition.claude.id {
+                        Text("Gives a Claude you start in a shell tab the same status as one Archipel starts. Adds hooks to your Claude settings.json that only run inside Archipel and leaves your other settings alone. Applies to Claude started after you turn this on.")
+                    }
+                    if showsFooter { sharedFooter }
                 }
             }
         }
@@ -86,6 +92,86 @@ private struct AgentSection: View {
         }
     }
 
+    @ViewBuilder private var sharedFooter: some View {
+        Text("New Session (⌘T) uses the agent's default preset, or no extra arguments if it has none. Quote values that contain spaces.")
+        Text("All presets show up under File > New Session with Preset, and the first nine get ⌃⌘1 to ⌃⌘9. A session started from one keeps its arguments even if you edit the preset later.")
+    }
+}
+
+/// The opt-in switch that makes a Claude typed by hand into a shell tab report to Archipel.
+private struct ShellHooksRows: View {
+    @Environment(AppModel.self) private var model
+    let controller: ClaudeUserHooksController
+
+    var body: some View {
+        Toggle(isOn: enabled) {
+            Text("Full status in shell tabs")
+            if let message = statusMessage {
+                Text(message).foregroundStyle(isProblem ? .orange : .secondary)
+            }
+        }
+        // In a grouped form SwiftUI gives the switch no accessible name, so VoiceOver would read it
+        // as just "switch".
+        .accessibilityLabel("Full status for Claude started in a shell tab")
+        .accessibilityIdentifier("settings.claudeUserHooks")
+        .task { await controller.reload() }
+        if model.settings.claudeUserHooksEnabled, let file = controller.settingsFile {
+            LabeledContent("Settings file") {
+                HStack(spacing: 8) {
+                    Text(file.abbreviatedPath)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                        .foregroundStyle(.secondary)
+                        .help(file.path)
+                    Button("Reveal") { reveal(file) }
+                }
+            }
+        }
+    }
+
+    private var enabled: Binding<Bool> {
+        Binding(
+            get: { model.settings.claudeUserHooksEnabled },
+            set: { on in
+                model.settings.claudeUserHooksEnabled = on
+                Task { await controller.setEnabled(on) }
+            }
+        )
+    }
+
+    private var isProblem: Bool {
+        switch controller.state {
+        case .failed, .translocated: true
+        case .outdated: model.settings.claudeUserHooksEnabled
+        default: false
+        }
+    }
+
+    /// Problems show even with the switch off, since turning it on is what just failed.
+    private var statusMessage: String? {
+        switch controller.state {
+        case .translocated: return "Move Archipel to the Applications folder, then turn this on."
+        case .failed(let message): return message
+        default: break
+        }
+        guard model.settings.claudeUserHooksEnabled else { return nil }
+        switch controller.state {
+        case .unknown: return "Checking..."
+        case .notInstalled: return "Not installed"
+        case .installed: return "Installed"
+        case .outdated: return "Out of date. Updated the next time Archipel starts."
+        case .translocated, .failed: return nil
+        }
+    }
+
+    private func reveal(_ file: URL) {
+        if FileManager.default.fileExists(atPath: file.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([file])
+        } else {
+            NSWorkspace.shared.open(file.deletingLastPathComponent())
+        }
+    }
 }
 
 /// One agent's slice of `AppSettings.launchPresets`, edited in place like the lists in System

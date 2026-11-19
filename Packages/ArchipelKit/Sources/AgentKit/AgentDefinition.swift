@@ -124,7 +124,7 @@ extension AgentDefinition {
             return LaunchCommand(
                 executable: "claude",
                 arguments: idArguments + ["--settings", claudeHookSettings(hook: context.hookExecutableURL)],
-                environment: hookEnvironment(context)
+                environment: claudeEnvironment(context)
             )
         },
         resume: { context, agentSessionID in
@@ -134,7 +134,7 @@ extension AgentDefinition {
                     "--resume", agentSessionID,
                     "--settings", claudeHookSettings(hook: context.hookExecutableURL),
                 ],
-                environment: hookEnvironment(context)
+                environment: claudeEnvironment(context)
             )
         }
     )
@@ -189,13 +189,13 @@ let claudeHookEvents = [
     "Notification", "Stop", "StopFailure", "SessionEnd", "SubagentStart", "SubagentStop",
 ]
 
+func claudeHookHandler(command: String) -> [String: Any] {
+    ["type": "command", "command": command, "timeout": 5]
+}
+
 func claudeHookSettings(hook: URL) -> String {
     // Claude runs hook commands through a shell, so the path must be quoted.
-    let handler: [String: Any] = [
-        "type": "command",
-        "command": ShellQuoting.quote(hook.path),
-        "timeout": 5,
-    ]
+    let handler = claudeHookHandler(command: ShellQuoting.quote(hook.path))
     var hooks: [String: Any] = [:]
     for event in claudeHookEvents {
         hooks[event] = [["hooks": [handler]]]
@@ -248,6 +248,13 @@ func hookEnvironment(_ context: LaunchContext) -> [String: String] {
         "ARCHIPEL_SESSION_ID": context.archipelSessionID.uuidString,
         "ARCHIPEL_SOCKET": context.socketURL.path,
     ]
+}
+
+/// Adds the flag that makes Archipel's entries in the user's settings skip this Claude, which
+/// already reports through `--settings`. A Claude it starts inherits the flag.
+func claudeEnvironment(_ context: LaunchContext) -> [String: String] {
+    hookEnvironment(context)
+        .merging([ClaudeUserHooks.launchedByArchipelVariable: ClaudeUserHooks.launchedByArchipelValue]) { $1 }
 }
 
 extension AgentKind {

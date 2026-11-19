@@ -150,9 +150,19 @@ public struct WorktreeRowContent: Equatable, Sendable {
     public var trailing: Trailing
     private var metadataBehindMessage: [[MetadataItem]] = []
 
-    public init(worktree: Worktree, activity: SessionActivity?, git: WorktreeGitState?, options: Options = .all) {
+    /// `agentOverrides` names the agent a session acts as right now where that differs from the one
+    /// it was created with, such as Claude started by hand in a shell tab.
+    public init(
+        worktree: Worktree,
+        activity: SessionActivity?,
+        git: WorktreeGitState?,
+        options: Options = .all,
+        agentOverrides: [Session.ID: AgentKind] = [:]
+    ) {
         title = worktree.displayName
-        agent = worktree.sessions.count == 1 ? worktree.sessions[0].agent : nil
+        agent = worktree.sessions.count == 1
+            ? agentOverrides[worktree.sessions[0].id] ?? worktree.sessions[0].agent
+            : nil
         isUnread = activity?.unread == true
         trailing = activity.map(Trailing.status) ?? .none
 
@@ -242,14 +252,15 @@ public struct SessionRowContent: Equatable, Sendable, Identifiable {
     public static func rows(
         for worktree: Worktree,
         activities: [Session.ID: SessionActivity],
-        focusedSessionID: Session.ID?
+        focusedSessionID: Session.ID?,
+        agentOverrides: [Session.ID: AgentKind] = [:]
     ) -> [SessionRowContent] {
         guard worktree.sessions.count > 1 else { return [] }
         return worktree.sessions.map { session in
             SessionRowContent(
                 id: session.id,
                 title: session.displayTitle,
-                agent: session.agent,
+                agent: agentOverrides[session.id] ?? session.agent,
                 activity: activities[session.id] ?? SessionActivity(),
                 isFocused: session.id == focusedSessionID
             )

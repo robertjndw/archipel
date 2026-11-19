@@ -371,7 +371,7 @@ private struct TabButton: View {
             let title = session?.displayTitle ?? "Session"
             return TabLabel(
                 title: title,
-                symbol: (session?.agent.definition ?? .shell).symbolName,
+                symbol: (session.map { model.effectiveAgent(for: $0).definition } ?? .shell).symbolName,
                 detail: model.sessionContexts[id].map {
                     title + "\n" + ContextFormat.summary(of: $0, cache: model.promptCaches[id], at: .now)
                 },
