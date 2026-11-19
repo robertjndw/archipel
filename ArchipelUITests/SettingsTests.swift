@@ -31,6 +31,30 @@ final class SettingsTests: ArchipelUITestCase {
         XCTAssertEqual(try sandbox.savedWorkspace().allSessions.count, 1)
     }
 
+    func testBouncingTheDockIsOffUntilTurnedOnAndStaysOn() throws {
+        try launch()
+        let bounce = openNotificationSettings()
+        XCTAssertEqual(bounce.value as? Int, 0, "Bouncing the Dock is opt-in.")
+        bounce.click()
+        waitUntil("the switch is on") { bounce.value as? Int == 1 }
+        app.typeKey("w", modifierFlags: .command)
+        assertGone(settingsWindow, "⌘W should close Settings.")
+
+        // Settings are written as they change, so a relaunch finds the switch where it was left.
+        try launch(keepingState: true)
+        let relaunched = openNotificationSettings()
+        XCTAssertEqual(relaunched.value as? Int, 1, "The choice should survive a relaunch.")
+    }
+
+    private func openNotificationSettings() -> XCUIElement {
+        app.typeKey(",", modifierFlags: .command)
+        assertExists(settingsWindow, "⌘, should open Settings.")
+        settingsWindow.toolbars.buttons["Notifications"].click()
+        let bounce = settingsWindow.switches.matching(identifier: "settings.bouncesDock").element(boundBy: 0)
+        assertExists(bounce, "Notifications should offer to bounce the Dock icon.")
+        return bounce
+    }
+
     func testChoosingStatusBarItems() throws {
         try launch()
         let usage = mainWindow.descendants(matching: .any)["statusBar.usage"]

@@ -44,6 +44,7 @@ struct TabDropTarget: ViewModifier {
             try? await Task.sleep(for: Self.springLoadDelay)
             guard !Task.isCancelled else { return }
             model.select(tab: id)
+            Haptics.levelChange()
         }
     }
 }

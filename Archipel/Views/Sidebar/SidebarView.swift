@@ -2,6 +2,7 @@ import AgentKit
 import ArchipelCore
 import GitKit
 import SwiftUI
+import TipKit
 
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
@@ -56,6 +57,12 @@ struct SidebarView: View {
         .background { SidebarPeekKeyMonitor(peek: peek, model: model) }
         .environment(peek)
         .onChange(of: model.selectedIsland?.id) { peek.close() }
+        .popoverTip(SidebarTips.group.currentTip as? PeekTip, arrowEdge: .trailing)
+        .tipViewStyle(CompactTipStyle())
+        .onChange(of: model.workspace.islands.count, initial: true) { SidebarTips.islandCount = model.workspace.islands.count }
+        .onChange(of: model.workspace.islands.reduce(0) { $0 + $1.projects.reduce(0) { $0 + $1.worktrees.count } }, initial: true) { _, count in
+            SidebarTips.worktreeCount = count
+        }
         // Before the swipe content, so an empty island's placeholder moves with the list.
         .overlay {
             if model.showsOnlyNeedsMe {
@@ -93,7 +100,11 @@ struct SidebarView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Hidden rather than disabled: while the list spans every island there is no current one to move from.
-            if !model.showsOnlyNeedsMe { IslandSwitcher() }
+            if !model.showsOnlyNeedsMe {
+                IslandSwitcher()
+                    .popoverTip(SidebarTips.group.currentTip as? IslandSwipeTip, arrowEdge: .top)
+                    .tipViewStyle(CompactTipStyle())
+            }
         }
         .islandSwipe(swipe, isEnabled: !model.showsOnlyNeedsMe)
         .folderDropsAddProjects(to: model)
@@ -195,6 +206,8 @@ private struct SidebarHeader: View {
                     .foregroundStyle(model.showsOnlyNeedsMe ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
             }
             .help(model.showsOnlyNeedsMe ? "Show everything again (⌥⌘U)" : "Show only the worktrees that need you, from every island (⌥⌘U)")
+            .popoverTip(SidebarTips.group.currentTip as? NeedsMeTip, arrowEdge: .bottom)
+            .tipViewStyle(CompactTipStyle())
             .accessibilityIdentifier("sidebar.needsMe")
             .accessibilityValue(model.showsOnlyNeedsMe ? "On" : "Off")
             .frame(width: Self.slotWidth)

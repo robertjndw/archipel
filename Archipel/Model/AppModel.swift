@@ -19,12 +19,14 @@ final class AppModel {
     /// and `workspace` change, so the status bar, the menu bar icon, the Dock badge and the island
     /// switcher read a stored value instead of each walking every session in their view bodies.
     private(set) var workspaceAttention = AttentionSummary.zero
+    @ObservationIgnored private var dockAttentionRequest: Int?
     private(set) var islandAttention: [Island.ID: AttentionSummary] = [:]
     /// The sidebar lists only the worktrees that need the user, from every island. Not persisted: a
     /// filter that hides every project would greet the next launch as a broken sidebar.
     var showsOnlyNeedsMe = false {
         didSet {
             guard showsOnlyNeedsMe != oldValue else { return }
+            if showsOnlyNeedsMe { SidebarTips.needsMeFilterUsed() }
             needsMePin = nil
             // Pin the worktree that's already open, or answering its request would pull the row
             // out from under the user.
@@ -188,7 +190,8 @@ final class AppModel {
     /// backup should bring them back.
     @ObservationIgnored private var isStandInWorkspace = false
 
-    init() {
+    /// Where this build keeps its workspace, socket and tips.
+    static var supportDirectory: URL {
         // Debug builds use their own folder so they can run next to the installed
         // app. Sharing it would mean sharing the workspace file, and the hook server
         // unlinks any socket already at its path, so the installed app would stop
@@ -202,9 +205,13 @@ final class AppModel {
         #else
         let supportFolder = "Archipel"
         #endif
-        let support = ProcessInfo.processInfo.environment["ARCHIPEL_SUPPORT_DIR"]
+        return ProcessInfo.processInfo.environment["ARCHIPEL_SUPPORT_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? URL.applicationSupportDirectory.appending(path: supportFolder, directoryHint: .isDirectory)
+    }
+
+    init() {
+        let support = Self.supportDirectory
         settings = AppSettings()
         store = WorkspaceStore(fileURL: support.appending(path: "workspace.json"))
         // A file of its own next to the workspace: comments are no part of its schema, and a damaged
@@ -377,6 +384,7 @@ final class AppModel {
     }
 
     func select(island id: Island.ID) {
+        if id != workspace.selectedIslandID { SidebarTips.islandSwitched() }
         changingSelection { $0.selectIsland(id) }
     }
 
@@ -436,6 +444,10 @@ final class AppModel {
 
     func appDidBecomeActive() {
         guard !isAppActive else { return }
+        if let request = dockAttentionRequest {
+            NSApp.cancelUserAttentionRequest(request)
+            dockAttentionRequest = nil
+        }
         isAppActive = true
         terminalApp?.setAppFocused(true)
         for (id, kind) in pulsesAwaitingActivation where workspace.worktree(id: id) != nil {
@@ -514,6 +526,7 @@ final class AppModel {
         let previousPlace = (selectedIsland?.id, selectedWorktree?.id)
         mutate(change)
         if showsOnlyNeedsMe { needsMePin = selectedWorktree?.id }
+        if previousPlace.1 != selectedWorktree?.id { SidebarTips.worktreeSwitched() }
         if previousPlace != (selectedIsland?.id, selectedWorktree?.id) {
             refreshGitStatus(lookingUpPullRequests: true)
         }
@@ -577,13 +590,7 @@ final class AppModel {
     }
 
     func updateIsland(_ id: Island.ID, name: String, symbol: String, tint: Tint) {
-        mutate {
-            $0.updateIsland(id: id) { island in
-                island.name = name
-                island.symbol = symbol
-                island.tint = tint
-            }
-        }
+        setLook(ofIsland: id, name: name, symbol: symbol, tint: tint)
     }
 
     func removeIsland(_ id: Island.ID) {
@@ -665,7 +672,7 @@ final class AppModel {
     }
 
     func renameProject(_ id: Project.ID, to name: String) {
-        mutate { $0.renameProject(id: id, to: name) }
+        setName(ofProject: id, to: name)
     }
 
     func setProject(_ id: Project.ID, expanded: Bool) {
@@ -923,10 +930,12 @@ final class AppModel {
         if isGone || (deleteFolder && folderExists) {
             for url in unsavedInside.union(unsavedDocuments(under: worktree.path)) { documents.forget(url) }
         }
+        let removal = workspace.removal(ofWorktree: id)
         // A folder that stays on disk would be suggested again right away.
         changingSelection { $0.removeWorktree(id: id, dismiss: !deleteFolder) }
         missingWorktrees.remove(id)
         refreshWorktreeDiscovery()
+        if !deleteFolder, !isGone, let removal { registerRestore(removal) }
 
         guard deleteFolder, let branch = deleteBranch else { return .notRequested }
         // The user confirmed the name shown in the sheet. If the worktree switched branches since,
@@ -1033,12 +1042,7 @@ final class AppModel {
     }
 
     func renameSession(_ id: Session.ID, to title: String) {
-        mutate {
-            $0.updateSession(id: id) {
-                $0.title = title
-                $0.hasCustomTitle = true
-            }
-        }
+        setTitle(ofSession: id, to: title, custom: true)
     }
 
     // MARK: Tabs
@@ -1161,15 +1165,21 @@ final class AppModel {
 
     /// The file's buffer is released by `mutate` once no tab shows the file any more.
     private func closeNow(_ tab: Tab) {
+        let closed = workspace.closedTab(id: tab.id)
         changingSelection { $0.closeTab(id: tab.id) }
+        if let closed { registerReopen(closed) }
     }
 
     func split(tab id: Tab.ID) {
+        let before = workspace.placement(ofTab: id)
         changingSelection { _ = $0.splitTab(id: id) }
+        registerMove(of: id, from: before, actionName: "Split Pane")
     }
 
     func move(tab id: Tab.ID, toPane pane: Pane.ID, at index: Int? = nil) {
+        let before = workspace.placement(ofTab: id)
         changingSelection { $0.moveTab(id: id, toPane: pane, at: index) }
+        registerMove(of: id, from: before, actionName: "Move Tab")
     }
 
     struct SessionInterruption: Identifiable {
@@ -1569,6 +1579,7 @@ final class AppModel {
     }
 
     private func notify(session: Session, activity: SessionActivity) {
+        if case .needsAttention = activity.status { bounceDock() }
         let enabled = switch activity.status {
         case .needsAttention: settings.notifiesWhenAttentionNeeded
         case .finished: settings.notifiesWhenFinished
@@ -1603,6 +1614,14 @@ final class AppModel {
         if status != before { sessionStatusChanged(id, from: before, to: status) }
     }
 
+    /// Independent of the banner settings: it is its own opt-in. Held back while sharing the screen
+    /// for the same reason banners are.
+    private func bounceDock() {
+        guard settings.bouncesDockForAttention, !NSApp.isActive else { return }
+        if settings.holdsNotificationsWhileSharingScreen, ScreenSharingDetector.isSharing() { return }
+        dockAttentionRequest = NSApp.requestUserAttention(.informationalRequest)
+    }
+
     func refreshDockBadge() {
         notifier.setDockBadge(settings.showsDockBadge ? workspaceAttention.needsAttention : 0)
     }
@@ -1617,7 +1636,10 @@ final class AppModel {
         }
         // Runs on every activity write and every mutation, nearly all of which change no count.
         if islands != islandAttention { islandAttention = islands }
-        if total != workspaceAttention { workspaceAttention = total }
+        if total != workspaceAttention {
+            if total.needsAttention > workspaceAttention.needsAttention { SidebarTips.agentWaited() }
+            workspaceAttention = total
+        }
     }
 
     // MARK: Pane focus

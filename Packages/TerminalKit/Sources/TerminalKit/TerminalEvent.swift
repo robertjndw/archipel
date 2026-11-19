@@ -126,9 +126,17 @@ public struct TerminalColors: Sendable, Equatable {
     public var unfocusedSplitFill: RGB
     /// Ghostty's `unfocused-split-opacity`: how much of the split stays visible, from 0.15 to 1.
     public var unfocusedSplitOpacity: Double
+    /// Ghostty's `foreground`, for text the host draws on the terminal's background.
+    public var foreground: RGB
 
-    public init(background: RGB, unfocusedSplitFill: RGB, unfocusedSplitOpacity: Double) {
+    public init(
+        background: RGB,
+        unfocusedSplitFill: RGB,
+        unfocusedSplitOpacity: Double,
+        foreground: RGB = RGB(red: 1, green: 1, blue: 1)
+    ) {
         self.background = background
+        self.foreground = foreground
         self.unfocusedSplitFill = unfocusedSplitFill
         self.unfocusedSplitOpacity = unfocusedSplitOpacity
     }

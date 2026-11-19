@@ -26,6 +26,16 @@ extension ArchipelUITestCase {
         mainWindow.staticTexts.matching(identifier: "sidebar.worktree")
     }
 
+    /// The title of the session peek, which names the session or, without one, the worktree. The
+    /// popover is a window of its own, so it is looked for in the whole app.
+    var peekTitle: XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "sidebar.peek.title").element(boundBy: 0)
+    }
+
+    func peekTitle(_ name: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "sidebar.peek.title").matching(named(name)).element(boundBy: 0)
+    }
+
     // MARK: Panes and tabs
 
     /// Not only buttons: a tab is one element combined from its parts, and while its session is

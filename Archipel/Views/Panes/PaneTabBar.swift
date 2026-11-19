@@ -11,6 +11,8 @@ import SwiftUI
 /// The row is part of the pane, not of the window: it takes the color of what
 /// the pane shows and has no line under it, so row and content read as one
 /// surface. Only the focused pane's selected tab gets glass.
+private typealias TabSlot = ReorderDifference<ArchipelCore.Tab.ID, ReorderableSingleCollectionIdentifier>.Destination.Position
+
 struct PaneTabBar: View {
     @Environment(AppModel.self) private var model
     @AppStorage(LayoutDefaults.showsInspector) private var showInspector = true
@@ -30,6 +32,7 @@ struct PaneTabBar: View {
     /// under the pointer (Safari does the same). Cleared when the pointer leaves.
     @State private var frozenTabWidth: CGFloat?
     @State private var isPointerInRow = false
+    @State private var dragSlot: TabSlot?
     @State private var scrollPosition = ScrollPosition()
     @State private var scroll = HorizontalScroll()
     @State private var wheelMonitor: Any?
@@ -129,6 +132,11 @@ struct PaneTabBar: View {
                         }
                         .reorderable()
                     }
+                    // The drag and reorder containers below give the row accessibility of its own. With
+                    // no element to hold it, SwiftUI folds it into the first tab, which then reports
+                    // the whole row's frame, and a click on its center lands on another tab.
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Tabs")
                     .reorderContainer(for: ArchipelCore.Tab.self) { difference in
                         move(difference.sources, to: difference.destination.position)
                     }
@@ -138,6 +146,13 @@ struct PaneTabBar: View {
                     .dropDestination(for: TabDragItem.self) { items, session in
                         let foreign = items.map(\.id).filter { id in !pane.tabs.contains { $0.id == id } }
                         move(foreign, to: session.reorderDestination(for: ArchipelCore.Tab.self)?.position ?? .end)
+                    }
+                    // One tick per slot the insertion point passes through, never while it stays put.
+                    .onDropSessionUpdated { session in
+                        let slot = session.reorderDestination(for: ArchipelCore.Tab.self)?.position
+                        guard slot != dragSlot else { return }
+                        if case .active = session.phase, dragSlot != nil, slot != nil { Haptics.alignment() }
+                        dragSlot = slot
                     }
                     // Left-aligns the tabs and makes the empty area a drop target for appending.
                     .frame(minWidth: max(0, rowWidth - Self.rowInset.leading - Self.rowInset.trailing), alignment: .leading)
@@ -233,7 +248,9 @@ struct PaneTabBar: View {
 
     /// `position` refers to the order before the move, so the index is looked up with the moved
     /// tab already taken out.
-    private func move(_ ids: [ArchipelCore.Tab.ID], to position: ReorderDifference<ArchipelCore.Tab.ID, ReorderableSingleCollectionIdentifier>.Destination.Position) {
+    private func move(_ ids: [ArchipelCore.Tab.ID], to position: TabSlot) {
+        dragSlot = nil
+        var landed = false
         for id in ids {
             switch position {
             case .before(let anchor):
@@ -242,10 +259,13 @@ struct PaneTabBar: View {
                 let current = model.workspace.worktree(containingPane: pane.id)?.panes.first { $0.id == pane.id }?.tabs ?? pane.tabs
                 let index = current.filter { $0.id != id }.firstIndex { $0.id == anchor }
                 model.move(tab: id, toPane: pane.id, at: index)
+                landed = true
             case .end:
                 model.move(tab: id, toPane: pane.id, at: nil)
+                landed = true
             }
         }
+        if landed { Haptics.alignment() }
     }
 
     /// SwiftUI doesn't turn a vertical mouse wheel into horizontal scrolling, so do it by hand

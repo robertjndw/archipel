@@ -645,10 +645,13 @@ extension TerminalColors {
         _ = Self.get(config, "unfocused-split-fill", into: &fill)
         var opacity = 0.7
         _ = Self.get(config, "unfocused-split-opacity", into: &opacity)
+        var foreground = ghostty_config_color_s(r: 255, g: 255, b: 255)
+        _ = Self.get(config, "foreground", into: &foreground)
         self.init(
             background: RGB(background),
             unfocusedSplitFill: RGB(fill),
-            unfocusedSplitOpacity: min(1, max(0.15, opacity))
+            unfocusedSplitOpacity: min(1, max(0.15, opacity)),
+            foreground: RGB(foreground)
         )
     }
 

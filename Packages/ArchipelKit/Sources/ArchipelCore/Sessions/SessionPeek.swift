@@ -16,6 +16,51 @@ public enum SessionPeek {
         }
     }
 
+    /// Which of the peek's popovers are on screen, so keys are only taken while one is.
+    ///
+    /// One flag is not enough. Stepping to another worktree moves the popover to that row, and the
+    /// new row's popover can appear before the old one has finished going away; the old one leaving
+    /// would then clear the flag while a peek is plainly up, and the next arrow key would go to the
+    /// list and change the real selection. AppKit can also take the old one down first, which leaves
+    /// a moment with no popover at all, so a peek that was just moved counts as shown for a short
+    /// grace period while its popover is on the way.
+    public struct Presentation: Sendable {
+        private var shown: Set<Worktree.ID> = []
+        private var arriving: (worktree: Worktree.ID, since: Date)?
+
+        /// Long enough for a popover to come up, short enough that a peek whose popover never
+        /// does stops swallowing keys before anyone notices.
+        public static let grace: TimeInterval = 0.5
+
+        public init() {}
+
+        public mutating func appeared(_ worktree: Worktree.ID) {
+            shown.insert(worktree)
+            if arriving?.worktree == worktree { arriving = nil }
+        }
+
+        public mutating func disappeared(_ worktree: Worktree.ID) {
+            shown.remove(worktree)
+        }
+
+        /// The peek moved to `worktree`, whose popover has not appeared yet.
+        public mutating func moving(to worktree: Worktree.ID, at now: Date = .now) {
+            guard !shown.contains(worktree) else { return }
+            arriving = (worktree, now)
+        }
+
+        public mutating func reset() {
+            shown = []
+            arriving = nil
+        }
+
+        public func isShowing(at now: Date = .now) -> Bool {
+            if !shown.isEmpty { return true }
+            guard let arriving else { return false }
+            return now.timeIntervalSince(arriving.since) < Self.grace
+        }
+    }
+
     /// The session that best stands for a worktree: one that needs the user,
     /// then a busy one, then the one its content area shows, then whatever
     /// has a live terminal.

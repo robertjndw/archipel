@@ -154,6 +154,16 @@ class ArchipelUITestCase: XCTestCase {
         entry.click()
     }
 
+    /// Edit > Undo and Redo. By their plain titles: the menu does not name the action in this
+    /// configuration, not even the text editor's typing, so a test cannot tell actions apart by it.
+    func undo(file: StaticString = #filePath, line: UInt = #line) {
+        chooseMenu("Edit", "Undo", file: file, line: line)
+    }
+
+    func redo(file: StaticString = #filePath, line: UInt = #line) {
+        chooseMenu("Edit", "Redo", file: file, line: line)
+    }
+
     /// Picks an item from the context menu that a right click just opened. The menu bar holds
     /// items of the same name, so the one to click is the one that is on screen.
     func chooseContextMenu(_ item: String, file: StaticString = #filePath, line: UInt = #line) {

@@ -75,4 +75,30 @@ struct SessionPeekTests {
         #expect(SessionPeek.tail(of: text, lines: 2) == ["", "three"])
         #expect(SessionPeek.tail(of: "", lines: 5).isEmpty)
     }
+
+    @Test func presentationSurvivesTheOldPopoverLeavingLast() {
+        let first = UUID(), second = UUID()
+        var presentation = SessionPeek.Presentation()
+        presentation.appeared(first)
+        presentation.moving(to: second)
+        presentation.appeared(second)
+        presentation.disappeared(first)
+        #expect(presentation.isShowing())
+        presentation.disappeared(second)
+        #expect(!presentation.isShowing())
+    }
+
+    @Test func presentationBridgesTheGapBetweenTwoPopovers() {
+        let first = UUID(), second = UUID()
+        let start = Date()
+        var presentation = SessionPeek.Presentation()
+        presentation.appeared(first)
+        presentation.moving(to: second, at: start)
+        presentation.disappeared(first)
+        #expect(presentation.isShowing(at: start.addingTimeInterval(0.1)))
+        // A popover that never turns up must not keep the keys forever.
+        #expect(!presentation.isShowing(at: start.addingTimeInterval(SessionPeek.Presentation.grace + 0.1)))
+        presentation.appeared(second)
+        #expect(presentation.isShowing(at: start.addingTimeInterval(10)))
+    }
 }

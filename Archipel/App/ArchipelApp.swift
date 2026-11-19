@@ -1,5 +1,6 @@
 import ArchipelCore
 import SwiftUI
+import TipKit
 
 @main
 struct ArchipelApp: App {
@@ -9,6 +10,10 @@ struct ArchipelApp: App {
     @State private var switcher = TabSwitcherModel()
     @State private var updater = Updater()
     @State private var isAddingProject = false
+
+    init() {
+        SidebarTips.configure()
+    }
 
     /// Xcode's preview host launches the whole app before it shows a preview. The real model would
     /// load the Debug workspace, start Ghostty and take over the Debug build's hook socket from a
