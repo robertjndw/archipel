@@ -679,8 +679,23 @@ final class AppModel {
         changingSelection { $0.removeProject(id: project.id) }
     }
 
+    /// Switches to the destination island too, so the project doesn't just vanish from the
+    /// sidebar. Keeps the selected worktree if it was in this project, otherwise picks its main
+    /// checkout.
     func moveProject(_ id: Project.ID, to island: Island.ID) {
-        changingSelection { $0.moveProject(id: id, to: island) }
+        let selected = selectedWorktree?.id
+        changingSelection { workspace in
+            workspace.moveProject(id: id, to: island)
+            guard let project = workspace.project(id: id) else { return }
+            let landing = project.worktrees.first { $0.id == selected }
+                ?? project.worktrees.first(where: \.isMain)
+                ?? project.worktrees.first
+            if let landing {
+                workspace.selectWorktree(landing.id)
+            } else {
+                workspace.selectIsland(island)
+            }
+        }
     }
 
     // MARK: Worktrees

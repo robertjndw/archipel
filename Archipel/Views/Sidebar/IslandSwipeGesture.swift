@@ -11,11 +11,8 @@ final class IslandSwipeState {
     /// does not switch islands under the fingers.
     fileprivate var generation = 0
     fileprivate var ownsGesture = false
-    /// How far the list has come in after a switch made without a swipe, from 0 to 1.
-    fileprivate var entrance = 1.0
-    /// Which side that list comes in from: 1 from the right, -1 from the left, 0 straight in place.
-    fileprivate var entranceSide = 0.0
-    /// The swipe settle animates its own way in, so the switch it makes must not add an entrance.
+    /// Set while a swipe makes the switch. The swipe already slides the new list in, so `enter`
+    /// skips it.
     fileprivate var selectingBySwipe = false
 }
 
@@ -38,12 +35,13 @@ private struct IslandSwipeContent: ViewModifier {
 
     func body(content: Content) -> some View {
         let offset = reduceMotion ? 0 : state.offset
-        let entranceOffset = reduceMotion ? 0 : (1 - state.entrance) * state.entranceSide * 14
         content
-            .offset(x: offset + entranceOffset)
-            .opacity((1 - 0.5 * min(abs(offset) / state.width, 1)) * (0.25 + 0.75 * state.entrance))
+            .offset(x: offset)
+            .opacity(1 - 0.5 * min(abs(offset) / state.width, 1))
             // The offset moves what is drawn, not the layout, so this keeps it inside the sidebar.
             .clipped()
+            // Keyboard and click switches need the width as well, and can happen before the first swipe.
+            .onGeometryChange(for: Double.self) { $0.size.width } action: { state.width = $0 }
     }
 }
 
@@ -81,25 +79,33 @@ private struct IslandSwipeDriver: ViewModifier {
         }
     }
 
-    /// Clicks, shortcuts and jumps to a session elsewhere switch islands without a swipe. Without
-    /// this the list would swap in a single frame while the switcher below it animates.
+    /// Shortcuts, menu items, clicks and session jumps change the island without a swipe. By the
+    /// time this runs the old list is already gone, so only the second half of the swipe plays:
+    /// the new list slides in from the side.
     private func enter(from old: Island.ID?, to new: Island.ID?) {
         if state.selectingBySwipe {
             state.selectingBySwipe = false
             return
         }
         let islands = model.workspace.islands
-        var side = 0.0
-        if let from = islands.firstIndex(where: { $0.id == old }), let to = islands.firstIndex(where: { $0.id == new }) {
-            side = to > from ? 1 : -1
-        }
+        // A removed island has no index to slide from.
+        guard !reduceMotion,
+              let from = islands.firstIndex(where: { $0.id == old }),
+              let to = islands.firstIndex(where: { $0.id == new })
+        else { return }
+        // Same sides as a swipe: the next island comes in from the right.
+        let side: Double = to < from ? 1 : -1
+        slideIn(from: side, speed: Self.minimumExitSpeed)
+    }
+
+    /// Moves the new list off to `side` and springs it back to the center. It starts at `speed`, so
+    /// it continues the motion of whatever triggered the switch.
+    private func slideIn(from side: Double, speed: Double) {
+        let entry = side * state.width * Self.entryFraction
         var instant = Transaction()
         instant.disablesAnimations = true
-        withTransaction(instant) {
-            state.entrance = 0
-            state.entranceSide = side
-        }
-        withAnimation(.smooth(duration: reduceMotion ? 0.2 : 0.32)) { state.entrance = 1 }
+        withTransaction(instant) { state.offset = -entry }
+        withAnimation(Self.settleSpring(velocity: side * speed, distance: entry)) { state.offset = 0 }
     }
 
     private func settle(_ gesture: IslandSwipe) {
@@ -131,7 +137,6 @@ private struct IslandSwipeDriver: ViewModifier {
         let speed = max(side * gesture.velocity, Self.minimumExitSpeed)
         let remaining = max(width - side * start, 0)
         let exit = min(max(remaining / speed, 0.04), 0.16)
-        let entry = side * width * Self.entryFraction
         withAnimation(.linear(duration: exit)) {
             state.offset = side * width
         } completion: {
@@ -143,15 +148,12 @@ private struct IslandSwipeDriver: ViewModifier {
                 }
                 return
             }
-            var instant = Transaction()
-            instant.disablesAnimations = true
-            withTransaction(instant) { state.offset = -entry }
             // Only flagged when the selection really changes, or no onChange would clear it.
             if model.selectedIsland?.id != id { state.selectingBySwipe = true }
             model.select(island: id)
             // Picks up the exit's speed, so the new list carries the motion in instead of starting
             // from rest.
-            withAnimation(Self.settleSpring(velocity: side * speed, distance: entry)) { state.offset = 0 }
+            slideIn(from: side, speed: speed)
         }
     }
 
