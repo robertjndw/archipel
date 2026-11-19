@@ -73,7 +73,7 @@ final class InspectorTests: ArchipelUITestCase {
         showChanges()
         assertExists(unstagedChange("notes.txt"), "The modified file should be listed.")
         unstagedChange("notes.txt").doubleClick()
-        assertExists(tab("notes.txt (Working Tree)"), "Opening a change should give its diff a tab.")
+        assertExists(tab("notes.txt"), "Opening a change should give its diff a tab.")
         assertExists(mainWindow.radioButtons["Side by Side"], "The tab should show the diff viewer.")
         waitUntil("both tabs are saved") {
             try sandbox.savedWorkspace().allWorktrees[0].panes.flatMap(\.tabs).count == 2
