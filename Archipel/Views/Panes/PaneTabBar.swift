@@ -251,10 +251,13 @@ private struct TabButton: View {
     private var label: TabLabel {
         switch tab.content {
         case .session(let id):
+            let title = session?.displayTitle ?? "Session"
             return TabLabel(
-                title: session?.displayTitle ?? "Session",
+                title: title,
                 symbol: (session?.agent.definition ?? .shell).symbolName,
-                detail: nil,
+                detail: model.sessionContexts[id].map {
+                    title + "\n" + ContextFormat.summary(of: $0, cache: model.promptCaches[id], at: .now)
+                },
                 activity: model.activity(for: id),
                 devServers: model.devServers.links[id] ?? []
             )

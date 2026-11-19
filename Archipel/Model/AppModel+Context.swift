@@ -1,0 +1,41 @@
+import AgentKit
+import ArchipelCore
+import Foundation
+
+extension AppModel {
+    /// Claude's status line sends the context window on every redraw. Only a request going out or
+    /// coming back changes it, so the rest are dropped before they re-render the status bar.
+    func recordContext(_ context: SessionContext, for id: Session.ID) {
+        let previous = sessionContexts[id]
+        if var unchanged = previous {
+            unchanged.updatedAt = context.updatedAt
+            if unchanged == context { return }
+        }
+        // A new transcript is a new conversation, and the old one's cache says nothing about it.
+        if previous?.transcriptPath != context.transcriptPath { promptCaches[id] = nil }
+        sessionContexts[id] = context
+        refreshPromptCache(for: id)
+    }
+
+    /// Reads when the session's prompt cache goes cold from the end of its transcript, which can
+    /// run to many megabytes, so off the main actor.
+    func refreshPromptCache(for id: Session.ID) {
+        guard let path = sessionContexts[id]?.transcriptPath else { return }
+        promptCacheReads[id]?.cancel()
+        promptCacheReads[id] = Task {
+            let url = URL(fileURLWithPath: path)
+            let state = await Task.detached(priority: .utility) { ClaudeTranscript.cacheState(at: url) }.value
+            // A newer read was started meanwhile, or the session went away.
+            guard !Task.isCancelled, sessionContexts[id]?.transcriptPath == path else { return }
+            promptCacheReads[id] = nil
+            // A transcript that could not be read says nothing new, so what was known stays.
+            if let state, state != promptCaches[id] { promptCaches[id] = state }
+        }
+    }
+
+    func forgetContext(of id: Session.ID) {
+        promptCacheReads.removeValue(forKey: id)?.cancel()
+        if sessionContexts[id] != nil { sessionContexts[id] = nil }
+        if promptCaches[id] != nil { promptCaches[id] = nil }
+    }
+}

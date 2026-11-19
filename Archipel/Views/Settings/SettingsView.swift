@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The app-wide Settings window. Per-project options live in the project's own settings sheet.
@@ -20,6 +21,9 @@ struct SettingsView: View {
             Tab("About", systemImage: "info.circle", value: .about) { AboutSettingsView() }
         }
         // Sized to the selected tab, as system settings windows are, instead of scrolling a short form.
+        // Appearance is taller than a laptop screen though, and a window that runs off the bottom
+        // cannot be scrolled, so past the screen's height the form scrolls after all.
+        .frame(maxHeight: Self.maxPaneHeight)
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: 540)
         // Here and not on the main window, which may be closed while Settings is open.
@@ -28,6 +32,11 @@ struct SettingsView: View {
     }
 
     private static let selectedPaneKey = "settings.selectedPane"
+
+    /// Room for the title bar and the tab toolbar above the pane.
+    private static var maxPaneHeight: CGFloat {
+        (NSScreen.main?.visibleFrame.height ?? 800) - 100
+    }
 
     /// Makes the Settings window show `pane`, whether it is opened next or open already: it reads
     /// its selection from the defaults.

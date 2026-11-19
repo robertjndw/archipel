@@ -103,6 +103,12 @@ final class AppModel {
     let stayAwake = StayAwake()
     /// The latest subscription limits per provider, for the status bar. See AppModel+Usage.
     var usage: [UsageProvider: ProviderUsage] = UsageArchive.load()
+    /// How full each Claude session's context window is, and when its prompt cache goes cold. Only
+    /// in memory: Claude sends the context again as soon as a resumed session draws its status line.
+    /// See AppModel+Context.
+    var sessionContexts: [Session.ID: SessionContext] = [:]
+    var promptCaches: [Session.ID: PromptCacheState] = [:]
+    @ObservationIgnored var promptCacheReads: [Session.ID: Task<Void, Never>] = [:]
     /// Images for projects whose icon is a file or was found in the repository. See `loadIcon(of:)`.
     var projectIcons: [Project.ID: NSImage] = [:]
     /// The known editors found on this Mac, in `ExternalEditor.known` order. Looked up at launch and
@@ -1449,6 +1455,7 @@ final class AppModel {
             launchGenerations[id] = nil
             scriptSessions[id] = nil
             pendingReviews[id] = nil
+            forgetContext(of: id)
         }
         notifier.clear(sessionID: id)
         refreshDockBadge()
@@ -1458,6 +1465,12 @@ final class AppModel {
         // Limits belong to the account, so a reading counts even if its session was closed meanwhile.
         if let reading = message.usage { recordUsage(reading) }
         guard let session = workspace.session(id: message.sessionID) else { return }
+        if let context = message.context {
+            recordContext(context, for: session.id)
+        } else if message.usage != nil {
+            // A status line without a context is one drawn before the first reply, as after /clear.
+            forgetContext(of: session.id)
+        }
         // An agent that has only started has no conversation on disk yet, and
         // resuming that id would fail. Wait for proof of a first turn.
         let hasConversation = switch message.event {
@@ -1470,6 +1483,8 @@ final class AppModel {
         if let event = message.event { apply(event, to: session.id) }
         // Codex has just written the turn's token counts, and its limits with them, to its log.
         if session.agent == .codex, case .turnFinished? = message.event { refreshCodexUsage() }
+        // The turn's last request has made it into the transcript by now.
+        if case .turnFinished? = message.event { refreshPromptCache(for: session.id) }
     }
 
     private func apply(_ event: AgentEvent, to id: Session.ID) {

@@ -64,6 +64,25 @@ final class AppSettings {
         }
     }
 
+    /// The items of the status bar, in the order they stand in it.
+    enum StatusBarItem: String, CaseIterable, Identifiable {
+        case usage, context, agents, resources, stayAwake
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .usage: "Usage limits"
+            case .context: "Context & cache"
+            case .agents: "Agents"
+            case .resources: "Resources"
+            case .stayAwake: "Stay awake"
+            }
+        }
+
+        /// Leading items report on your sessions, trailing ones on the app and the Mac.
+        var isLeading: Bool { self == .usage || self == .context }
+    }
+
     /// Where a ⌘-clicked link opens. ⌘⌥-click picks the other one.
     enum LinkDestination: String, CaseIterable, Identifiable {
         case archipel, defaultApp
@@ -115,6 +134,23 @@ final class AppSettings {
     var showsAgentMessagesInSidebar: Bool { didSet { defaults.set(showsAgentMessagesInSidebar, forKey: Key.showsAgentMessagesInSidebar) } }
     var usageDisplay: UsageDisplay { didSet { defaults.set(usageDisplay.rawValue, forKey: Key.usageDisplay) } }
     var usageBarFill: UsageBarFill { didSet { defaults.set(usageBarFill.rawValue, forKey: Key.usageBarFill) } }
+    /// Hidden rather than shown, so an item added in a later version turns up without the user
+    /// having to find it in Settings.
+    var hiddenStatusBarItems: Set<StatusBarItem> {
+        didSet {
+            let stored = hiddenStatusBarItems.map(\.rawValue) + unknownHiddenStatusBarItems
+            defaults.set(stored.sorted(), forKey: Key.hiddenStatusBarItems)
+        }
+    }
+    /// Items a newer version hid that this one does not know. Written back as they were, so going
+    /// back and forth between versions does not bring them back.
+    @ObservationIgnored private var unknownHiddenStatusBarItems: [String] = []
+
+    func shows(_ item: StatusBarItem) -> Bool { !hiddenStatusBarItems.contains(item) }
+
+    func setShows(_ item: StatusBarItem, _ shows: Bool) {
+        if shows { hiddenStatusBarItems.remove(item) } else { hiddenStatusBarItems.insert(item) }
+    }
 
     // MARK: Notifications
 
@@ -170,6 +206,9 @@ final class AppSettings {
         showsAgentMessagesInSidebar = bool(Key.showsAgentMessagesInSidebar, true)
         usageDisplay = defaults.string(forKey: Key.usageDisplay).flatMap(UsageDisplay.init) ?? .numbers
         usageBarFill = defaults.string(forKey: Key.usageBarFill).flatMap(UsageBarFill.init) ?? .used
+        let hidden = defaults.stringArray(forKey: Key.hiddenStatusBarItems) ?? []
+        hiddenStatusBarItems = Set(hidden.compactMap(StatusBarItem.init))
+        unknownHiddenStatusBarItems = hidden.filter { StatusBarItem(rawValue: $0) == nil }
         notifiesWhenAttentionNeeded = bool(Key.notifiesWhenAttentionNeeded, true)
         notifiesWhenFinished = bool(Key.notifiesWhenFinished, true)
         notifiesWhenExited = bool(Key.notifiesWhenExited, true)
@@ -198,6 +237,7 @@ final class AppSettings {
         static let showsAgentMessagesInSidebar = "settings.showsAgentMessagesInSidebar"
         static let usageDisplay = "settings.usageDisplay"
         static let usageBarFill = "settings.usageBarFill"
+        static let hiddenStatusBarItems = "settings.hiddenStatusBarItems"
         static let notifiesWhenAttentionNeeded = "settings.notifiesWhenAttentionNeeded"
         static let notifiesWhenFinished = "settings.notifiesWhenFinished"
         static let notifiesWhenExited = "settings.notifiesWhenExited"

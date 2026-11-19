@@ -8,8 +8,9 @@
 // parses hook stdout), never exit non-zero (exit 2 blocks Claude), and never hang. Every failure
 // path therefore ends in a silent exit(0).
 //
-// As the status line, stdout is what Claude draws under the prompt. The rate limits go to the app,
-// then the user's own status line command runs and its output is passed through untouched.
+// As the status line, stdout is what Claude draws under the prompt. The rate limits and the context
+// window go to the app, then the user's own status line command runs and its output is passed
+// through untouched.
 
 import Darwin
 import Foundation
@@ -37,9 +38,12 @@ func run() {
 
     if isStatusLine {
         // This runs on every redraw and the input has the whole session state in it. The app only
-        // cares about the limits, so send just those, and nothing at all when there are none.
-        if let limits = (payload as? [String: Any])?["rate_limits"] {
-            forward(["rate_limits": limits], source: source)
+        // cares about the limits and the context window, so send just those, and nothing at all
+        // when there are neither.
+        let object = payload as? [String: Any] ?? [:]
+        if object["rate_limits"] != nil || object["context_window"] != nil {
+            let keys = ["rate_limits", "context_window", "model", "transcript_path"]
+            forward(object.filter { keys.contains($0.key) }, source: source)
         }
     } else if let payload {
         forward(slimmed(payload, rawSize: rawPayload.count), source: source)

@@ -174,6 +174,30 @@ struct HookServerEdgeCaseTests {
         #expect(message.usage?.windows == [UsageWindow(usedPercent: 100, windowMinutes: 300, resetsAt: Date(timeIntervalSince1970: 2000))])
     }
 
+    @Test func statusLineEnvelopeWithOnlyContextOrOnlyUsage() throws {
+        let session = UUID().uuidString
+        func decode(_ payload: String) -> HookMessage? {
+            let json = #"{"session": "\#(session)", "source": "claude-statusline", "payload": \#(payload)}"#
+            return HookServer.decodeEnvelope(Data(json.utf8), receivedAt: Date(timeIntervalSince1970: 1_000))
+        }
+        let window = #""context_window": {"total_input_tokens": 1000, "context_window_size": 200000, "current_usage": {}}"#
+        let limits = #""rate_limits": {"five_hour": {"used_percentage": 5, "resets_at": 2000}}"#
+
+        let onlyContext = try #require(decode("{\(window)}"))
+        #expect(onlyContext.usage == nil)
+        #expect(onlyContext.context?.usedTokens == 1000)
+        #expect(onlyContext.event == nil)
+
+        let onlyUsage = try #require(decode("{\(limits)}"))
+        #expect(onlyUsage.usage != nil)
+        #expect(onlyUsage.context == nil)
+
+        let both = try #require(decode("{\(window), \(limits)}"))
+        #expect(both.usage != nil && both.context != nil)
+
+        #expect(decode(#"{"context_window": {"total_input_tokens": 0, "context_window_size": 200000, "current_usage": null}}"#) == nil)
+    }
+
     // MARK: Helpers
 
     private func envelope(_ session: UUID, message: String) -> String {

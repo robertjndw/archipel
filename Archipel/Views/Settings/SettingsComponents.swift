@@ -1,4 +1,6 @@
+import AgentKit
 import AppKit
+import ArchipelCore
 import SwiftUI
 
 /// A row of picture tiles with a caption under each, like the appearance choice in System Settings.
@@ -164,6 +166,52 @@ struct UsageDisplayPreview: View {
         .fixedSize()
         .frame(width: 124, height: 34)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+/// The status bar as its menu leaves it, drawn by the status bar's own layout and item
+/// views. Sessions and limits are made up, so every item shows even before an agent has replied.
+/// Resources and the cup are the real ones: they report on the Mac, which is there either way.
+struct StatusBarPreview: View {
+    let settings: AppSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    // Made once, so the countdown runs down instead of starting over on every redraw.
+    @State private var cache = PromptCacheState(lastRequestAt: .now.addingTimeInterval(-12 * 60), ttl: 3600)
+    @State private var reading = ProviderUsage(
+        provider: .claude,
+        windows: [
+            UsageWindow(usedPercent: 42, windowMinutes: 300, resetsAt: .now.addingTimeInterval(2 * 3600)),
+            UsageWindow(usedPercent: 18, windowMinutes: 7 * 24 * 60, resetsAt: .now.addingTimeInterval(3 * 86400)),
+        ],
+        updatedAt: .now
+    )
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Chrome.controlRadius, style: .continuous)
+        let shown = AppSettings.StatusBarItem.allCases.filter(settings.shows)
+        StatusBarStrip(items: shown) { item in
+            switch item {
+            case .usage: UsageItem(reading: reading, now: .now, display: settings.usageDisplay, fill: settings.usageBarFill)
+            case .context: ContextLabel(usedPercent: 61, cache: cache, display: settings.usageDisplay, fill: settings.usageBarFill)
+            case .agents: AgentsLabel(summary: AttentionSummary(working: 2))
+            case .resources: ResourcesItem()
+            case .stayAwake: StayAwakeButton()
+            }
+        }
+        .frame(height: 2 * Chrome.bottomLineInset)
+        .frame(maxWidth: .infinity)
+        // A picture of the bar: its buttons would otherwise open popovers and change the cup's mode.
+        .allowsHitTesting(false)
+        .background(Chrome.windowSurface, in: shape)
+        .overlay { shape.strokeBorder(.separator, lineWidth: 0.5) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Status bar preview")
+        .accessibilityValue(shown.isEmpty ? "Empty" : shown.map(\.title).formatted(.list(type: .and)))
+        .accessibilityHint("Its actions show or hide each item.")
+        .statusBarMenu(settings)
+        .accessibilityIdentifier("settings.statusBarPreview")
+        .animation(reduceMotion ? nil : Motion.disclosure, value: settings.hiddenStatusBarItems)
+        .animation(reduceMotion ? nil : Motion.disclosure, value: settings.usageDisplay)
     }
 }
 

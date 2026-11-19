@@ -10,11 +10,18 @@ public struct HookMessage: Equatable, Sendable {
     /// Subscription limits, from Claude's status line. Never set together with an event.
     public var usage: ProviderUsage?
 
-    public init(sessionID: UUID, event: AgentEvent?, agentSessionID: String?, usage: ProviderUsage? = nil) {
+    /// Context window fill, from Claude's status line. Never set together with an event.
+    public var context: SessionContext?
+
+    public init(
+        sessionID: UUID, event: AgentEvent?, agentSessionID: String?,
+        usage: ProviderUsage? = nil, context: SessionContext? = nil
+    ) {
         self.sessionID = sessionID
         self.event = event
         self.agentSessionID = agentSessionID
         self.usage = usage
+        self.context = context
     }
 }
 
@@ -223,10 +230,13 @@ public final class HookServer: Sendable {
             let session = (envelope["session"] as? String).flatMap(UUID.init(uuidString:)),
             let payload = envelope["payload"] as? [String: Any]
         else { return nil }
-        // Not a hook: the status line runs on every redraw and carries no event, only the limits.
+        // Not a hook: the status line runs on every redraw and carries no event, only the limits and
+        // the context window. API key accounts get no limits but still get the context.
         if envelope["source"] as? String == "claude-statusline" {
-            guard let usage = UsageDecoder.claudeStatusLine(payload, at: date) else { return nil }
-            return HookMessage(sessionID: session, event: nil, agentSessionID: nil, usage: usage)
+            let usage = UsageDecoder.claudeStatusLine(payload, at: date)
+            let context = UsageDecoder.claudeContext(payload, at: date)
+            guard usage != nil || context != nil else { return nil }
+            return HookMessage(sessionID: session, event: nil, agentSessionID: nil, usage: usage, context: context)
         }
         guard let source = (envelope["source"] as? String).flatMap(HookSource.init(rawValue:)) else { return nil }
         let decoded = HookDecoder.decode(source: source, payload: payload)

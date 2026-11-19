@@ -30,4 +30,38 @@ final class SettingsTests: ArchipelUITestCase {
         XCTAssertTrue(tab("Shell").exists, "The session tab behind Settings must survive ⌘W.")
         XCTAssertEqual(try sandbox.savedWorkspace().allSessions.count, 1)
     }
+
+    func testChoosingStatusBarItems() throws {
+        try launch()
+        let usage = mainWindow.descendants(matching: .any)["statusBar.usage"]
+        assertExists(usage, "The status bar should show the usage limits by default.")
+
+        app.typeKey(",", modifierFlags: .command)
+        assertExists(settingsWindow, "⌘, should open Settings.")
+        settingsWindow.toolbars.buttons["Appearance"].click()
+        let preview = settingsWindow.descendants(matching: .any)["settings.statusBarPreview"]
+        assertExists(preview, "Appearance should show the status bar preview.")
+        // Appearance is taller than some screens, and then the status bar section starts out of view.
+        for _ in 0..<10 where !preview.isHittable {
+            settingsWindow.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -200)
+        }
+        preview.rightClick()
+        chooseFirstMenuItem()
+        assertGone(usage, "Unchecking Usage limits on the preview should take it out of the status bar.")
+        app.typeKey("w", modifierFlags: .command)
+        assertGone(settingsWindow, "⌘W should close Settings.")
+
+        // The status bar's own menu brings it back.
+        mainWindow.buttons["Resources"].rightClick()
+        chooseFirstMenuItem()
+        assertExists(usage, "Checking Usage limits in the status bar's menu should show it again.")
+    }
+
+    /// Usage limits, the first item of the status bar's menu. Picked with the keyboard: XCUITest's
+    /// clicks on the items of a menu AppKit pops up did not reach their action, and the menu can open
+    /// where XCUITest does not count its items as hittable.
+    private func chooseFirstMenuItem() {
+        app.typeKey(.downArrow, modifierFlags: [])
+        app.typeKey(.return, modifierFlags: [])
+    }
 }

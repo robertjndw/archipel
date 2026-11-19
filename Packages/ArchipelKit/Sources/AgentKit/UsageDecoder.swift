@@ -49,6 +49,33 @@ public enum UsageDecoder {
         return nil
     }
 
+    /// `context_window` from Claude's status line input. Nil before the first reply, when Claude sends
+    /// no `current_usage` and zero tokens, since a bar of 0 of N would only look like a measurement.
+    public static func claudeContext(_ payload: [String: Any], at date: Date) -> SessionContext? {
+        guard let window = payload["context_window"] as? [String: Any],
+              let size = integer(window["context_window_size"]), size > 0
+        else { return nil }
+        let used = integer(window["total_input_tokens"]) ?? 0
+        guard used > 0 || !(window["current_usage"] is NSNull || window["current_usage"] == nil) else { return nil }
+        let reported = number(window["used_percentage"]).flatMap { $0.isFinite ? $0 : nil }
+        let percent = reported ?? Double(used) / Double(size) * 100
+        let model = payload["model"] as? [String: Any]
+        return SessionContext(
+            usedTokens: max(used, 0),
+            windowSize: size,
+            usedPercent: min(max(percent, 0), 100),
+            outputTokens: max(integer(window["total_output_tokens"]) ?? 0, 0),
+            transcriptPath: (payload["transcript_path"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+            model: ((model?["display_name"] as? String) ?? (model?["id"] as? String)).flatMap { $0.isEmpty ? nil : $0 },
+            updatedAt: date
+        )
+    }
+
+    // Int(exactly:) because the plain conversion traps on NaN, infinity and anything out of range.
+    private static func integer(_ value: Any?) -> Int? {
+        number(value).flatMap { $0.isFinite ? Int(exactly: $0.rounded(.towardZero)) : nil }
+    }
+
     private static func window(_ raw: [String: Any], percentKey: String, minutes: Int) -> UsageWindow? {
         // The status bar rounds this to an Int, which traps on NaN, infinity and a number like 1e300.
         guard let percent = number(raw[percentKey]), percent.isFinite else { return nil }
@@ -118,7 +145,7 @@ public enum CodexSessionLogs {
     }
 
     /// Logs of long sessions run to many megabytes and the limits we want are near the end.
-    private static func readTail(of url: URL, maxBytes: Int) -> Data? {
+    static func readTail(of url: URL, maxBytes: Int) -> Data? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         guard let size = try? handle.seekToEnd() else { return nil }

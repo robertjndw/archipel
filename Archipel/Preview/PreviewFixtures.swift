@@ -1,4 +1,5 @@
 #if DEBUG
+import AgentKit
 import ArchipelCore
 import Foundation
 import GitKit
@@ -142,6 +143,27 @@ enum PreviewFixtures {
             updatedAt: .now
         ),
     ]
+
+    static let sessionContexts: [Session.ID: SessionContext] = [
+        claudeSessionID: SessionContext(
+            usedTokens: 122_000, windowSize: 200_000, usedPercent: 61, outputTokens: 18_400,
+            transcriptPath: nil, model: "Opus 4.5", updatedAt: .now
+        ),
+        reviewSessionID: SessionContext(
+            usedTokens: 168_000, windowSize: 200_000, usedPercent: 84, outputTokens: 9_200,
+            transcriptPath: nil, model: "Sonnet 4.5", updatedAt: .now
+        ),
+        idleSessionID: SessionContext(
+            usedTokens: 41_000, windowSize: 1_000_000, usedPercent: 4.1, outputTokens: 2_100,
+            transcriptPath: nil, model: "Sonnet 4.5", updatedAt: .now.addingTimeInterval(-3 * 3600)
+        ),
+    ]
+
+    static let promptCaches: [Session.ID: PromptCacheState] = [
+        claudeSessionID: PromptCacheState(lastRequestAt: .now.addingTimeInterval(-20), ttl: 3600),
+        reviewSessionID: PromptCacheState(lastRequestAt: .now.addingTimeInterval(-12 * 60), ttl: 3600),
+        idleSessionID: PromptCacheState(lastRequestAt: .now.addingTimeInterval(-3 * 3600), ttl: 300),
+    ]
 }
 
 extension AppModel {
@@ -151,6 +173,8 @@ extension AppModel {
         model.gitSummaries = PreviewFixtures.gitSummaries
         model.pullRequests = PreviewFixtures.pullRequests
         model.usage = PreviewFixtures.usage
+        model.sessionContexts = PreviewFixtures.sessionContexts
+        model.promptCaches = PreviewFixtures.promptCaches
         return model
     }
 

@@ -44,6 +44,33 @@ struct StatusLineHookTests {
         #expect(messages.first?.usage?.windows.first?.usedPercent == 42)
     }
 
+    @Test func sendsTheContextWindowWithoutLimits() async throws {
+        let socket = shortSocketURL()
+        let server = HookServer(socketURL: socket)
+        try server.start()
+        defer { server.stop() }
+        let config = try configDirectory(statusLine: nil)
+        defer { try? FileManager.default.removeItem(at: config) }
+
+        // An API key account: no limits, only the context.
+        let payload = #"{"session_id":"abc","transcript_path":"/tmp/t.jsonl","model":{"id":"claude-opus-4-5","display_name":"Opus 4.5"},"context_window":{"context_window_size":200000,"total_input_tokens":122000,"used_percentage":61,"current_usage":{"input_tokens":10}}}"#
+        let run = try runHook(
+            arguments: ["statusline"],
+            environment: [
+                "ARCHIPEL_SESSION_ID": UUID().uuidString, "ARCHIPEL_SOCKET": socket.path,
+                "CLAUDE_CONFIG_DIR": config.path, "PATH": "/usr/bin:/bin",
+            ],
+            stdin: payload
+        )
+        #expect(run.status == 0)
+
+        let messages = await collect(1, from: server)
+        #expect(messages.first?.usage == nil)
+        #expect(messages.first?.context?.usedTokens == 122_000)
+        #expect(messages.first?.context?.model == "Opus 4.5")
+        #expect(messages.first?.context?.transcriptPath == "/tmp/t.jsonl")
+    }
+
     @Test func printsNothingWithoutAStatusLineOfTheirOwn() throws {
         let config = try configDirectory(statusLine: nil)
         defer { try? FileManager.default.removeItem(at: config) }
