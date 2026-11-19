@@ -1043,8 +1043,8 @@ final class AppModel {
 
     // MARK: Tabs
 
-    func openFile(_ url: URL, preview: Bool) {
-        open(.file(url), preview: preview)
+    func openFile(_ url: URL, in worktreeID: Worktree.ID? = nil, preview: Bool) {
+        open(.file(url), in: worktreeID, preview: preview)
     }
 
     func openDiff(path: String, staged: Bool, preview: Bool) {

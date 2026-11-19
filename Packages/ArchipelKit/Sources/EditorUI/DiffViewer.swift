@@ -10,12 +10,16 @@ public struct DiffViewer: View {
     private let path: String
     private let staged: Bool
     private let review: DiffReview?
+    private let onOpenFile: ((URL) -> Void)?
 
-    public init(root: URL, path: String, staged: Bool) {
+    /// `onOpenFile` adds an Open in Editor button to the header. Leave it nil to hide the button,
+    /// e.g. where there is no editor to open.
+    public init(root: URL, path: String, staged: Bool, onOpenFile: ((URL) -> Void)? = nil) {
         self.root = root
         self.path = path
         self.staged = staged
         review = nil
+        self.onOpenFile = onOpenFile
     }
 
     /// A diff the user can comment on line by line. Comments go to `comments` under `root`, and the
@@ -27,16 +31,18 @@ public struct DiffViewer: View {
         staged: Bool,
         comments: ReviewCommentStore,
         targets: [ReviewTarget],
-        onSend: @escaping (ReviewTarget.ID) -> Void
+        onSend: @escaping (ReviewTarget.ID) -> Void,
+        onOpenFile: ((URL) -> Void)? = nil
     ) {
         self.root = root
         self.path = path
         self.staged = staged
         review = DiffReview(store: comments, targets: targets, onSend: onSend)
+        self.onOpenFile = onOpenFile
     }
 
     public var body: some View {
-        DiffViewerHost(root: root, path: path, staged: staged, review: review)
+        DiffViewerHost(root: root, path: path, staged: staged, review: review, onOpenFile: onOpenFile)
             .id(DiffKey(root: root, path: path, staged: staged))
     }
 
@@ -54,19 +60,21 @@ private struct DiffViewerHost: View {
     let path: String
     let staged: Bool
     let review: DiffReview?
+    let onOpenFile: ((URL) -> Void)?
     @State private var model: DiffViewerModel?
 
-    init(root: URL, path: String, staged: Bool, review: DiffReview?) {
+    init(root: URL, path: String, staged: Bool, review: DiffReview?, onOpenFile: ((URL) -> Void)?) {
         self.root = root
         self.path = path
         self.staged = staged
         self.review = review
+        self.onOpenFile = onOpenFile
     }
 
     var body: some View {
         Group {
             if let model {
-                DiffViewerContent(model: model, review: review)
+                DiffViewerContent(model: model, review: review, onOpenFile: onOpenFile)
             } else {
                 Color(nsColor: .textBackgroundColor)
             }
@@ -81,12 +89,13 @@ private struct DiffViewerHost: View {
 private struct DiffViewerContent: View {
     let model: DiffViewerModel
     let review: DiffReview?
+    let onOpenFile: ((URL) -> Void)?
     @AppStorage("EditorUI.diffPresentation") private var presentation: DiffPresentation = .sideBySide
     @State private var showsAllLines = false
 
     var body: some View {
         VStack(spacing: 0) {
-            DiffHeader(model: model, review: review, presentation: $presentation, showsAllLines: $showsAllLines)
+            DiffHeader(model: model, review: review, openFile: openFile, presentation: $presentation, showsAllLines: $showsAllLines)
             Divider()
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -123,14 +132,25 @@ private struct DiffViewerContent: View {
         case .contentUnchanged:
             ContentUnavailableView("No Content Changes", systemImage: "doc.on.doc", description: Text("Only the file's name or permissions changed."))
         case .conflicted:
-            ContentUnavailableView(
-                "Merge Conflict",
-                systemImage: "arrow.triangle.merge",
-                description: Text("This file has merge conflicts, which can't be shown as a comparison. Open it in the editor to resolve them, then stage it.")
-            )
+            ContentUnavailableView {
+                Label("Merge Conflict", systemImage: "arrow.triangle.merge")
+            } description: {
+                Text("This file has merge conflicts, which can't be shown as a comparison. Open it in the editor to resolve them, then stage it.")
+            } actions: {
+                if let openFile {
+                    Button("Open in Editor", action: openFile)
+                }
+            }
         case .failed(let message):
             ContentUnavailableView("Can't Show Changes", systemImage: "exclamationmark.triangle", description: Text(message))
         }
+    }
+
+    /// Nil if the caller can't open files or the file has been deleted.
+    private var openFile: (() -> Void)? {
+        guard let onOpenFile, model.fileExists else { return nil }
+        let url = model.root.appending(path: model.path, directoryHint: .notDirectory)
+        return { onOpenFile(url) }
     }
 
     private var commenting: DiffCommentContext? {
@@ -143,6 +163,7 @@ private struct DiffViewerContent: View {
 private struct DiffHeader: View {
     let model: DiffViewerModel
     let review: DiffReview?
+    let openFile: (() -> Void)?
     @Binding var presentation: DiffPresentation
     @Binding var showsAllLines: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -163,6 +184,12 @@ private struct DiffHeader: View {
             Spacer(minLength: 8)
             if let review {
                 ReviewCommentsButton(root: model.root, review: review)
+            }
+            if let openFile {
+                Button("Open in Editor", systemImage: "pencil", action: openFile)
+                    .buttonStyle(.borderless)
+                    .labelStyle(.iconOnly)
+                    .help("Open in Editor")
             }
             if model.phase == .ready {
                 Toggle(isOn: $showsAllLines) {
@@ -277,6 +304,8 @@ final class DiffViewerModel {
     private(set) var documentVersion = 0
     private(set) var highlights: DiffHighlights?
     private(set) var renamedFrom: String?
+    /// False for a deleted file, which has nothing to open in the editor.
+    private(set) var fileExists = true
     @ObservationIgnored private var diff: GitFileDiff?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var highlightTask: Task<Void, Never>?
@@ -341,6 +370,8 @@ final class DiffViewerModel {
         self.diff = diff
         let renamedFrom = diff?.status == .renamed && diff?.oldPath != path ? diff?.oldPath : nil
         if self.renamedFrom != renamedFrom { self.renamedFrom = renamedFrom }
+        let fileExists = FileManager.default.fileExists(atPath: root.appending(path: path).path(percentEncoded: false))
+        if self.fileExists != fileExists { self.fileExists = fileExists }
     }
 
     private func show(_ phase: Phase) {
@@ -377,7 +408,7 @@ private func previewViewer(
     review: DiffReview? = nil
 ) -> some View {
     let model = DiffViewerModel(root: PreviewSamples.root, path: path, staged: staged) { _, _, _ in try result.get() }
-    return DiffViewerContent(model: model, review: review)
+    return DiffViewerContent(model: model, review: review, onOpenFile: { _ in })
         .frame(width: 900, height: 520)
 }
 

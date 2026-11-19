@@ -80,6 +80,38 @@ final class InspectorTests: ArchipelUITestCase {
         }
     }
 
+    func testOpeningADiffInTheEditorAndSavingAnEdit() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try repository.write("notes.txt", "first line\nsecond line\n")
+        try launch(with: repository.workspace())
+
+        showChanges()
+        unstagedChange("notes.txt").doubleClick()
+        assertExists(mainWindow.radioButtons["Side by Side"], "The change should open in the diff viewer.")
+
+        mainWindow.buttons["Open in Editor"].click()
+        let editor = mainWindow.textViews.element(boundBy: 0)
+        assertExists(editor, "Open in Editor should show the file in the editor.")
+        // Opens next to the diff instead of replacing it, and not as a preview tab.
+        waitUntil("the diff and the file are both saved as tabs") {
+            let tabs = try sandbox.savedWorkspace().allWorktrees[0].panes.flatMap(\.tabs)
+            let keptFile = tabs.contains {
+                guard case .file(let url) = $0.content else { return false }
+                return url.lastPathComponent == "notes.txt" && !$0.isPreview
+            }
+            return keptFile && tabs.contains { $0.content == .diff(path: "notes.txt", staged: false) }
+        }
+
+        // The diff is read-only, so the edit has to go through the editor tab.
+        editor.click()
+        app.typeKey(.downArrow, modifierFlags: .command)
+        app.typeText("third line")
+        chooseMenu("File", "Save")
+        waitUntil("the edit is on disk") {
+            try repository.contents(of: "notes.txt").hasPrefix("first line\nsecond line\nthird line")
+        }
+    }
+
     func testHidingAndShowingTheInspector() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         try launch(with: repository.workspace())

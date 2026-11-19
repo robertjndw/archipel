@@ -274,7 +274,8 @@ private struct PaneView: View {
                     staged: staged,
                     comments: model.reviewComments,
                     targets: model.reviewTargets(in: worktree),
-                    onSend: { model.sendReviewComments(in: worktree.id, to: $0) }
+                    onSend: { model.sendReviewComments(in: worktree.id, to: $0) },
+                    onOpenFile: { model.openFile($0, in: worktree.id, preview: false) }
                 )
             } else {
                 // The viewer runs git of its own as soon as it is on screen, and a diff tab can be
