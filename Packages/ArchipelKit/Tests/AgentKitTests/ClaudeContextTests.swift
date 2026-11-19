@@ -16,9 +16,9 @@ struct SessionContextTests {
          "context_window": {"total_input_tokens": 72609, "total_output_tokens": 222, "context_window_size": 200000,
            "current_usage": {"input_tokens": 2}, "used_percentage": 36, "remaining_percentage": 64}}
         """)
-        #expect(UsageDecoder.claudeContext(payload, at: now) == SessionContext(
-            usedTokens: 72609, windowSize: 200_000, usedPercent: 36, outputTokens: 222,
-            transcriptPath: "/tmp/t.jsonl", model: "Opus 5.5", updatedAt: now
+        #expect(UsageDecoder.claudeContext(payload) == SessionContext(
+            usedTokens: 72609, windowSize: 200_000, usedPercent: 36,
+            transcriptPath: "/tmp/t.jsonl", model: "Opus 5.5"
         ))
     }
 
@@ -26,39 +26,37 @@ struct SessionContextTests {
         let payload = try json(#"""
         {"model": {"id": "claude-x"}, "context_window": {"total_input_tokens": 100, "context_window_size": 1000, "current_usage": {}}}
         """#)
-        let context = try #require(UsageDecoder.claudeContext(payload, at: now))
+        let context = try #require(UsageDecoder.claudeContext(payload))
         #expect(context.model == "claude-x")
         #expect(context.transcriptPath == nil)
-        #expect(context.outputTokens == 0)
     }
 
     @Test func missingWindowOrSizeIsNil() throws {
-        #expect(UsageDecoder.claudeContext(try json(#"{"model": {"id": "x"}}"#), at: now) == nil)
-        #expect(UsageDecoder.claudeContext(try json(#"{"context_window": {"total_input_tokens": 5, "current_usage": {}}}"#), at: now) == nil)
-        #expect(UsageDecoder.claudeContext(try json(#"{"context_window": {"total_input_tokens": 5, "context_window_size": 0, "current_usage": {}}}"#), at: now) == nil)
+        #expect(UsageDecoder.claudeContext(try json(#"{"model": {"id": "x"}}"#)) == nil)
+        #expect(UsageDecoder.claudeContext(try json(#"{"context_window": {"total_input_tokens": 5, "current_usage": {}}}"#)) == nil)
+        #expect(UsageDecoder.claudeContext(try json(#"{"context_window": {"total_input_tokens": 5, "context_window_size": 0, "current_usage": {}}}"#)) == nil)
     }
 
     @Test func noReplyYetIsNil() throws {
         let payload = try json(#"{"context_window": {"total_input_tokens": 0, "context_window_size": 200000, "current_usage": null, "used_percentage": null}}"#)
-        #expect(UsageDecoder.claudeContext(payload, at: now) == nil)
+        #expect(UsageDecoder.claudeContext(payload) == nil)
     }
 
     @Test func percentIsComputedWhenMissingAndClamped() throws {
         let computed = try json(#"{"context_window": {"total_input_tokens": 50000, "context_window_size": 200000, "current_usage": {}, "used_percentage": null}}"#)
-        #expect(UsageDecoder.claudeContext(computed, at: now)?.usedPercent == 25)
+        #expect(UsageDecoder.claudeContext(computed)?.usedPercent == 25)
         let over = try json(#"{"context_window": {"total_input_tokens": 50000, "context_window_size": 200000, "current_usage": {}, "used_percentage": 400}}"#)
-        #expect(UsageDecoder.claudeContext(over, at: now)?.usedPercent == 100)
+        #expect(UsageDecoder.claudeContext(over)?.usedPercent == 100)
     }
 
     @Test func garbageNumbersAreRejected() throws {
         let boolSize = try json(#"{"context_window": {"total_input_tokens": 5, "context_window_size": true, "current_usage": {}}}"#)
-        #expect(UsageDecoder.claudeContext(boolSize, at: now) == nil)
+        #expect(UsageDecoder.claudeContext(boolSize) == nil)
         let hugeSize = try json(#"{"context_window": {"total_input_tokens": 5, "context_window_size": 1e300, "current_usage": {}}}"#)
-        #expect(UsageDecoder.claudeContext(hugeSize, at: now) == nil)
+        #expect(UsageDecoder.claudeContext(hugeSize) == nil)
         let garbage = try json(#"{"context_window": {"total_input_tokens": "x", "total_output_tokens": 1e300, "context_window_size": 1000, "current_usage": {}, "used_percentage": "lots"}}"#)
-        let context = try #require(UsageDecoder.claudeContext(garbage, at: now))
+        let context = try #require(UsageDecoder.claudeContext(garbage))
         #expect(context.usedTokens == 0)
-        #expect(context.outputTokens == 0)
         #expect(context.usedPercent.isFinite)
     }
 }

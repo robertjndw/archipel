@@ -188,7 +188,7 @@ public struct WorktreeRowContent: Equatable, Sendable {
     /// A message is shown while the agent waits for the user, and after a finished turn until the user
     /// has looked at it. Once read, the row falls back to the quieter metadata line.
     static func messageWorthShowing(_ activity: SessionActivity) -> String? {
-        guard activity.needsUser || (activity.status == .finished && activity.unread),
+        guard activity.needsMe,
               let message = activity.lastMessage
         else { return nil }
         // Agents send multi-line messages; the row has one line, and a leading blank line would show nothing.

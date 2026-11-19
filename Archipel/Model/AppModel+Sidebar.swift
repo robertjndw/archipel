@@ -21,6 +21,11 @@ extension AppModel {
         isInstalled(agent) || agent.id == defaultAgent.id
     }
 
+    /// Title of the "Needs Me" toggle in the menu bar and the palette.
+    var needsMeFilterTitle: String { showsOnlyNeedsMe ? "Show All in Sidebar" : "Show Only What Needs Me" }
+    /// Filled while the filter is on.
+    var needsMeFilterSymbol: String { showsOnlyNeedsMe ? "bell.fill" : "bell" }
+
     /// The island before or after the selected one, wrapping around.
     func selectAdjacentIsland(offset: Int) {
         let islands = workspace.islands

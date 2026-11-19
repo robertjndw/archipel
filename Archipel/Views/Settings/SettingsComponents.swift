@@ -264,9 +264,9 @@ struct SidebarRowsPreview: View {
         .overlay { shape.strokeBorder(.separator, lineWidth: 0.5) }
         .contentShape(shape)
         .contextMenu {
-            Toggle("Git Status", isOn: binding(\.showsGitStatusInSidebar))
-            Toggle("Pull Requests", isOn: binding(\.showsPullRequests))
-            Toggle("Agent Messages", isOn: binding(\.showsAgentMessagesInSidebar))
+            ForEach(Self.parts, id: \.title) { part in
+                Toggle(part.title, isOn: binding(part.setting))
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Sidebar preview")
@@ -274,9 +274,11 @@ struct SidebarRowsPreview: View {
         .accessibilityHint("Its actions show or hide each part of a row.")
         // VoiceOver can't open a menu that only a right-click brings up.
         .accessibilityActions {
-            Button((settings.showsGitStatusInSidebar ? "Hide" : "Show") + " Git Status") { settings.showsGitStatusInSidebar.toggle() }
-            Button((settings.showsPullRequests ? "Hide" : "Show") + " Pull Requests") { settings.showsPullRequests.toggle() }
-            Button((settings.showsAgentMessagesInSidebar ? "Hide" : "Show") + " Agent Messages") { settings.showsAgentMessagesInSidebar.toggle() }
+            ForEach(Self.parts, id: \.title) { part in
+                Button((settings[keyPath: part.setting] ? "Hide " : "Show ") + part.title) {
+                    settings[keyPath: part.setting].toggle()
+                }
+            }
         }
         .accessibilityIdentifier("settings.sidebarPreview")
         .animation(reduceMotion ? nil : Motion.disclosure, value: options)
@@ -299,13 +301,19 @@ struct SidebarRowsPreview: View {
         Binding { settings[keyPath: keyPath] } set: { settings[keyPath: keyPath] = $0 }
     }
 
+    /// The parts of a row the preview can show or hide, for its menu and its VoiceOver actions.
+    private static let parts: [(title: String, setting: ReferenceWritableKeyPath<AppSettings, Bool>)] = [
+        ("Git Status", \.showsGitStatusInSidebar),
+        ("Pull Requests", \.showsPullRequests),
+        ("Agent Messages", \.showsAgentMessagesInSidebar),
+    ]
+
     private var shownParts: String {
-        let parts = [
-            settings.showsGitStatusInSidebar ? "Git status" : nil,
-            settings.showsPullRequests ? "Pull requests" : nil,
-            settings.showsAgentMessagesInSidebar ? "Agent messages" : nil,
-        ].compactMap(\.self)
-        return parts.isEmpty ? "Branch names only" : parts.formatted(.list(type: .and))
+        let shown = Self.parts.filter { settings[keyPath: $0.setting] }.map { $0.title.localizedLowercase }
+        guard let first = shown.first else { return "Branch names only" }
+        let list = shown.formatted(.list(type: .and))
+        // Sentence case: only the list's first word starts with a capital.
+        return first.prefix(1).localizedUppercase + list.dropFirst()
     }
 }
 
@@ -396,10 +404,11 @@ struct SidebarDensityPreview: View {
 struct PaneStylePreview: View {
     let style: AppSettings.PaneStyle
 
+    private var isComfortable: Bool { style == .comfortable }
+
     var body: some View {
-        let isComfortable = style == .comfortable
         let gap: CGFloat = isComfortable ? 3 : 0
-        HStack(spacing: isComfortable ? gap : 0) {
+        HStack(spacing: gap) {
             pane(lines: [24, 16, 20], isDimmed: false)
             if !isComfortable { Divider() }
             pane(lines: [14, 22, 10], isDimmed: true)
@@ -436,7 +445,7 @@ struct PaneStylePreview: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(surface)
         .overlay { surface.opacity(isDimmed ? Chrome.unfocusedPaneDim : 0) }
-        .clipShape(.rect(cornerRadius: style == .comfortable ? 4 : 0, style: .continuous))
+        .clipShape(.rect(cornerRadius: isComfortable ? 4 : 0, style: .continuous))
     }
 }
 

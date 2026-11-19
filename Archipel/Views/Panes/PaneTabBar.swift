@@ -35,7 +35,6 @@ struct PaneTabBar: View {
     @State private var dragSlot: TabSlot?
     @State private var scrollPosition = ScrollPosition()
     @State private var scroll = HorizontalScroll()
-    @State private var wheelMonitor: Any?
 
     static let height: CGFloat = 36
     /// Below this a tab stops shrinking and the row scrolls instead. It leaves the icon, the
@@ -230,12 +229,11 @@ struct PaneTabBar: View {
         .background(background)
         .onHover { inside in
             isPointerInRow = inside
-            watchWheel(inside)
             if !inside, frozenTabWidth != nil {
                 withAnimation(reduceMotion ? nil : Motion.selection) { frozenTabWidth = nil }
             }
         }
-        .onDisappear { watchWheel(false) }
+        .localEventMonitor(.scrollWheel, while: isPointerInRow, handle: scrollSideways)
         .onChange(of: pane.tabs.count) { old, new in
             if new < old, isPointerInRow {
                 frozenTabWidth = frozenTabWidth ?? tabWidth(forCount: old)
@@ -271,27 +269,13 @@ struct PaneTabBar: View {
     /// SwiftUI doesn't turn a vertical mouse wheel into horizontal scrolling, so do it by hand
     /// while the pointer is over the bar. Trackpads and the Magic Mouse send precise deltas and
     /// can already scroll sideways, so they're skipped.
-    private func watchWheel(_ on: Bool) {
-        if let monitor = wheelMonitor {
-            NSEvent.removeMonitor(monitor)
-            wheelMonitor = nil
-        }
-        guard on else { return }
-        let position = $scrollPosition
-        let scroll = $scroll
-        wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            guard !event.hasPreciseScrollingDeltas, event.scrollingDeltaX == 0, event.scrollingDeltaY != 0 else { return event }
-            let deltaY = event.scrollingDeltaY
-            let handled = MainActor.assumeIsolated {
-                let current = scroll.wrappedValue
-                guard current.maxOffset > 0 else { return false }
-                // Non-precise deltas are in lines. 24pt per line is roughly what a list scrolls.
-                let x = min(max(current.offset - deltaY * 24, 0), current.maxOffset)
-                position.wrappedValue.scrollTo(x: x)
-                return true
-            }
-            return handled ? nil : event
-        }
+    private func scrollSideways(_ event: NSEvent) -> Bool {
+        guard !event.hasPreciseScrollingDeltas, event.scrollingDeltaX == 0, event.scrollingDeltaY != 0,
+              scroll.maxOffset > 0 else { return false }
+        // Non-precise deltas are in lines. 24pt per line is roughly what a list scrolls.
+        let x = min(max(scroll.offset - event.scrollingDeltaY * 24, 0), scroll.maxOffset)
+        scrollPosition.scrollTo(x: x)
+        return true
     }
 
     /// Sessions come from the worktree the bar already holds, so a tab does not have to read the
@@ -435,7 +419,6 @@ private struct TabButtonContent: View, Equatable {
     let width: CGFloat
     @State private var isHovered = false
     @State private var isOverClose = false
-    @State private var middleClickMonitor: Any?
     /// Incremented when the session finishes, to trigger one bounce.
     @State private var finishBounce = 0
 
@@ -477,9 +460,13 @@ private struct TabButtonContent: View, Equatable {
         .simultaneousGesture(TapGesture().onEnded { if !isOverClose { model.select(tab: tab.id) } })
         .onHover { hovering in
             isHovered = hovering
-            watchMiddleClicks(hovering)
         }
-        .onDisappear { watchMiddleClicks(false) }
+        // SwiftUI has no middle-click gesture.
+        .localEventMonitor(.otherMouseUp, while: isHovered) { event in
+            guard event.buttonNumber == 2 else { return false }
+            model.close(tab: tab.id)
+            return true
+        }
         .help(label.detail ?? label.title)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label.subtitle.map { "\(label.title), \($0)" } ?? label.title)
@@ -506,23 +493,6 @@ private struct TabButtonContent: View, Equatable {
         }
         .lineLimit(1)
         .truncationMode(.tail)
-    }
-
-    /// SwiftUI has no middle-click gesture. The monitor is only installed while the tab is
-    /// hovered, so there's at most one at a time.
-    private func watchMiddleClicks(_ on: Bool) {
-        if let monitor = middleClickMonitor {
-            NSEvent.removeMonitor(monitor)
-            middleClickMonitor = nil
-        }
-        guard on else { return }
-        let id = tab.id
-        let model = model
-        middleClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseUp) { event in
-            guard event.buttonNumber == 2 else { return event }
-            MainActor.assumeIsolated { model.close(tab: id) }
-            return nil
-        }
     }
 
     private var leading: some View {
@@ -562,9 +532,7 @@ private struct TabButtonContent: View, Equatable {
         ZStack {
             Group {
                 if let activity = label.activity {
-                    if StatusGlyph.isVisible(for: activity) {
-                        StatusGlyph(activity: activity)
-                    }
+                    StatusGlyph(activity: activity)
                 } else if label.hasUnsavedChanges {
                     Image(systemName: "circle.fill")
                         .imageScale(.small)

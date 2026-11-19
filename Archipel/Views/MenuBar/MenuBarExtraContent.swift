@@ -83,14 +83,9 @@ struct MenuBarExtraLabel: View {
             }
         }
         .accessibilityLabel(description.isEmpty ? "Archipel" : "Archipel, \(description)")
-        .task(id: BreathingState(isWorking: isWorking, reduceMotion: reduceMotion)) {
+        .task(id: isWorking && !reduceMotion) {
             await StatusItemBreathing.update(isWorking: isWorking && !reduceMotion)
         }
-    }
-
-    private struct BreathingState: Equatable {
-        var isWorking: Bool
-        var reduceMotion: Bool
     }
 
     /// Same colors as the sidebar's status glow.

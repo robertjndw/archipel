@@ -7,8 +7,6 @@ import SwiftUI
 /// Collapsed project headers use it; the island switcher has a dot of the same colors, without the count.
 struct SidebarAttentionBadge: View {
     let signal: AttentionSummary.Signal
-    /// The island switcher animates its symbol instead of showing a spinner.
-    var showsWorking = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -27,10 +25,8 @@ struct SidebarAttentionBadge: View {
                     .fill(StatusPulse.finished.color)
                     .frame(width: 7, height: 7)
             case .working:
-                if showsWorking {
-                    ProgressView()
-                        .controlSize(.mini)
-                }
+                ProgressView()
+                    .controlSize(.mini)
             }
         }
         .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
@@ -40,21 +36,20 @@ struct SidebarAttentionBadge: View {
 
 #if DEBUG
 private struct SidebarAttentionBadgeGallery: View {
-    private static let variants: [(String, AttentionSummary.Signal, Bool)] = [
-        ("1 waiting", .needsAttention(1), true),
-        ("12 waiting", .needsAttention(12), true),
-        ("128 waiting", .needsAttention(128), true),
-        ("Unread", .unread, true),
-        ("Working", .working, true),
-        ("Working, no spinner", .working, false),
+    private static let variants: [(String, AttentionSummary.Signal)] = [
+        ("1 waiting", .needsAttention(1)),
+        ("12 waiting", .needsAttention(12)),
+        ("128 waiting", .needsAttention(128)),
+        ("Unread", .unread),
+        ("Working", .working),
     ]
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-            ForEach(Self.variants, id: \.0) { label, signal, showsWorking in
+            ForEach(Self.variants, id: \.0) { label, signal in
                 GridRow {
                     Text(label).foregroundStyle(.secondary)
-                    SidebarAttentionBadge(signal: signal, showsWorking: showsWorking)
+                    SidebarAttentionBadge(signal: signal)
                 }
             }
         }

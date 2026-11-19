@@ -59,10 +59,9 @@ struct SidebarView: View {
         .onChange(of: model.selectedIsland?.id) { peek.close() }
         .popoverTip(SidebarTips.group.currentTip as? PeekTip, arrowEdge: .trailing)
         .tipViewStyle(CompactTipStyle())
-        .onChange(of: model.workspace.islands.count, initial: true) { SidebarTips.islandCount = model.workspace.islands.count }
-        .onChange(of: model.workspace.islands.reduce(0) { $0 + $1.projects.reduce(0) { $0 + $1.worktrees.count } }, initial: true) { _, count in
-            SidebarTips.worktreeCount = count
-        }
+        // The model keeps the counts current, but it's created before TipKit is configured, so
+        // the initial values are set here.
+        .onAppear { SidebarTips.workspaceChanged(model.workspace) }
         // Before the swipe content, so an empty island's placeholder moves with the list.
         .overlay {
             if model.showsOnlyNeedsMe {
@@ -201,7 +200,7 @@ private struct SidebarHeader: View {
             Button {
                 model.showsOnlyNeedsMe.toggle()
             } label: {
-                Label("Show Only What Needs Me", systemImage: model.showsOnlyNeedsMe ? "bell.fill" : "bell")
+                Label("Show Only What Needs Me", systemImage: model.needsMeFilterSymbol)
                     .contentTransition(.symbolEffect(.replace))
                     .foregroundStyle(model.showsOnlyNeedsMe ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
             }

@@ -20,16 +20,6 @@ extension SessionStatus {
 struct StatusGlyph: View {
     let activity: SessionActivity
 
-    /// Whether the glyph draws anything. Rows keep its slot either way so their columns line up;
-    /// a tab leaves it out when empty so the title gets the room.
-    static func isVisible(for activity: SessionActivity) -> Bool {
-        switch activity.status {
-        case .starting, .working, .needsAttention, .exited: true
-        case .finished: activity.unread || activity.completedTurn
-        case .notStarted: false
-        }
-    }
-
     var body: some View {
         Group {
             switch activity.status {

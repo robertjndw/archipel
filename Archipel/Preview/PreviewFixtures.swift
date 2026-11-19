@@ -146,16 +146,16 @@ enum PreviewFixtures {
 
     static let sessionContexts: [Session.ID: SessionContext] = [
         claudeSessionID: SessionContext(
-            usedTokens: 122_000, windowSize: 200_000, usedPercent: 61, outputTokens: 18_400,
-            transcriptPath: nil, model: "Opus 4.5", updatedAt: .now
+            usedTokens: 122_000, windowSize: 200_000, usedPercent: 61,
+            transcriptPath: nil, model: "Opus 4.5"
         ),
         reviewSessionID: SessionContext(
-            usedTokens: 168_000, windowSize: 200_000, usedPercent: 84, outputTokens: 9_200,
-            transcriptPath: nil, model: "Sonnet 4.5", updatedAt: .now
+            usedTokens: 168_000, windowSize: 200_000, usedPercent: 84,
+            transcriptPath: nil, model: "Sonnet 4.5"
         ),
         idleSessionID: SessionContext(
-            usedTokens: 41_000, windowSize: 1_000_000, usedPercent: 4.1, outputTokens: 2_100,
-            transcriptPath: nil, model: "Sonnet 4.5", updatedAt: .now.addingTimeInterval(-3 * 3600)
+            usedTokens: 41_000, windowSize: 1_000_000, usedPercent: 4.1,
+            transcriptPath: nil, model: "Sonnet 4.5"
         ),
     ]
 

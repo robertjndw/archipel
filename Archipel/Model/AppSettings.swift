@@ -148,8 +148,8 @@ final class AppSettings {
 
     func shows(_ item: StatusBarItem) -> Bool { !hiddenStatusBarItems.contains(item) }
 
-    func setShows(_ item: StatusBarItem, _ shows: Bool) {
-        if shows { hiddenStatusBarItems.remove(item) } else { hiddenStatusBarItems.insert(item) }
+    func toggle(_ item: StatusBarItem) {
+        if shows(item) { hiddenStatusBarItems.insert(item) } else { hiddenStatusBarItems.remove(item) }
     }
 
     // MARK: Notifications

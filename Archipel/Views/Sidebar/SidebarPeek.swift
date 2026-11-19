@@ -116,7 +116,7 @@ final class SidebarPeekModel {
         zoom.run(
             from: snapshot,
             over: window,
-            background: PeekSurface(target: target, in: model).background,
+            background: PaneSurface(target: target, in: model).color,
             select: select,
             destination: { [weak model, weak window] in
                 guard let model, let window else { return nil }
@@ -154,11 +154,8 @@ extension AppModel {
             pane = worktree.focusedPane
         }
         guard let pane, let frame = paneFrames[pane.id], frame.width > 1, frame.height > 1 else { return nil }
-        // Same as PaneCard: concentric with the window's corners, square in the compact style.
-        let windowRadius = window.contentView?.effectiveCornerRadii?.topLeft ?? 0
-        let radius = settings.paneStyle == .comfortable
-            ? Chrome.paneRadius(inWindowWithRadius: windowRadius > 0 ? windowRadius : 16)
-            : 0
+        let windowRadius = window.cornerRadius ?? WindowMetrics().cornerRadius
+        let radius = Chrome.paneRadius(for: settings.paneStyle, windowRadius: windowRadius)
         return PeekZoomDestination(frame: frame, radius: radius)
     }
 
@@ -187,32 +184,12 @@ extension View {
     }
 }
 
-/// The colors the pane would show this target in, so the peek reads as a small copy of it and the
-/// zoom can grow into the pane without a change of color. A session tab takes the terminal's
-/// colors, like `PaneView`; a worktree without sessions shows an empty pane on the text background.
-struct PeekSurface {
-    var background: Color
-    var foreground: Color
-    var colorScheme: ColorScheme?
-
+extension PaneSurface {
+    /// The surface the pane would show this target on: the terminal's for a session, the text
+    /// background for a worktree without sessions.
     @MainActor
     init(target: SessionPeek.Target, in model: AppModel) {
-        if target.sessionID != nil, let colors = model.terminalColors {
-            background = Color(colors.background)
-            foreground = Color(colors.foreground)
-            // Where black and white text have the same contrast, as in PaneView.
-            colorScheme = colors.background.luminance < 0.18 ? .dark : .light
-        } else {
-            background = Color(nsColor: .textBackgroundColor)
-            foreground = .primary
-            colorScheme = nil
-        }
-    }
-}
-
-private extension Color {
-    init(_ rgb: TerminalColors.RGB) {
-        self.init(.sRGB, red: rgb.red, green: rgb.green, blue: rgb.blue)
+        self.init(showsSession: target.sessionID != nil, colors: model.terminalColors)
     }
 }
 
@@ -228,15 +205,15 @@ struct SessionPeekView: View {
 
     var body: some View {
         let session = target.sessionID.flatMap { model.workspace.session(id: $0) }
-        let surface = PeekSurface(target: target, in: model)
+        let surface = PaneSurface(target: target, in: model)
         VStack(alignment: .leading, spacing: 0) {
             header(session)
             output(session, surface: surface)
             hints
         }
         .frame(width: 640)
-        .background(surface.background)
-        .presentationBackground(surface.background)
+        .background(surface.color)
+        .presentationBackground(surface.color)
         .environment(\.colorScheme, surface.colorScheme ?? colorScheme)
     }
 
@@ -279,7 +256,7 @@ struct SessionPeekView: View {
     }
 
     @ViewBuilder
-    private func output(_ session: Session?, surface: PeekSurface) -> some View {
+    private func output(_ session: Session?, surface: PaneSurface) -> some View {
         if let session, let terminal = model.terminals[session.id] {
             PeekTail(foreground: surface.foreground) {
                 SessionPeek.tail(of: terminal.readVisibleText(), lines: Self.lineCount).joined(separator: "\n")
@@ -333,14 +310,7 @@ struct SessionPeekView: View {
 struct PeekTail: View {
     let foreground: Color
     let read: () -> String
-    @State private var text: String
-
-    init(foreground: Color, read: @escaping () -> String) {
-        self.foreground = foreground
-        self.read = read
-        // Read now, so the first frame (and the picture the zoom takes of it) already has the text.
-        _text = State(initialValue: read())
-    }
+    @State private var text = ""
 
     var body: some View {
         // No scroll view: a fixed-size text anchored to the bottom just overflows upward and is
@@ -358,6 +328,10 @@ struct PeekTail: View {
             }
             // Ghostty has no change notification, so the peek polls like the dev server monitor does;
             // it only runs while the popover is up, and only touches the view when the text changed.
+            // Not in init: init runs on every update of the peeked session, and each call would read
+            // the whole viewport only for State to throw it away. onAppear still runs before the
+            // first frame, so the zoom's snapshot has the text.
+            .onAppear { text = read() }
             .task {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(1))

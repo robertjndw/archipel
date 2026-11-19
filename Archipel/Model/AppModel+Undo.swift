@@ -86,13 +86,13 @@ extension AppModel {
         registerUndo("Rename Session") { $0.setTitle(ofSession: id, to: old.title, custom: old.hasCustomTitle) }
     }
 
-    func setName(ofProject id: Project.ID, to name: String) {
+    func renameProject(_ id: Project.ID, to name: String) {
         guard let old = workspace.project(id: id)?.name, old != name else { return }
         mutate { $0.renameProject(id: id, to: name) }
-        registerUndo("Rename Project") { $0.setName(ofProject: id, to: old) }
+        registerUndo("Rename Project") { $0.renameProject(id, to: old) }
     }
 
-    func setLook(ofIsland id: Island.ID, name: String, symbol: String, tint: Tint) {
+    func updateIsland(_ id: Island.ID, name: String, symbol: String, tint: Tint) {
         guard let old = workspace.island(id: id),
               (old.name, old.symbol, old.tint) != (name, symbol, tint)
         else { return }
@@ -104,6 +104,6 @@ extension AppModel {
             }
         }
         let actionName = (old.symbol, old.tint) == (symbol, tint) ? "Rename Island" : "Edit Island"
-        registerUndo(actionName) { $0.setLook(ofIsland: id, name: old.name, symbol: old.symbol, tint: old.tint) }
+        registerUndo(actionName) { $0.updateIsland(id, name: old.name, symbol: old.symbol, tint: old.tint) }
     }
 }

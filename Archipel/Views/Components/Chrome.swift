@@ -13,11 +13,22 @@ enum Chrome {
     /// Room around each pane in the comfortable pane style. Between two panes the gap is this plus
     /// the 1pt split divider, which stays there to be dragged.
     static let paneGap: CGFloat = 6
-    /// Corner radius of a pane in the comfortable pane style: concentric with the window's corners,
-    /// which sit `paneGap` away from the outer cards, and drawn with the same continuous curve.
-    /// Every corner gets it, the inner ones too, so all cards have one shape.
-    static func paneRadius(inWindowWithRadius windowRadius: CGFloat) -> CGFloat {
-        max(windowRadius - paneGap, 4)
+    /// The room around each pane in this style: the top line's distance from the window's top
+    /// edge, and how far the status bar reaches up into the cards' bottom gap. The gap and the bar
+    /// together are the strip under the cards, whose middle is the bottom line.
+    static func paneGap(for style: AppSettings.PaneStyle) -> CGFloat {
+        style == .comfortable ? paneGap : 0
+    }
+    /// Corner radius of a pane: concentric with the window's corners, which sit `paneGap` away
+    /// from the outer cards, and drawn with the same continuous curve. Every corner gets it, the
+    /// inner ones too, so all cards have one shape. Square in the compact style.
+    static func paneRadius(for style: AppSettings.PaneStyle, windowRadius: CGFloat) -> CGFloat {
+        style == .comfortable ? concentricRadius(windowRadius, inset: paneGap) : 0
+    }
+    /// Radius for a shape nested `inset` inside a corner of `radius`. Clamped to 4pt so it never
+    /// turns square.
+    static func concentricRadius(_ radius: CGFloat, inset: CGFloat) -> CGFloat {
+        max(radius - inset, 4)
     }
     /// How far a file, diff or web pane without focus fades into its own background.
     /// Matches Ghostty's default unfocused-split-opacity of 0.7, which terminals follow.
@@ -38,13 +49,6 @@ enum Chrome {
     /// island switcher and its new island button. The strip under the cards is twice this, 30pt,
     /// which leaves a small control 4pt above and below.
     static let bottomLineInset: CGFloat = 15
-
-    /// How far the status bar reaches up into the cards' bottom gap. The gap and the bar together
-    /// are the strip under the cards, and the bar's items belong in the middle of that strip, which
-    /// is the bottom line. The gap is window surface like the bar, so nothing shows the overlap.
-    static func statusBarOverlap(for style: AppSettings.PaneStyle) -> CGFloat {
-        style == .comfortable ? paneGap : 0
-    }
 }
 
 extension View {

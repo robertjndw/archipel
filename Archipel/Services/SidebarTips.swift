@@ -1,3 +1,4 @@
+import ArchipelCore
 import SwiftUI
 import TipKit
 
@@ -17,8 +18,21 @@ enum SidebarTips {
     nonisolated fileprivate static let agentWaitedEvent = Tips.Event(id: "agentWaited")
 
     // Kept as functions so the model does not need TipKit, whose Tab collides with the app's own.
-    static func worktreeSwitched() { Task { await worktreeSwitchEvent.donate() } }
-    static func agentWaited() { Task { await agentWaitedEvent.donate() } }
+    // Every donation is a write to TipKit's store. Once the tip is gone there's no point.
+    static func worktreeSwitched() {
+        if case .invalidated = PeekTip().status { return }
+        Task { await worktreeSwitchEvent.donate() }
+    }
+    static func agentWaited() {
+        if case .invalidated = NeedsMeTip().status { return }
+        Task { await agentWaitedEvent.donate() }
+    }
+    static func workspaceChanged(_ workspace: Workspace) {
+        let islands = workspace.islands.count
+        let worktrees = workspace.islands.reduce(0) { $0 + $1.projects.reduce(0) { $0 + $1.worktrees.count } }
+        if islandCount != islands { islandCount = islands }
+        if worktreeCount != worktrees { worktreeCount = worktrees }
+    }
     static func peeked() { PeekTip().invalidate(reason: .actionPerformed) }
     static func islandSwitched() { IslandSwipeTip().invalidate(reason: .actionPerformed) }
     static func needsMeFilterUsed() { NeedsMeTip().invalidate(reason: .actionPerformed) }

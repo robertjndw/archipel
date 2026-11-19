@@ -7,10 +7,7 @@ extension AppModel {
     /// coming back changes it, so the rest are dropped before they re-render the status bar.
     func recordContext(_ context: SessionContext, for id: Session.ID) {
         let previous = sessionContexts[id]
-        if var unchanged = previous {
-            unchanged.updatedAt = context.updatedAt
-            if unchanged == context { return }
-        }
+        guard previous != context else { return }
         // A new transcript is a new conversation, and the old one's cache says nothing about it.
         let isNewTranscript = previous?.transcriptPath != context.transcriptPath
         if isNewTranscript { promptCaches[id] = nil }

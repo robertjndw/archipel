@@ -83,7 +83,7 @@ struct StatusBarMenuArea: NSViewRepresentable {
 
         @objc private func toggle(_ sender: NSMenuItem) {
             guard let raw = sender.representedObject as? String, let item = AppSettings.StatusBarItem(rawValue: raw) else { return }
-            settings.setShows(item, !settings.shows(item))
+            settings.toggle(item)
         }
 
         @objc private func showSettings() { openSettings?() }
@@ -98,7 +98,7 @@ extension View {
             .accessibilityActions {
                 ForEach(AppSettings.StatusBarItem.allCases) { item in
                     Button((settings.shows(item) ? "Hide " : "Show ") + item.title) {
-                        settings.setShows(item, !settings.shows(item))
+                        settings.toggle(item)
                     }
                 }
             }

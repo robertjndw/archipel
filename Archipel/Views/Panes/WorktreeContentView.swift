@@ -94,11 +94,10 @@ private struct PaneCard: ViewModifier {
     // One modifier chain for both styles rather than a branch: a branch would give the pane a new
     // identity on every switch and remount the terminals inside it.
     func body(content: Content) -> some View {
-        let isCard = style == .comfortable
-        let gap = isCard ? Chrome.paneGap : 0
+        let gap = Chrome.paneGap(for: style)
         // A plain rounded rectangle rather than ConcentricRectangle, so every corner gets the same
         // radius and it comes from the window's real corner radius instead of a fallback value.
-        let radius = isCard ? Chrome.paneRadius(inWindowWithRadius: windowRadius) : 0
+        let radius = Chrome.paneRadius(for: style, windowRadius: windowRadius)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content
             .clipShape(shape)
@@ -207,21 +206,10 @@ private struct PaneView: View {
     private var isDimmed: Bool { !isFocused && worktree.panes.count > 1 }
 
     /// The tab row and the card take the color of what the pane shows, so they read as one surface.
-    /// A terminal also dims the way Ghostty dims its own splits. Everything else is drawn on the
-    /// text background and fades into it.
     private var surface: PaneSurface {
-        if case .session = pane.selectedTab?.content, let colors = model.terminalColors {
-            let background = colors.background
-            return PaneSurface(
-                color: Color(background),
-                veil: Color(colors.unfocusedSplitFill),
-                veilOpacity: 1 - colors.unfocusedSplitOpacity,
-                // Where black and white text have the same contrast.
-                colorScheme: background.luminance < 0.18 ? .dark : .light
-            )
-        }
-        let text = Color(nsColor: .textBackgroundColor)
-        return PaneSurface(color: text, veil: text, veilOpacity: Chrome.unfocusedPaneDim, colorScheme: nil)
+        var showsSession = false
+        if case .session = pane.selectedTab?.content { showsSession = true }
+        return PaneSurface(showsSession: showsSession, colors: model.terminalColors)
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -314,14 +302,37 @@ private struct PaneView: View {
     }
 }
 
-private struct PaneSurface {
+/// The colors a pane draws its content on. The sidebar peek uses the same surface, so the peek
+/// reads as a small copy of the pane and its zoom can grow into the pane without a change of color.
+struct PaneSurface {
     var color: Color
+    var foreground: Color
     /// Laid over a pane without focus at `veilOpacity`.
     var veil: Color
     var veilOpacity: Double
     /// Set when the surface is not in the window's own light or dark, like a dark terminal in a
     /// light window.
     var colorScheme: ColorScheme?
+
+    /// A session tab takes the terminal's colors, and also dims the way Ghostty dims its own
+    /// splits. Everything else is drawn on the text background and fades into it.
+    init(showsSession: Bool, colors: TerminalColors?) {
+        if showsSession, let colors {
+            let background = colors.background
+            color = Color(background)
+            foreground = Color(colors.foreground)
+            veil = Color(colors.unfocusedSplitFill)
+            veilOpacity = 1 - colors.unfocusedSplitOpacity
+            // Where black and white text have the same contrast.
+            colorScheme = background.luminance < 0.18 ? .dark : .light
+        } else {
+            color = Color(nsColor: .textBackgroundColor)
+            foreground = .primary
+            veil = color
+            veilOpacity = Chrome.unfocusedPaneDim
+            colorScheme = nil
+        }
+    }
 }
 
 private extension Color {

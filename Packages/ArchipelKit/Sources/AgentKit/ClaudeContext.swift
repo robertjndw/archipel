@@ -6,22 +6,15 @@ public struct SessionContext: Equatable, Sendable {
     public var windowSize: Int
     /// 0...100.
     public var usedPercent: Double
-    public var outputTokens: Int
     public var transcriptPath: String?
     public var model: String?
-    public var updatedAt: Date
 
-    public init(
-        usedTokens: Int, windowSize: Int, usedPercent: Double, outputTokens: Int,
-        transcriptPath: String?, model: String?, updatedAt: Date
-    ) {
+    public init(usedTokens: Int, windowSize: Int, usedPercent: Double, transcriptPath: String?, model: String?) {
         self.usedTokens = usedTokens
         self.windowSize = windowSize
         self.usedPercent = usedPercent
-        self.outputTokens = outputTokens
         self.transcriptPath = transcriptPath
         self.model = model
-        self.updatedAt = updatedAt
     }
 }
 
@@ -90,9 +83,9 @@ public enum ClaudeTranscript {
               let usage = message["usage"] as? [String: Any]
         else { return nil }
         let creation = usage["cache_creation"] as? [String: Any]
-        let ttl: TimeInterval? = if count(creation?["ephemeral_1h_input_tokens"]) > 0 {
+        let ttl: TimeInterval? = if hasTokens(creation?["ephemeral_1h_input_tokens"]) {
             3600
-        } else if count(creation?["ephemeral_5m_input_tokens"]) > 0 {
+        } else if hasTokens(creation?["ephemeral_5m_input_tokens"]) {
             300
         } else {
             nil
@@ -103,8 +96,7 @@ public enum ClaudeTranscript {
         return Request(id: id, date: date, ttl: ttl)
     }
 
-    private static func count(_ value: Any?) -> Double {
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite else { return 0 }
-        return number.doubleValue
+    private static func hasTokens(_ value: Any?) -> Bool {
+        UsageDecoder.number(value).map { $0.isFinite && $0 > 0 } ?? false
     }
 }

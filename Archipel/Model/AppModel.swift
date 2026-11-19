@@ -589,10 +589,6 @@ final class AppModel {
         changingSelection { _ = $0.addIsland(name: name, symbol: symbol, tint: tint) }
     }
 
-    func updateIsland(_ id: Island.ID, name: String, symbol: String, tint: Tint) {
-        setLook(ofIsland: id, name: name, symbol: symbol, tint: tint)
-    }
-
     func removeIsland(_ id: Island.ID) {
         changingSelection { _ = $0.removeIsland(id: id) }
     }
@@ -669,10 +665,6 @@ final class AppModel {
               await git.isRepository(main.path)
         else { return nil }
         return main.path
-    }
-
-    func renameProject(_ id: Project.ID, to name: String) {
-        setName(ofProject: id, to: name)
     }
 
     func setProject(_ id: Project.ID, expanded: Bool) {
@@ -1733,6 +1725,7 @@ final class AppModel {
         for url in filesBefore.subtracting(openFileURLs) where !documents.isDirty(url) { documents.close(url) }
         webPages.retain(only: webTabIDs)
         refreshAttention()
+        SidebarTips.workspaceChanged(workspace)
         // Here rather than in changingSelection so clicking into another pane counts too.
         if let id = focusedTab?.id { recentTabs.visit(id) }
         // Saved once things have been quiet for a moment, but never later than `longestSaveDelay`

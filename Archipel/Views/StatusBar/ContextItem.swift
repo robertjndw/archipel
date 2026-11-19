@@ -128,12 +128,10 @@ struct CacheCountdown {
 
     var spokenText: String {
         guard isWarm else { return "cache expired" }
-        if remaining > 60 {
-            let minutes = Int((remaining / 60).rounded(.up))
-            return "cache expires in \(minutes) \(minutes == 1 ? "minute" : "minutes")"
-        }
-        let seconds = Int(remaining.rounded(.up))
-        return "cache expires in \(seconds) \(seconds == 1 ? "second" : "seconds")"
+        let left = remaining > 60
+            ? Duration.seconds(60 * (remaining / 60).rounded(.up)).formatted(.units(allowed: [.minutes], width: .wide))
+            : Duration.seconds(remaining.rounded(.up)).formatted(.units(allowed: [.seconds], width: .wide))
+        return "cache expires in \(left)"
     }
 
     /// The moments the text changes: every minute counting back from the expiry, every second in
@@ -230,33 +228,24 @@ struct ContextDetails: View {
         let time = cache.expiresAt.formatted(date: .omitted, time: .shortened)
         let isWarm = isWorking || cache.isWarm(at: now)
         let ttl = Duration.seconds(cache.ttl).formatted(.units(allowed: [.hours, .minutes], width: .wide))
+        let (status, explanation) = if isWorking {
+            ("Warm", "Every request keeps it warm while Claude works.")
+        } else if isWarm {
+            ("Warm until \(time)", "Kept for \(ttl) after each request.")
+        } else {
+            ("Expired at \(time)", "The next message rebuilds it.")
+        }
         return VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Prompt cache")
                 Spacer()
-                Group {
-                    if isWorking {
-                        Text("Warm")
-                    } else if isWarm {
-                        Text("Warm until \(time)")
-                    } else {
-                        Text("Expired at \(time)")
-                    }
-                }
-                .foregroundStyle(isWarm ? .primary : .secondary)
+                Text(status)
+                    .foregroundStyle(isWarm ? .primary : .secondary)
             }
             .font(.callout)
-            Group {
-                if isWorking {
-                    Text("Every request keeps it warm while Claude works.")
-                } else if isWarm {
-                    Text("Kept for \(ttl) after each request.")
-                } else {
-                    Text("The next message rebuilds it.")
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text(explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }

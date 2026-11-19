@@ -37,7 +37,9 @@ struct StatusBar: View {
             openSettings()
         }
         .animation(reduceMotion ? nil : Motion.disclosure, value: settings.hiddenStatusBarItems)
-        .padding(.top, -Chrome.statusBarOverlap(for: model.settings.paneStyle))
+        // Reaches up into the cards' bottom gap, so the items sit on the bottom line. The gap is
+        // window surface like the bar, so nothing shows the overlap.
+        .padding(.top, -Chrome.paneGap(for: model.settings.paneStyle))
     }
 }
 

@@ -60,9 +60,7 @@ private struct SplitDividerSnapper: NSViewRepresentable {
 
         func attachIfNeeded() {
             guard let anchor else { return }
-            var candidate = anchor.superview
-            while let view = candidate, !(view is NSSplitView) { candidate = view.superview }
-            guard let found = candidate as? NSSplitView, found !== split else { return }
+            guard let found = anchor.enclosingSplitView, found !== split else { return }
             detach()
             split = found
             balancedCount = 0
@@ -191,14 +189,21 @@ private struct SplitDividerHider: NSViewRepresentable {
         }
 
         private func apply() {
-            var candidate = superview
-            while let view = candidate, !(view is NSSplitView) { candidate = view.superview }
-            guard let split = candidate as? NSSplitView, split.responds(to: Self.setter) else { return }
+            guard let split = enclosingSplitView, split.responds(to: Self.setter) else { return }
             split.perform(Self.setter, with: hidesDivider ? NSColor.clear : nil)
             split.needsDisplay = true
             split.subviews.forEach { $0.needsDisplay = true }
         }
 
         private static let setter = NSSelectorFromString("setDividerColor:")
+    }
+}
+
+private extension NSView {
+    /// The NSSplitView SwiftUI created for the `HSplitView` or `NavigationSplitView` this view is in.
+    var enclosingSplitView: NSSplitView? {
+        var candidate = superview
+        while let view = candidate, !(view is NSSplitView) { candidate = view.superview }
+        return candidate as? NSSplitView
     }
 }

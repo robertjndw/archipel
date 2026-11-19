@@ -234,7 +234,7 @@ public final class HookServer: Sendable {
         // the context window. API key accounts get no limits but still get the context.
         if envelope["source"] as? String == "claude-statusline" {
             let usage = UsageDecoder.claudeStatusLine(payload, at: date)
-            let context = UsageDecoder.claudeContext(payload, at: date)
+            let context = UsageDecoder.claudeContext(payload)
             guard usage != nil || context != nil else { return nil }
             return HookMessage(sessionID: session, event: nil, agentSessionID: nil, usage: usage, context: context)
         }

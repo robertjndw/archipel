@@ -51,7 +51,7 @@ public enum UsageDecoder {
 
     /// `context_window` from Claude's status line input. Nil before the first reply, when Claude sends
     /// no `current_usage` and zero tokens, since a bar of 0 of N would only look like a measurement.
-    public static func claudeContext(_ payload: [String: Any], at date: Date) -> SessionContext? {
+    public static func claudeContext(_ payload: [String: Any]) -> SessionContext? {
         guard let window = payload["context_window"] as? [String: Any],
               let size = integer(window["context_window_size"]), size > 0
         else { return nil }
@@ -64,10 +64,8 @@ public enum UsageDecoder {
             usedTokens: max(used, 0),
             windowSize: size,
             usedPercent: min(max(percent, 0), 100),
-            outputTokens: max(integer(window["total_output_tokens"]) ?? 0, 0),
             transcriptPath: (payload["transcript_path"] as? String).flatMap { $0.isEmpty ? nil : $0 },
-            model: ((model?["display_name"] as? String) ?? (model?["id"] as? String)).flatMap { $0.isEmpty ? nil : $0 },
-            updatedAt: date
+            model: ((model?["display_name"] as? String) ?? (model?["id"] as? String)).flatMap { $0.isEmpty ? nil : $0 }
         )
     }
 
@@ -92,7 +90,7 @@ public enum UsageDecoder {
         return nil
     }
 
-    private static func number(_ value: Any?) -> Double? {
+    static func number(_ value: Any?) -> Double? {
         // JSONSerialization hands back NSNumber, and Bool also bridges to it.
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         return number.doubleValue

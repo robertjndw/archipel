@@ -49,11 +49,6 @@ public enum SessionPeek {
             arriving = (worktree, now)
         }
 
-        public mutating func reset() {
-            shown = []
-            arriving = nil
-        }
-
         public func isShowing(at now: Date = .now) -> Bool {
             if !shown.isEmpty { return true }
             guard let arriving else { return false }

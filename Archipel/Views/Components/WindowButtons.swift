@@ -14,7 +14,7 @@ enum WindowButtons {
 
     /// How far the top line sits below the window's top edge: the cards' gap, if they have one.
     static func topInset(for style: AppSettings.PaneStyle) -> CGFloat {
-        style == .comfortable ? Chrome.paneGap : 0
+        Chrome.paneGap(for: style)
     }
 
     /// Where content next to the buttons may start, from the window's leading edge. AppKit's own
@@ -31,6 +31,14 @@ struct WindowMetrics: Equatable {
     /// The radius of the window's corners as AppKit reports it. 16pt is what macOS 27 reports for
     /// a titled window without a toolbar; it stands in until the window is on screen.
     var cornerRadius: CGFloat = 16
+}
+
+extension NSWindow {
+    /// The radius of the window's corners as AppKit reports it, nil before it has one.
+    var cornerRadius: CGFloat? {
+        guard let radius = contentView?.effectiveCornerRadii?.topLeft, radius > 0 else { return nil }
+        return radius
+    }
 }
 
 extension EnvironmentValues {
@@ -122,14 +130,14 @@ private struct WindowButtonPlacement: NSViewRepresentable {
             guard !window.styleMask.contains(.fullScreen),
                   let close = window.standardWindowButton(.closeButton),
                   let superview = close.superview else { return }
-            let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
-                .compactMap { window.standardWindowButton($0) }
             let current = close.convert(NSPoint(x: close.bounds.midX, y: close.bounds.midY), to: nil)
             let target = NSPoint(x: center, y: window.frame.height - center)
             let dx = target.x - current.x
             var dy = target.y - current.y
             guard abs(dx) >= 0.5 || abs(dy) >= 0.5 else { return }
             if superview.isFlipped { dy = -dy }
+            let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+                .compactMap { window.standardWindowButton($0) }
             for button in buttons {
                 button.setFrameOrigin(NSPoint(x: button.frame.origin.x + dx, y: button.frame.origin.y + dy))
             }
@@ -140,7 +148,7 @@ private struct WindowButtonPlacement: NSViewRepresentable {
             metrics.isFullScreen = window.styleMask.contains(.fullScreen)
             // A window in full screen has square corners; the panes keep the radius they had, so
             // they do not change shape on the way in and out.
-            if !metrics.isFullScreen, let radius = window.contentView?.effectiveCornerRadii?.topLeft, radius > 0 {
+            if !metrics.isFullScreen, let radius = window.cornerRadius {
                 metrics.cornerRadius = radius
             }
             guard metrics != reported else { return }

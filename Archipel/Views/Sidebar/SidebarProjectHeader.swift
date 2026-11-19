@@ -38,6 +38,8 @@ struct SidebarProjectHeader: View {
         .animation(.smooth, value: summary)
         .accessibilityElement(children: .contain)
         .accessibilityValue(project.isExpanded ? "" : summary.accessibilityDescription)
+        // VoiceOver can't hover, so it gets the add button as an action instead.
+        .accessibilityAction(named: "Add Worktree") { model.addWorktreeProjectID = project.id }
         .contextMenu { menu }
         .confirmationDialog("Remove the project \(project.name)?", isPresented: $isConfirmingRemoval) {
             Button("Remove Project", role: .destructive) { model.removeProject(project) }
@@ -76,7 +78,9 @@ struct SidebarProjectHeader: View {
                 .help("Add a worktree to \(project.name)")
                 .opacity(isHovered ? 1 : 0)
                 .allowsHitTesting(isHovered)
-                .accessibilityHidden(!isHovered)
+                // Hidden from accessibility even while hovered. Otherwise SwiftUI merges its name
+                // into the title's label ("fixture, Add Worktree"). The header's action covers it.
+                .accessibilityHidden(true)
         }
     }
 

@@ -22,7 +22,7 @@ private struct FolderDropModifier: ViewModifier {
     private var outline: UnevenRoundedRectangle {
         let top = Self.inset + WindowButtons.topInset(for: model.settings.paneStyle)
         return UnevenRoundedRectangle(
-            topLeadingRadius: max(windowRadius - top, 4),
+            topLeadingRadius: Chrome.concentricRadius(windowRadius, inset: top),
             bottomLeadingRadius: windowRadius - Self.inset,
             bottomTrailingRadius: Chrome.controlRadius,
             topTrailingRadius: Chrome.controlRadius,
