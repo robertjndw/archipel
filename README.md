@@ -118,6 +118,14 @@ Download `Archipel-<version>.dmg` from the
 [releases](https://github.com/robertjndw/archipel/releases) and drag Archipel into
 Applications.
 
+Or install it with [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask robertjndw/tap/archipel
+```
+
+Archipel updates itself, so `brew upgrade` leaves it alone unless you pass `--greedy`.
+
 ### From source
 
 **Requirements:** macOS 27, Xcode 27 and Zig 0.17 (`brew install zig`). You only need
