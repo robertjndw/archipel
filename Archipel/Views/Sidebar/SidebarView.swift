@@ -220,7 +220,6 @@ private struct ProjectsDisclosureButton: View {
 /// and Finder's sidebar keep their controls up there.
 private struct SidebarHeader: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.showsWindowButtons) private var showsWindowButtons
     @Binding var isAddingProject: Bool
     let toggleSidebar: () -> Void
@@ -230,38 +229,31 @@ private struct SidebarHeader: View {
     private static let slotWidth: CGFloat = 22
 
     var body: some View {
-        let waiting = model.workspaceAttention.needsAttention
+        // Counts every island, since the filter lists them all.
+        let attention = model.workspaceAttention
+        let waiting = attention.needsAttention
         HStack(spacing: 4) {
             // No title: the switcher at the bottom already names the island.
             Spacer(minLength: 0)
             Button {
-                model.showsOnlyNeedsMe.toggle()
+                model.toggleNeedsMeFilter()
             } label: {
                 Label("Show Only What Needs Me", systemImage: model.needsMeFilterSymbol)
                     .contentTransition(.symbolEffect(.replace))
                     .foregroundStyle(model.showsOnlyNeedsMe ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    .symbolEffect(.bounce, options: .nonRepeating, value: waiting)
+                    // No dot while filtering: the list already shows what's waiting.
+                    .overlay(alignment: .topTrailing) {
+                        StatusDot(summary: model.showsOnlyNeedsMe ? .zero : attention)
+                            .offset(x: 3, y: -2)
+                    }
             }
-            .help(model.showsOnlyNeedsMe ? "Show everything again (⌥⌘U)" : "Show only the worktrees that need you, from every island (⌥⌘U)")
+            .help(needsMeHelp(waiting: waiting))
             .popoverTip(SidebarTips.group.currentTip as? NeedsMeTip, arrowEdge: .bottom)
             .tipViewStyle(CompactTipStyle())
             .accessibilityIdentifier("sidebar.needsMe")
-            .accessibilityValue(model.showsOnlyNeedsMe ? "On" : "Off")
+            .accessibilityValue(model.showsOnlyNeedsMe ? "On" : waiting > 0 ? "Off, \(waiting) waiting" : "Off")
             .frame(width: Self.slotWidth)
-            if waiting > 0 {
-                // Jumps anywhere, other islands included, so it counts the whole workspace.
-                Button {
-                    model.selectNextNeedingAttention()
-                } label: {
-                    Label("Next Session Waiting for You", systemImage: "bell.badge.fill")
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.orange, .secondary)
-                        .symbolEffect(.bounce, options: .nonRepeating, value: waiting)
-                }
-                .help(waiting == 1 ? "1 session is waiting for you (⇧⌘U)" : "\(waiting) sessions are waiting for you (⇧⌘U)")
-                .accessibilityValue("\(waiting) waiting")
-                .frame(width: Self.slotWidth)
-                .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
-            }
             ProjectsDisclosureButton()
                 .labelStyle(.iconOnly)
                 .frame(width: Self.slotWidth)
@@ -282,12 +274,17 @@ private struct SidebarHeader: View {
         .buttonStyle(.borderless)
         // Monochrome like the buttons over Xcode's navigator; the accent color stays with the content.
         .foregroundStyle(.secondary)
-        .animation(.snappy, value: waiting > 0)
         // Leaves the window buttons their corner.
         .padding(.leading, showsWindowButtons ? WindowButtons.trailingEdge(for: model.settings.paneStyle) : 0)
         // Keeps the sidebar glyph 10pt from the edge; its slot is wider than the glyph.
         .padding(.trailing, 6.5)
         .frame(height: PaneTabBar.height)
+    }
+
+    private func needsMeHelp(waiting: Int) -> String {
+        if model.showsOnlyNeedsMe { return "Show everything again (⌥⌘U). ⇧⌘U jumps to the next waiting session." }
+        let action = "Show what needs you, from every island, and jump to it (⌥⌘U)"
+        return waiting > 0 ? "\(waiting) waiting. \(action)" : action
     }
 }
 

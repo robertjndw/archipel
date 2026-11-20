@@ -75,7 +75,7 @@ struct IslandSwipeTip: Tip {
 
 struct NeedsMeTip: Tip {
     var title: Text { Text("Focus on What Needs You") }
-    var message: Text? { Text("Show only the worktrees waiting for you, from every island.") }
+    var message: Text? { Text("Show only the worktrees waiting for you, from every island, and jump to the next one.") }
     var image: Image? { Image(systemName: "bell") }
 
     var rules: [Rule] {

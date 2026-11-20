@@ -148,7 +148,7 @@ struct PaletteCommand: Identifiable {
                 title: model.needsMeFilterTitle,
                 symbol: model.needsMeFilterSymbol,
                 shortcutHint: "⌥⌘U"
-            ) { model.showsOnlyNeedsMe.toggle() },
+            ) { model.toggleNeedsMeFilter() },
             PaletteCommand(id: "mark-read", title: "Mark as Read", symbol: "envelope.open", isAvailable: actions.selectedWorktreeHasUnread) {
                 actions.markSelectedWorktreeRead()
             },
