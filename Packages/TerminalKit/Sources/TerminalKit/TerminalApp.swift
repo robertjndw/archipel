@@ -175,8 +175,36 @@ public final class TerminalApp {
         }
     }
 
+    /// Settings we change from Ghostty's defaults. Ghostty pads the grid by only 2pt, which puts
+    /// the text right against the edge of the pane. 14pt lines the first column up with the tab
+    /// icon above it. No padding balance, as that moves the left edge by up to half a cell
+    /// whenever the pane is resized. With that much padding, a prompt bar or a TUI with its own
+    /// background would stop short of the pane edge, so rows extend their color into it.
+    private static let defaults = """
+        window-padding-x = 14
+        window-padding-y = 6
+        window-padding-color = extend
+        """
+
+    /// Ghostty can only load config from a file, so the defaults go to one in the temp directory.
+    private static let defaultsFile: URL? = {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("archipel-ghostty-defaults.ghostty")
+        do {
+            try defaults.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            logger.error("could not write ghostty defaults: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }()
+
     private static func loadConfig() -> ghostty_config_t? {
         guard let config = ghostty_config_new() else { return nil }
+        // Before the user's config, so their own settings still win.
+        if let defaults = defaultsFile {
+            ghostty_config_load_file(config, defaults.path)
+        }
         ghostty_config_load_default_files(config)
         ghostty_config_load_recursive_files(config)
         ghostty_config_finalize(config)
