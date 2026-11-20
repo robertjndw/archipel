@@ -174,6 +174,10 @@ final class ManualAgentTests: ArchipelUITestCase {
             guard let hooks = try self.hooksInSettingsFile() else { return true }
             return hooks.keys.allSatisfy { self.command(for: $0, in: hooks) == nil }
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: hookLink.path), "Turning it off should remove the link too.")
+        // The link goes only after the file is rewritten, so checking once right after the entries
+        // vanish races the app.
+        waitUntil("turning it off removes the link too") {
+            (try? FileManager.default.destinationOfSymbolicLink(atPath: self.hookLink.path)) == nil
+        }
     }
 }
