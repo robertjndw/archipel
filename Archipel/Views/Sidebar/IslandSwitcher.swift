@@ -275,7 +275,7 @@ private struct IslandButton: View {
 /// states. No count: at this size a number covers the icon, and the tooltip, VoiceOver and the Dock
 /// badge carry it. The ring is cut out in the surface's color so the dot sits on the icon instead of
 /// running into its strokes.
-private struct StatusDot: View {
+struct StatusDot: View {
     let summary: AttentionSummary
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

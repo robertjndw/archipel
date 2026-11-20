@@ -441,7 +441,7 @@ private struct TabMenuItems: View {
         Divider()
         Button("Next Session Needing Attention", systemImage: "bell.badge") { model.selectNextNeedingAttention() }
             .keyboardShortcut("u", modifiers: [.command, .shift])
-        Button(model.needsMeFilterTitle, systemImage: model.needsMeFilterSymbol) { model.showsOnlyNeedsMe.toggle() }
+        Button(model.needsMeFilterTitle, systemImage: model.needsMeFilterSymbol) { model.toggleNeedsMeFilter() }
             .keyboardShortcut("u", modifiers: [.command, .option])
     }
 }

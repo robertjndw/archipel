@@ -62,7 +62,8 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
 - The Dock icon gets a badge, and the menu bar icon lists every session, the ones
   waiting for you first. <kbd>⇧</kbd><kbd>⌘</kbd><kbd>U</kbd> jumps to the next one.
 - The bell in the sidebar header (<kbd>⌥</kbd><kbd>⌘</kbd><kbd>U</kbd>) narrows the
-  sidebar to the worktrees that need you, from every island.
+  sidebar to the worktrees that need you, from every island, and jumps to the next
+  one. It gets a dot when something is waiting.
 - Claude sessions show how many subagents they are running.
 
 ### Reviewing and committing

@@ -34,6 +34,19 @@ extension AppModel {
     /// Filled while the filter is on.
     var needsMeFilterSymbol: String { showsOnlyNeedsMe ? "bell.fill" : "bell" }
 
+    /// Turning the filter on also jumps to the next session that needs the user, unless the
+    /// focused one already does, since they may be answering it. Turning it off never jumps.
+    func toggleNeedsMeFilter() {
+        guard !showsOnlyNeedsMe else {
+            showsOnlyNeedsMe = false
+            return
+        }
+        // Filter before selecting, so the selection pins the row we jump to.
+        showsOnlyNeedsMe = true
+        if let focused = focusedSessionID, activities[focused]?.needsMe == true { return }
+        selectNextNeedingAttention()
+    }
+
     /// The island before or after the selected one, wrapping around.
     func selectAdjacentIsland(offset: Int) {
         let islands = workspace.islands
