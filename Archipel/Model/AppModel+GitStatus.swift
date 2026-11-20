@@ -298,7 +298,8 @@ extension AppModel {
             var failures = 0
             if failed {
                 let previous = self.pullRequests[id].flatMap { $0.branch == branch ? $0 : nil }
-                pullRequest = previous?.pullRequest
+                // Without `gh` there is nothing left to vouch for the old badge.
+                if client != nil { pullRequest = previous?.pullRequest }
                 failures = (previous?.failures ?? 0) + 1
             }
             self.pullRequests[id] = PullRequestLookup(branch: branch, pullRequest: pullRequest, checkedAt: .now, failures: failures)
