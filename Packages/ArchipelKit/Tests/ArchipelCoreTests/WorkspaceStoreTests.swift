@@ -53,6 +53,16 @@ struct WorkspaceStoreTests {
         #expect(try store.load().project(id: p.id)?.dismissedWorktreePaths == ["/tmp/p-gone"])
     }
 
+    @Test func sessionArgumentsDefaultToNoneAndRoundTrip() throws {
+        let json = #"{"id": "576782B3-1F07-40B8-AED6-EE5CFAEFE199", "title": "Claude Code", "agent": "claude", "createdAt": 0}"#
+        // Older workspace files don't have the key.
+        #expect(try JSONDecoder().decode(Session.self, from: Data(json.utf8)).arguments == nil)
+
+        let session = Session(title: "Claude Code (Fable)", agent: .claude, arguments: "--model fable --verbose")
+        let decoded = try JSONDecoder().decode(Session.self, from: JSONEncoder().encode(session))
+        #expect(decoded.arguments == "--model fable --verbose")
+    }
+
     @Test func sessionScriptDefaultsToNoneAndRoundTrips() throws {
         let id = "576782B3-1F07-40B8-AED6-EE5CFAEFE199"
         func session(_ extra: String) throws -> Session {

@@ -1110,12 +1110,17 @@ final class AppModel {
 
     // MARK: Sessions
 
-    func newSession(in worktreeID: Worktree.ID, agent: AgentDefinition, pane: Pane.ID? = nil) {
+    /// The preset's arguments are copied onto the session, so later edits to the preset don't
+    /// change it. Without a preset the session follows the agent's default preset.
+    func newSession(in worktreeID: Worktree.ID, agent: AgentDefinition, preset: LaunchPreset? = nil, pane: Pane.ID? = nil) {
         guard let worktree = workspace.worktree(id: worktreeID) else { return }
+        // Numbered per agent, not per preset, so "Claude Code (Opus) 2" means the second Claude tab.
         let count = worktree.sessions.count { $0.agent.rawValue == agent.id }
+        let baseTitle = preset.map { "\(agent.displayName) (\($0.title))" } ?? agent.displayName
         let session = Session(
-            title: count == 0 ? agent.displayName : "\(agent.displayName) \(count + 1)",
-            agent: AgentKind(rawValue: agent.id)
+            title: count == 0 ? baseTitle : "\(baseTitle) \(count + 1)",
+            agent: AgentKind(rawValue: agent.id),
+            arguments: preset?.arguments
         )
         changingSelection {
             _ = $0.addSession(session, to: worktreeID, pane: pane)
@@ -1492,7 +1497,7 @@ final class AppModel {
             command = resume
         }
         if definition.acceptsPrompts {
-            command.arguments += settings.extraArguments(for: definition.id)
+            command.arguments += session.arguments.map(ArgumentSplitter.split) ?? settings.extraArguments(for: definition.id)
         }
         return command
     }

@@ -48,6 +48,19 @@ struct PaletteCommand: Identifiable {
             }
         }
 
+        // Flat entries rather than a submenu, so typing a preset's name finds the command.
+        let presetSessions = model.presetsInMenuOrder.enumerated().map { index, entry in
+            PaletteCommand(
+                id: "new-preset-\(entry.preset.id.uuidString)",
+                title: "New \(entry.agent.displayName) Session: \(entry.preset.title)",
+                symbol: entry.agent.symbolName,
+                shortcutHint: index < 9 ? "⌃⌘\(index + 1)" : nil,
+                isAvailable: hasSelection && model.canStartSession(with: entry.agent)
+            ) {
+                if let worktreeID { model.newSession(in: worktreeID, agent: entry.agent, preset: entry.preset) }
+            }
+        }
+
         let stayAwake = model.stayAwake
         let stayAwakeModes = StayAwake.Mode.allCases.map { mode in
             PaletteCommand(
@@ -227,7 +240,7 @@ struct PaletteCommand: Identifiable {
             PaletteCommand(id: "help", title: "Archipel Help", symbol: "questionmark.circle", refocusesTab: false) {
                 NSWorkspace.shared.open(AppActions.helpURL)
             },
-        ]
+        ] + presetSessions
     }
 }
 

@@ -61,9 +61,10 @@ class ArchipelUITestCase: XCTestCase {
     var hookHelper: URL { Self.builtApp.url.appending(path: "Contents/Helpers/archipel-hook") }
 
     /// Starts the app with nothing of the previous launch but the sandbox. Pass `keepingState` to
-    /// launch it again the way a user reopening the app would find it.
+    /// launch it again the way a user reopening the app would find it. `defaultAgent` is what ⌘T
+    /// starts, the shell unless a test is about the agent New Session opens.
     @discardableResult
-    func launch(keepingState: Bool = false) throws -> XCUIApplication {
+    func launch(keepingState: Bool = false, defaultAgent: String = "shell") throws -> XCUIApplication {
         let built = Self.builtApp
         // XCUIApplication.launch() terminates every running app with the same bundle identifier.
         // Only the UITests configuration gives the app an id of its own; built any other way this
@@ -98,7 +99,7 @@ class ArchipelUITestCase: XCTestCase {
             // Without the first, new worktrees would land in ~/.archipel.
             "-settings.worktreesRoot", sandbox.worktreesRoot.path,
             // The default would be whichever real agent is installed on this machine.
-            "-settings.defaultAgentID", "shell",
+            "-settings.defaultAgentID", defaultAgent,
             "-settings.showsMenuBarExtra", "NO",
             "-settings.fetchesAutomatically", "NO",
             "-settings.showsPullRequests", "NO",
@@ -116,9 +117,9 @@ class ArchipelUITestCase: XCTestCase {
 
     /// Seeds the workspace file, then launches.
     @discardableResult
-    func launch(with workspace: Workspace) throws -> XCUIApplication {
+    func launch(with workspace: Workspace, defaultAgent: String = "shell") throws -> XCUIApplication {
         try sandbox.seed(workspace)
-        return try launch()
+        return try launch(defaultAgent: defaultAgent)
     }
 
     /// Ends the app the way the tests end it between two launches. The workspace is saved a moment

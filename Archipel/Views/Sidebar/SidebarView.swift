@@ -293,6 +293,7 @@ private struct SidebarHeader: View {
 
 struct NewSessionButtons: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
     let worktree: Worktree.ID
     var pane: Pane.ID?
 
@@ -304,6 +305,23 @@ struct NewSessionButtons: View {
             }
             .disabled(!canStart)
             .help(canStart ? "" : agent.missingCommandHint)
+        }
+        let presets = model.presetsInMenuOrder
+        if !presets.isEmpty {
+            Divider()
+            Menu("New Session with Preset", systemImage: "rectangle.stack") {
+                ForEach(presets, id: \.preset.id) { entry in
+                    Button("\(entry.agent.displayName): \(entry.preset.title)", symbol: entry.agent.symbolName) {
+                        model.newSession(in: worktree, agent: entry.agent, preset: entry.preset, pane: pane)
+                    }
+                    .disabled(!model.canStartSession(with: entry.agent))
+                }
+                Divider()
+                Button("Edit Presets…") {
+                    SettingsView.select(.agents)
+                    openSettings()
+                }
+            }
         }
     }
 }
