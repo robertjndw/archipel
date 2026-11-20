@@ -82,6 +82,55 @@ final class ManualAgentTests: ArchipelUITestCase {
         XCTAssertEqual(try sandbox.savedWorkspace().allSessions.map(\.agent), [.shell])
     }
 
+    // MARK: Closing and restarting
+
+    private func isRunning(_ pid: Int32) -> Bool { kill(pid, 0) == 0 }
+
+    func testClosingAShellTabWithAHandStartedClaudeAsksFirst() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let stub = try sandbox.installManualClaudeStub()
+        try launch(with: repository.workspace(sessions: [.shell()]))
+        assertExists(tab("Shell"), "The seeded session should have a tab.")
+
+        typeClaude(stub)
+        let started = try XCTUnwrap(waitForStub(stub))
+        waitUntil("the sidebar shows Claude", timeout: Self.scanTimeout) { self.claudeIcon.exists }
+
+        // Only a session with a turn in flight asks, so an idle Claude would close without a word.
+        try stub.progressOn()
+        waitUntil("the progress report makes the window show Claude working") { self.agentsStatus == "1 agent working" }
+
+        // The saved session is a shell, so without detection this would close without asking.
+        chooseMenu("File", "Close Tab")
+        let confirm = sheet.buttons["Close Tab"]
+        assertExists(confirm, "Closing a hand-started Claude that is working should ask first.")
+        let question = sheet.staticTexts
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Claude Code will be stopped", "Claude Code will be stopped"))
+            .element(boundBy: 0)
+        assertExists(question, "The dialog should say the detected Claude is what stops.")
+        sheet.buttons["Cancel"].click()
+        assertGone(sheet, "Cancel should dismiss the dialog.")
+        XCTAssertEqual(tabs.count, 1, "Cancel should leave the tab open.")
+        XCTAssertTrue(isRunning(started.pid), "Cancel should leave Claude running.")
+
+        // A detected Claude never saves a conversation id, so there is nothing to start over.
+        tab("Shell").rightClick()
+        waitUntil("the tab menu is open") { self.app.menuItems["Restart Session"].exists }
+        // The Session menu in the menu bar always carries the item, disabled without a
+        // conversation, and app-wide queries see it too. The tab menu leaves it out instead.
+        let freshRestarts = app.menuItems.matching(
+            NSPredicate(format: "title == %@ AND enabled == true", "Restart with a New Conversation")
+        )
+        XCTAssertEqual(freshRestarts.count, 0, "A hand-started Claude has no saved conversation to replace.")
+        app.typeKey(.escape, modifierFlags: [])
+
+        chooseMenu("File", "Close Tab")
+        assertExists(confirm, "The dialog should come back.")
+        confirm.click()
+        waitUntil("the tab is gone") { self.tabs.count == 0 }
+        waitUntil("closing stopped Claude") { !self.isRunning(started.pid) }
+    }
+
     // MARK: Hooks in the user's settings
 
     private var hookSwitch: XCUIElement { settingsWindow.switches["settings.claudeUserHooks"] }
