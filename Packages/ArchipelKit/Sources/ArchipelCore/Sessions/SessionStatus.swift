@@ -42,6 +42,9 @@ public enum AgentEvent: Equatable, Sendable {
     case terminalNotification(title: String, body: String)
     case bell
     case processExited(code: Int32)
+    /// An agent the user started by hand in a shell tab exited, and the shell's prompt is back. The
+    /// terminal itself keeps running, so this is not an exit.
+    case agentLeft
     /// Claude started a subagent. Ids are Claude's `agent_id`.
     case subagentStarted(id: String)
     /// A hook fired from inside a subagent, such as one of its tool calls.

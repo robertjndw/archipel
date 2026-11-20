@@ -3,6 +3,7 @@
 //   Claude Code: archipel-hook                      (payload on stdin)
 //   Codex:       archipel-hook codex-notify <json>  (payload appended as the last argument)
 //   Claude Code: archipel-hook statusline           (status line input on stdin)
+//   Claude Code: archipel-hook user-settings <socket>  (entry in the user's own settings, stdin)
 //
 // As a hook this runs inside the agent's hook machinery, so it must never print to stdout (Claude
 // parses hook stdout), never exit non-zero (exit 2 blocks Claude), and never hang. Every failure
@@ -19,12 +20,43 @@ signal(SIGPIPE, SIG_IGN)
 
 let arguments = CommandLine.arguments
 let isStatusLine = arguments.count >= 2 && arguments[1] == "statusline"
+// Keep these in step with ClaudeUserHooks in AgentKit; this target has no dependencies.
+let isUserSettings = arguments.count >= 2 && arguments[1] == "user-settings"
+let launchedByArchipelVariable = "ARCHIPEL_CLAUDE_HOOKS"
 
 // Watchdog: whatever blocks (a stdin that never closes, a wedged socket, a slow status line
 // script), the agent gets its exit 0. The user's status line gets more time, since it may run git.
 DispatchQueue.global().asyncAfter(deadline: .now() + (isStatusLine ? 5 : 2)) { exit(0) }
 
+/// The entry in the user's settings runs for every Claude on the Mac. It only reports for a
+/// hand-started Claude in a tab of the Archipel that installed it.
+func userSettingsMayReport() -> Bool {
+    let environment = ProcessInfo.processInfo.environment
+    // Archipel's own launches already report through --settings; a second copy would double every event.
+    if let flag = environment[launchedByArchipelVariable], !flag.isEmpty { return false }
+    guard arguments.count >= 3, let socket = environment["ARCHIPEL_SOCKET"] else { return true }
+    // A tab of another Archipel build (Debug beside release) must not feed this one's socket.
+    return socket == arguments[2]
+}
+
+/// Parent first, then up the tree, so the app can tell which process sent the hook and not mistake
+/// a nested `claude -p` run by a tool for the Claude the user started. The chain is usually helper,
+/// sh, claude, so a few levels are enough.
+func ancestorPIDs(limit: Int = 6) -> [Int] {
+    var result: [Int] = []
+    var pid = getppid()
+    while pid > 1, result.count < limit, !result.contains(Int(pid)) {
+        result.append(Int(pid))
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { break }
+        pid = pid_t(info.pbi_ppid)
+    }
+    return result
+}
+
 func run() {
+    if isUserSettings, !userSettingsMayReport() { return }
     let source: String
     let rawPayload: Data
     if arguments.count >= 3, arguments[1] == "codex-notify" {
@@ -46,7 +78,12 @@ func run() {
             forward(object.filter { keys.contains($0.key) }, source: source)
         }
     } else if let payload {
-        forward(slimmed(payload, rawSize: rawPayload.count), source: source)
+        forward(
+            slimmed(payload, rawSize: rawPayload.count),
+            source: source,
+            origin: isUserSettings ? "user-settings" : nil,
+            ancestors: isUserSettings ? ancestorPIDs() : nil
+        )
     }
 
     if isStatusLine {
@@ -57,7 +94,7 @@ func run() {
 /// The keys `HookDecoder` in the app reads, for Claude and Codex alike. Keep the two in step.
 let decodedKeys = [
     "hook_event_name", "session_id", "agent_id", "tool_name", "notification_type", "message",
-    "last_assistant_message", "type", "thread-id", "last-assistant-message",
+    "last_assistant_message", "type", "thread-id", "last-assistant-message", "source", "reason",
 ]
 
 /// The app drops anything over 4 MiB, and a permission request for a large Write carries the
@@ -84,7 +121,7 @@ func slimmed(_ payload: Any, rawSize: Int) -> Any {
     return slim
 }
 
-func forward(_ payload: Any, source: String) {
+func forward(_ payload: Any, source: String, origin: String? = nil, ancestors: [Int]? = nil) {
     let environment = ProcessInfo.processInfo.environment
     guard
         let session = environment["ARCHIPEL_SESSION_ID"], !session.isEmpty,
@@ -92,9 +129,10 @@ func forward(_ payload: Any, source: String) {
     else { return }
 
     // Re-serialising guarantees a single line, which is how the server frames messages.
-    guard var envelope = try? JSONSerialization.data(
-        withJSONObject: ["session": session, "source": source, "payload": payload]
-    ) else { return }
+    var message: [String: Any] = ["session": session, "source": source, "payload": payload]
+    if let origin { message["origin"] = origin }
+    if let ancestors { message["ancestorPIDs"] = ancestors }
+    guard var envelope = try? JSONSerialization.data(withJSONObject: message) else { return }
     envelope.append(UInt8(ascii: "\n"))
 
     send(envelope, to: socketPath)

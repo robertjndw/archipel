@@ -25,7 +25,7 @@ extension AppModel {
             for worktree in project.worktrees {
                 for session in worktree.sessions {
                     guard let activity = activities[session.id], let kind = Self.menuBarKind(of: activity) else { continue }
-                    let definition = session.agent.definition
+                    let definition = effectiveAgent(for: session).definition
                     let branch = worktree.branch ?? worktree.path.lastPathComponent
                     entries.append(MenuBarEntry(
                         id: session.id,

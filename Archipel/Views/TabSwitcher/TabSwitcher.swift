@@ -193,7 +193,7 @@ private struct SwitcherCard: View {
             let session = model.workspace.session(id: id)
             return Label(
                 title: session?.displayTitle ?? "Session",
-                symbol: (session?.agent.definition ?? .shell).symbolName,
+                symbol: (session.map { model.effectiveAgent(for: $0).definition } ?? .shell).symbolName,
                 place: where_,
                 project: project,
                 activity: model.activity(for: id)

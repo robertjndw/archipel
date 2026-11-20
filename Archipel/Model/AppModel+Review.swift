@@ -21,13 +21,16 @@ extension AppModel {
     /// still connects the message to what they did.
     static let reviewDeliveryTimeout = Duration.seconds(30)
 
-    /// Agent sessions only: a plain shell would run the prompt's lines as commands.
+    /// Agent sessions only: a plain shell would run the prompt's lines as commands. A shell tab counts
+    /// while Claude runs in it.
     func reviewTargets(in worktree: Worktree) -> [ReviewTarget] {
-        worktree.sessions.filter(\.agent.definition.acceptsPrompts).map { session in
-            ReviewTarget(
+        worktree.sessions.compactMap { session in
+            let agent = effectiveAgent(for: session)
+            guard agent.acceptsPrompts else { return nil }
+            return ReviewTarget(
                 id: session.id,
                 title: session.displayTitle,
-                symbolName: session.agent.definition.symbolName
+                symbolName: agent.definition.symbolName
             )
         }
     }
@@ -86,7 +89,8 @@ extension AppModel {
               let startedAt = terminalStartTimes[id]
         else { return }
 
-        let settle = session.agent.definition.reportsLifecycleThroughHooks
+        let agent = effectiveAgent(for: session)
+        let settle = agent.reportsLifecycleThroughHooks
             ? Self.reviewSettleTimeForClaude : Self.reviewSettleTimeForUnhookedAgents
         let wait = settle - startedAt.duration(to: .now)
         if wait > .zero {
@@ -102,6 +106,12 @@ extension AppModel {
         pendingReviews[id] = nil
         let comments = reviewComments.comments(in: pending.root)
         guard !comments.isEmpty else { return }
+        // A hand-started Claude can exit or be suspended at any time, and the shell would then run
+        // each line of the prompt as a command.
+        guard agent.acceptsPrompts, detectedAgentHoldsTerminal(id) else {
+            problem = "\(session.displayTitle) is no longer running an agent, so the review comments were not sent. Your comments are kept."
+            return
+        }
         // A menu takes pasted text as key presses: letters and digits pick rows, and the comments
         // would be gone for nothing. The live grid, for the reason given in `answer(_:)`.
         let showsMenu = terminal.readActiveScreenText().map { ApprovalPrompt.trailingMenu(in: $0) != nil } ?? false

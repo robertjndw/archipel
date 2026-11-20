@@ -143,4 +143,20 @@ struct WorktreeRowContentTests {
         #expect(rows[1].activity == working)
         #expect(rows.map(\.isFocused) == [false, true])
     }
+
+    @Test func overridesShowTheAgentRunningInAShell() {
+        let shell = Session(title: "zsh", agent: .shell, createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let one = makeWorktree("w", branch: "b", sessions: [shell])
+        #expect(WorktreeRowContent(worktree: one, activity: nil, git: nil).agent == .shell)
+        let row = WorktreeRowContent(worktree: one, activity: nil, git: nil, agentOverrides: [shell.id: .claude])
+        #expect(row.agent == .claude)
+
+        let other = makeSession("other")
+        let two = makeWorktree("w", sessions: [shell, other])
+        #expect(WorktreeRowContent(worktree: two, activity: nil, git: nil, agentOverrides: [shell.id: .claude]).agent == nil)
+        let rows = SessionRowContent.rows(for: two, activities: [:], focusedSessionID: nil, agentOverrides: [shell.id: .claude])
+        #expect(rows.map(\.agent) == [.claude, .claude])
+        let plain = SessionRowContent.rows(for: two, activities: [:], focusedSessionID: nil)
+        #expect(plain.map(\.agent) == [.shell, .claude])
+    }
 }

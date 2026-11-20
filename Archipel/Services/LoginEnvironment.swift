@@ -17,13 +17,30 @@ enum LoginEnvironment {
         return addingCommonDirectories(to: resolved)
     }
 
+    /// A variable from the user's login shell, for settings that live in rc files and so never
+    /// reach an app started by launchd. Nil when it is unset or empty.
+    nonisolated static func resolveVariable(_ name: String) async -> String? {
+        let shell = AgentDefinition.loginShellPath
+        // Retry without -i only when the shell gave no answer. An unset variable is a real answer.
+        let answer = value(of: name, from: shell, flags: ["-l", "-i"]) ?? value(of: name, from: shell, flags: ["-l"])
+        guard let answer, !answer.isEmpty else { return nil }
+        return answer
+    }
+
     /// Nil when the shell could not be run, was stopped by the watchdog or printed no PATH.
     private nonisolated static func path(from shell: String, flags: [String]) -> String? {
+        guard let path = value(of: "PATH", from: shell, flags: flags), !path.isEmpty else { return nil }
+        return path
+    }
+
+    /// Nil when the shell gave no answer at all; an empty string means it answered with an empty value.
+    private nonisolated static func value(of name: String, from shell: String, flags: [String]) -> String? {
+        precondition(name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }, "not a variable name")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)
         // Markers because shell startup files are free to print anything.
         // Quoted "$PATH" also works in fish, which joins path variables with colons.
-        process.arguments = flags + ["-c", #"printf '<<archipel:%s>>' "$PATH""#]
+        process.arguments = flags + ["-c", #"printf '<<archipel:%s>>' "$\#(name)""#]
         // A file, not a pipe: a profile that starts something in the background (`foo &`) hands it
         // our stdout, and reading a pipe to EOF would then wait for that process, not the shell.
         let outputFile = FileManager.default.temporaryDirectory.appending(path: "archipel-path-\(UUID().uuidString)")
@@ -61,8 +78,7 @@ enum LoginEnvironment {
         guard let start = text.range(of: "<<archipel:"),
               let end = text.range(of: ">>", range: start.upperBound..<text.endIndex)
         else { return nil }
-        let path = String(text[start.upperBound..<end.lowerBound])
-        return path.isEmpty ? nil : path
+        return String(text[start.upperBound..<end.lowerBound])
     }
 
     /// Where agents usually get installed. Appended, so they never shadow what the user's own PATH

@@ -80,6 +80,8 @@ final class ResourceMonitor {
     /// Set by an open popover so its numbers keep up while someone is reading them.
     @ObservationIgnored var isWatched = false
     @ObservationIgnored private var sources: (() -> [Session.ID: Source])?
+    /// Called after every scan, so others can piggyback on its readings and its timer.
+    @ObservationIgnored var onScan: (() -> Void)?
 
     private struct Tracked {
         var terminalID: TerminalSession.ID
@@ -240,6 +242,7 @@ final class ResourceMonitor {
         if nextLeftovers != leftovers { leftovers = nextLeftovers }
         if nextApp != app { app = nextApp }
         if nextAlerts != alerts { alerts = nextAlerts }
+        onScan?()
     }
 
     private func retire(_ id: Session.ID, at now: Date) {

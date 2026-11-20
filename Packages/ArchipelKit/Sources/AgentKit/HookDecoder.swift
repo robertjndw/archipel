@@ -31,6 +31,17 @@ public enum HookDecoder {
         return decode(source: source, payload: object)
     }
 
+    /// Claude's SessionStart and SessionEnd, with what started or ended the conversation. Only a
+    /// hand-started Claude needs these. For one the app launched, the terminal reports the exit.
+    public static func lifecycle(source: HookSource, payload: [String: Any]) -> HookLifecycle? {
+        guard source == .claude, nonEmptyString(payload["agent_id"]) == nil else { return nil }
+        switch payload["hook_event_name"] as? String {
+        case "SessionStart": return .started(source: nonEmptyString(payload["source"]))
+        case "SessionEnd": return .ended(reason: nonEmptyString(payload["reason"]))
+        default: return nil
+        }
+    }
+
     private static func claudeEvent(_ payload: [String: Any]) -> AgentEvent? {
         // Hooks fired inside a subagent carry its id. They must not be read as the main agent's:
         // a subagent's StopFailure would otherwise end the parent's turn.

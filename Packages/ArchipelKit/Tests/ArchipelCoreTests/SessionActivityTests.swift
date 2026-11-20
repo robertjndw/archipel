@@ -30,6 +30,10 @@ struct SessionActivityTests {
         Row(from: .exited(code: 0), event: .activity, to: .exited(code: 0)),
         Row(from: .exited(code: 0), event: .turnFinished(message: nil), to: .exited(code: 0)),
         Row(from: .exited(code: 1), event: .launched, to: .starting),
+        Row(from: .working, event: .agentLeft, to: .finished),
+        Row(from: .needsAttention(.permission), event: .agentLeft, to: .finished),
+        Row(from: .finished, event: .agentLeft, to: .finished),
+        Row(from: .exited(code: 0), event: .agentLeft, to: .exited(code: 0)),
     ]
 
     @Test(arguments: transitions)
@@ -154,5 +158,20 @@ struct SessionActivityTests {
         activity.apply(.turnFinished(message: nil, backgroundTasks: 1), isBeingViewed: false)
         activity.apply(.processExited(code: 0), isBeingViewed: false)
         #expect(activity.backgroundTasks == 0)
+    }
+
+    @Test func agentLeavingAShellDropsItsTurnAndWork() {
+        var activity = SessionActivity(status: .working)
+        activity.apply(.subagentStarted(id: "a"), isBeingViewed: false)
+        activity.apply(.turnFinished(message: "done", backgroundTasks: 2), isBeingViewed: false)
+        #expect(activity.completedTurn)
+
+        activity.apply(.agentLeft, isBeingViewed: false)
+        #expect(activity.status == .finished)
+        // The shell prompt has no turn to show, and the agent's background tasks went with it.
+        #expect(!activity.completedTurn)
+        #expect(activity.subagents.count == 0)
+        #expect(activity.backgroundTasks == 0)
+        #expect(!activity.hasWorkInFlight)
     }
 }

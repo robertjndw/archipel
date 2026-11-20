@@ -102,6 +102,24 @@ struct HookDecoderTests {
         #expect(result.agentSessionID == "t")
     }
 
+    @Test(arguments: [
+        (Fixtures.sessionStart, HookLifecycle?.some(.started(source: "startup"))),
+        (Fixtures.sessionEnd, .ended(reason: "prompt_input_exit")),
+        (#"{"session_id": "abc", "hook_event_name": "SessionStart"}"#, .started(source: nil)),
+        (#"{"session_id": "abc", "hook_event_name": "SessionEnd", "reason": ""}"#, .ended(reason: nil)),
+        (Fixtures.stop, nil),
+        (Fixtures.preToolUse, nil),
+    ])
+    func claudeLifecycle(json: String, expected: HookLifecycle?) throws {
+        let payload = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(HookDecoder.lifecycle(source: .claude, payload: payload) == expected)
+    }
+
+    @Test func lifecycleIsClaudesOnly() throws {
+        let payload = try #require(JSONSerialization.jsonObject(with: Data(Fixtures.sessionStart.utf8)) as? [String: Any])
+        #expect(HookDecoder.lifecycle(source: .codex, payload: payload) == nil)
+    }
+
     @Test(arguments: ["", "not json", "[1, 2]", "42", #"{"hook_event_name": 7, "session_id": 3}"#, "{"])
     func malformedInput(json: String) {
         for source in [HookSource.claude, .codex] {

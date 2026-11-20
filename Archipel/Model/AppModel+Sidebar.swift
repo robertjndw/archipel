@@ -77,7 +77,8 @@ extension AppModel {
         SessionRowContent.rows(
             for: worktree,
             activities: activities,
-            focusedSessionID: workspace.focusedSessionID(in: worktree.id)
+            focusedSessionID: workspace.focusedSessionID(in: worktree.id),
+            agentOverrides: agentOverrides
         )
     }
 

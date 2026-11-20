@@ -46,6 +46,14 @@ nonisolated enum ProcessSampler {
         return (name, arguments(of: pid))
     }
 
+    /// The leader of a process group, which for a job the shell started is the command the user
+    /// typed. Nil when the leader has exited, even if the rest of its group still runs.
+    static func foregroundLeader(group: Int32) -> (label: String, identity: ProcessIdentity)? {
+        guard group > 1, let leader = process(group), leader.processGroupID == group else { return nil }
+        let (name, arguments) = self.name(of: group)
+        return (ProcessLabel.label(name: name, arguments: arguments), leader.identity)
+    }
+
     /// Whether `identity` still names a running process, so a pid that was recycled is never signalled.
     static func isAlive(_ identity: ProcessIdentity) -> Bool {
         guard let info = bsdInfo(identity.pid) else { return false }
