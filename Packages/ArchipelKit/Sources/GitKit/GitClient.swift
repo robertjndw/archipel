@@ -16,6 +16,23 @@ public struct GitClient: Sendable {
         return branch.isEmpty ? nil : branch
     }
 
+    /// The git directory shared by the main checkout and all its linked worktrees, which is where
+    /// refs and the list of worktrees live. Nil for a folder outside any repository.
+    public func commonDirectory(of folder: URL) async -> URL? {
+        guard let output = try? await run(["rev-parse", "--path-format=absolute", "--git-common-dir"], in: folder) else { return nil }
+        let path = output.trimmingCharacters(in: .newlines)
+        return path.isEmpty ? nil : URL(filePath: path, directoryHint: .isDirectory)
+    }
+
+    /// Whether both refs exist and point at the same commit. Full ref names (`refs/heads/x`), so a
+    /// branch named like an option or a tag of the same name cannot get in the way.
+    public func refsMatch(_ first: String, _ second: String, in folder: URL) async -> Bool {
+        // The trailing `--` makes a missing ref an error instead of something to look for as a file.
+        guard let output = try? await run(["rev-parse", first + "^{commit}", second + "^{commit}", "--"], in: folder) else { return false }
+        let lines = output.split(whereSeparator: \.isNewline)
+        return lines.count >= 2 && lines[0] == lines[1]
+    }
+
     public func worktrees(of repository: URL) async throws -> [GitWorktreeEntry] {
         GitParser.worktrees(try await run(["worktree", "list", "--porcelain", "-z"], in: repository))
     }

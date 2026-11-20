@@ -171,6 +171,7 @@ final class AppModel {
     @ObservationIgnored var branchGenerations: [Worktree.ID: Int] = [:]
     @ObservationIgnored private var branchRefresh = (inFlight: false, queued: false)
     @ObservationIgnored var gitRefresh = GitRefreshState()
+    @ObservationIgnored var gitWatch = GitWatchState()
     private let store: WorkspaceStore
     private let terminalApp: TerminalApp?
     /// The Ghostty colors the panes draw around terminals; nil without a terminal engine.
@@ -302,6 +303,7 @@ final class AppModel {
         refreshBranches()
         refreshWorktreeDiscovery()
         refreshGitStatus(lookingUpPullRequests: true)
+        startGitWatching()
         loadProjectIcons()
         refreshCodexUsage()
         watchSessionInteraction()
@@ -489,6 +491,8 @@ final class AppModel {
         refreshGitStatus(lookingUpPullRequests: true, minimumPullRequestAge: .seconds(30))
         fetchRemotesIfDue()
         startGitStatusTimer()
+        // A folder that was not a repository, or was on a disk that was not mounted, may be one now.
+        syncGitWatchers(retryingUnwatchable: true)
     }
 
     /// Plays the glows that waited for the app to come back, one after the other from the top of
@@ -550,7 +554,7 @@ final class AppModel {
         guard isAppActive else { return }
         isAppActive = false
         terminalApp?.setAppFocused(false)
-        stopGitStatusTimer()
+        if !isMainWindowVisible { stopGitStatusTimer() }
     }
 
     private func refreshInstalledEditors() {
@@ -592,6 +596,7 @@ final class AppModel {
             self.refreshBranches()
             self.refreshWorktreeDiscovery()
             self.refreshGitStatus(lookingUpPullRequests: true)
+            self.syncGitWatchers(retryingUnwatchable: true)
             self.loadProjectIcons()
         }
     }
@@ -1872,6 +1877,7 @@ final class AppModel {
         for url in filesBefore.subtracting(openFileURLs) where !documents.isDirty(url) { documents.close(url) }
         webPages.retain(only: webTabIDs)
         refreshAttention()
+        syncGitWatchers()
         SidebarTips.workspaceChanged(workspace)
         // Here rather than in changingSelection so clicking into another pane counts too.
         if let id = focusedTab?.id { recentTabs.visit(id) }
@@ -1926,6 +1932,7 @@ final class AppModel {
         saveNow()
         reviewComments.saveNow()
         hookServer.stop()
+        stopGitWatching()
         for terminal in terminals.values { terminal.close() }
     }
 }

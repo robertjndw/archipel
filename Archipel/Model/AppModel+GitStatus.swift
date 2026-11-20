@@ -90,7 +90,7 @@ extension AppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.gitStatusInterval)
                 guard !Task.isCancelled, let self else { return }
-                if NSApp.isActive {
+                if NSApp.isActive || self.isMainWindowVisible {
                     self.refreshGitStatus(lookingUpPullRequests: true)
                     self.fetchRemotesIfDue()
                     // An agent installed from one of the app's own terminals should not stay
