@@ -125,6 +125,7 @@ private struct PresetsEditor: View {
                             .labelsHidden()
                             .font(.body.monospaced())
                             .autocorrectionDisabled()
+                            .accessibilityIdentifier("settings.presets.\(agent.id).arguments")
                     }
                 } rows: {
                     ForEach(presets) { preset in
@@ -140,6 +141,7 @@ private struct PresetsEditor: View {
                 Divider()
                 HStack(spacing: 0) {
                     Button("Add Preset", systemImage: "plus", action: add)
+                        .accessibilityIdentifier("settings.presets.\(agent.id).add")
                     Divider().frame(height: 16)
                     Button("Remove Preset", systemImage: "minus", action: removeSelection)
                         .disabled(selection.isEmpty)
@@ -149,6 +151,7 @@ private struct PresetsEditor: View {
                         .labelStyle(.titleOnly)
                         .disabled(selection.count != 1)
                         .padding(.trailing, 4)
+                        .accessibilityIdentifier("settings.presets.\(agent.id).toggleDefault")
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
