@@ -274,6 +274,8 @@ final class ChangesModel {
             return
         } catch {
             // Not signed in or not a GitHub remote: the control just stays away instead of nagging.
+            // A pull request already found stays, though: a dropped connection says nothing about it.
+            if let known = pullRequestLookup, known.branch == branch, case .found = known.outcome { return }
             outcome = .unavailable
         }
         guard current == lookupGeneration, status.branch == branch else { return }
@@ -423,6 +425,7 @@ struct ChangesTab: View {
     @Bindable var model: ChangesModel
     let actions: InspectorActions
     @Binding var focusCommitMessage: Bool
+    var knownPullRequest: GitPullRequest? = nil
     @State private var showsStaged = true
     @State private var showsUnstaged = true
     @State private var discardRequest: DiscardRequest?
@@ -453,6 +456,7 @@ struct ChangesTab: View {
         .task { await model.refreshRemoteInfo() }
         .onChange(of: model.status.branch) { refreshRemoteInfo() }
         .onChange(of: model.status.upstream) { refreshRemoteInfo() }
+        .onChange(of: knownPullRequest) { refreshRemoteInfo() }
         .onAppActivation(perform: refreshRemoteInfo)
         .confirmationDialog(
             discardRequest?.title ?? "",
