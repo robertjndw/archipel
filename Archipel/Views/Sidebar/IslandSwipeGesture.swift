@@ -7,11 +7,14 @@ import SwiftUI
 /// drawn, plus its neighbours off to the sides while the pointer is over the sidebar, so a swipe
 /// never waits for a list to be built. During a swipe or a switch they move as one strip, the way
 /// Spaces do.
+///
+/// The strip is moved by Core Animation, which keeps the display's frame rate while the app is
+/// busy putting the new island's content on screen. Every motion is a spring that is added on top
+/// of the ones still running. A switch that comes while the strip is moving therefore leaves the
+/// motion on screen alone and only adds the way to the new island, so it joins in without a jump
+/// whenever it gets to the screen, even if the main thread took several frames to send it there.
 @MainActor @Observable
 final class IslandSwipeState {
-    /// How far the strip is moved from `anchor` being centered, positive to the right.
-    fileprivate(set) var offset = 0.0
-    var width = 260.0
     /// The islands drawn side by side while the strip moves, `anchor` among them. Empty at rest.
     fileprivate var strip: [Island.ID] = []
     /// The island the offset is measured from. It changes only through the swipe and the switch
@@ -21,86 +24,144 @@ final class IslandSwipeState {
     /// Neighbours are drawn at rest while this is set.
     fileprivate var isWarm = false
 
-    /// Settles the strip once a frame. Nil while it is at rest or under the fingers.
-    @ObservationIgnored fileprivate var spring: PageSpring?
-    @ObservationIgnored private lazy var ticker = FrameTicker { [weak self] in self?.tick($0) }
+    @ObservationIgnored fileprivate var width = 260.0
+    @ObservationIgnored fileprivate weak var surface: IslandStripView?
+
+    /// How far the strip is moved from `anchor` being centered, positive to the right, not
+    /// counting the springs. Zero unless the fingers hold it.
+    @ObservationIgnored fileprivate private(set) var held = 0.0
+    /// Springs the view has yet to put on screen.
+    @ObservationIgnored fileprivate private(set) var launching: [PageSpring] = []
+    /// Springs under way, the ones in `launching` included.
+    @ObservationIgnored private var springCount = 0
+    /// Bumped when the springs are dropped. One that ends after that is not counted.
+    @ObservationIgnored fileprivate private(set) var flight = 0
+
     @ObservationIgnored fileprivate var ownsGesture = false
     /// Where the strip was when the fingers caught it, less how far they had already moved.
     @ObservationIgnored fileprivate var headStart = 0.0
+    /// Whether the swipe was past the halfway point at its last event.
+    @ObservationIgnored fileprivate var isPastCommitPoint = false
     /// The strip a swipe would lay out, worked out when it begins, so its indices and the strip
     /// agree even if the swipe takes a few events to turn out horizontal.
     @ObservationIgnored fileprivate var swipeStrip: [Island.ID] = []
     /// Bumped on every switch. A swipe that started before the switch is ignored from then on.
     @ObservationIgnored fileprivate var generation = 0
     @ObservationIgnored fileprivate var swipeGeneration = -1
-    /// Set while a swipe makes the switch. The swipe already moves the strip, so `enter` skips it.
-    @ObservationIgnored fileprivate var selectingBySwipe = false
     @ObservationIgnored private var cooling: Task<Void, Never>?
+    @ObservationIgnored private var isHovered = false
     @ObservationIgnored private var scrollPositions: [Island.ID: ScrollPosition] = [:]
 
-    static let response = 0.4
+    /// The spring's response when a swipe is let go short of halfway and the strip goes back.
+    static let swipeResponse = 0.3
+    /// The response for a switch by a shortcut or a click.
+    static let switchResponse = 0.25
+    /// The response when a swipe is let go and the next island drops into place. The shortest:
+    /// the fingers have already brought it part of the way, and at their speed.
+    static let dropResponse = 0.2
+    /// Just under critical: the strip reaches the island sooner than it would at 1 and lands
+    /// crisply, passing it by no more than a point before it rests.
+    static let damping = 0.9
 
-    fileprivate var isMoving: Bool { spring != nil || ownsGesture }
+    fileprivate var isMoving: Bool { springCount > 0 || ownsGesture }
 
-    /// Lets go of the strip where it is and springs it to rest, starting at `velocity`.
-    fileprivate func settle(velocity: Double) {
-        var spring = PageSpring(position: offset, velocity: velocity, response: Self.response)
+    /// The island the sidebar shows or is on its way to. It changes the moment a switch starts,
+    /// ahead of the model's selection, which is what lets the switcher's highlight leave together
+    /// with the lists.
+    var heading: Island.ID? { anchor }
+
+    /// Where the strip is right now, as it is on screen.
+    fileprivate var offset: Double {
+        held + (surface?.springOffset ?? 0) + launching.reduce(0) { $0 + $1.position }
+    }
+
+    /// Puts the strip where the fingers are.
+    fileprivate func follow(_ offset: Double) {
+        dropSprings()
+        held = offset
+        surface?.render()
+    }
+
+    /// Lets go of the strip where it is held and springs it to rest, starting at `velocity`.
+    fileprivate func settle(velocity: Double, response: Double) {
+        var spring = PageSpring(position: held, velocity: velocity, response: response, damping: Self.damping)
         spring.limitOvershoot()
-        self.spring = spring
-        if !ticker.start() {
-            // No display to time frames on, so no animation either. Better a jump than a strip
-            // that never comes to rest.
-            self.spring = nil
-            offset = 0
-            fold()
+        held = 0
+        // Off screen there is nothing to animate and nothing that would report the end of it.
+        if surface?.window != nil, !spring.isSettled {
+            launching.append(spring)
+            springCount += 1
         }
+        surface?.render()
+        fold()
     }
 
-    /// Stops a settle in flight and leaves the strip where it is.
+    /// Stops the strip where it is on screen and holds it there.
     fileprivate func halt() {
-        spring = nil
-        ticker.stop()
+        guard springCount > 0 else { return }
+        let offset = offset
+        dropSprings()
+        held = offset
+        surface?.render()
     }
 
-    /// Moves the strip by `shift` without moving anything on screen: used when the anchor changes,
-    /// so a settle in flight keeps going at the same speed toward the new anchor.
+    /// Changes the anchor without moving anything on screen: the strip is held as far from the
+    /// new anchor as that is from the old one. Springs under way keep going as they are.
     fileprivate func reanchor(to id: Island.ID, shift: Double) {
         anchor = id
-        offset += shift
-        spring?.position += shift
+        held += shift
     }
 
-    private func tick(_ elapsed: Double) {
-        guard var spring else { ticker.stop(); return }
-        spring.step(elapsed)
-        if spring.isSettled {
-            self.spring = nil
-            ticker.stop()
-            offset = 0
-            fold()
-        } else {
-            self.spring = spring
-            offset = spring.position
-        }
+    /// At rest on the anchor, without animation.
+    fileprivate func reset() {
+        dropSprings()
+        held = 0
+        surface?.render()
+    }
+
+    private func dropSprings() {
+        launching = []
+        springCount = 0
+        flight += 1
+    }
+
+    fileprivate func didLaunch() {
+        launching = []
+    }
+
+    /// A spring of `flight` ran to its end.
+    fileprivate func landed(flight: Int) {
+        guard flight == self.flight, springCount > 0 else { return }
+        springCount -= 1
+        fold()
     }
 
     /// Back to rest on the anchor.
     fileprivate func fold() {
-        guard !isMoving else { return }
+        guard !isMoving, !strip.isEmpty else { return }
         strip = []
     }
 
     fileprivate func hover(_ inside: Bool) {
-        cooling?.cancel()
-        if inside {
-            if !isWarm { isWarm = true }
-            return
-        }
+        isHovered = inside
         // Not right away: the pointer often leaves the sidebar on its way to the switcher and
         // back, and building the lists again each time would cost more than keeping them.
+        keepWarm(for: .seconds(3))
+    }
+
+    /// One switch is often followed by another, by shortcut with the pointer nowhere near the
+    /// sidebar. With the neighbours already built, the next one starts without building a list.
+    fileprivate func switched() {
+        keepWarm(for: .seconds(20))
+    }
+
+    private func keepWarm(for duration: Duration) {
+        cooling?.cancel()
+        if !isWarm { isWarm = true }
+        guard !isHovered else { return }
         cooling = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(3))
-            guard let self, !Task.isCancelled, !self.isMoving else { return }
+            try? await Task.sleep(for: duration)
+            guard let self, !Task.isCancelled, !self.isMoving, !self.isHovered else { return }
             self.isWarm = false
         }
     }
@@ -127,42 +188,6 @@ final class IslandSwipeState {
     }
 }
 
-/// Calls back once a frame, on the display the app is on, while started.
-@MainActor
-private final class FrameTicker: NSObject {
-    private var link: CADisplayLink?
-    private var last: CFTimeInterval?
-    private let tick: (Double) -> Void
-
-    init(tick: @escaping (Double) -> Void) {
-        self.tick = tick
-    }
-
-    /// False when there is no display to tick on.
-    func start() -> Bool {
-        if link != nil { return true }
-        guard let screen = NSApp.keyWindow?.screen ?? NSApp.mainWindow?.screen ?? NSScreen.main else { return false }
-        let link = screen.displayLink(target: self, selector: #selector(frame(_:)))
-        link.add(to: .main, forMode: .common)
-        self.link = link
-        last = nil
-        return true
-    }
-
-    func stop() {
-        link?.invalidate()
-        link = nil
-        last = nil
-    }
-
-    @objc private func frame(_ link: CADisplayLink) {
-        let now = link.timestamp
-        let elapsed = last.map { now - $0 } ?? (link.targetTimestamp - link.timestamp)
-        last = now
-        tick(elapsed)
-    }
-}
-
 extension View {
     /// Listens for two-finger horizontal swipes over this view and moves the strip for every
     /// island switch, however it was made.
@@ -180,39 +205,259 @@ struct IslandPager<Page: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let islands = model.workspace.islands
         let selected = model.selectedIsland?.id
         let anchor = state.anchor.flatMap { model.workspace.island(id: $0) }?.id ?? selected
-        let strip = state.layout(anchor: anchor, islands: islands, reduceMotion: reduceMotion)
-        let anchorPosition = strip.firstIndex { $0 == anchor } ?? 0
-        ZStack {
-            if strip.isEmpty {
-                page(nil)
-            }
-            ForEach(Array(strip.enumerated()), id: \.element) { position, id in
-                let isCurrent = id == selected
-                PageSlot(state: state, position: reduceMotion ? 0 : position - anchorPosition) {
-                    page(model.workspace.island(id: id))
-                }
-                .allowsHitTesting(isCurrent)
-                .accessibilityHidden(!isCurrent)
-            }
-        }
-        // The offset moves what is drawn, not the layout, so this keeps the strip inside the sidebar.
-        .clipped()
-        .onGeometryChange(for: Double.self) { $0.size.width } action: { state.width = $0 }
-        .onHover { state.hover($0) }
+        let strip = state.layout(anchor: anchor, islands: model.workspace.islands, reduceMotion: reduceMotion)
+        // Without an island there is still one page, the empty list.
+        IslandStrip(state: state, order: strip.isEmpty ? [nil] : strip, anchor: anchor, crossfades: reduceMotion, page: page)
+            .onHover { state.hover($0) }
     }
 }
 
-/// Reads the offset on its own, so moving the strip once a frame redraws this and not the lists.
-private struct PageSlot<Content: View>: View {
-    let state: IslandSwipeState
-    let position: Int
-    @ViewBuilder let content: Content
+/// One page of the strip. A view of its own so that what the page reads from the model is
+/// observed inside the page's own hosting view.
+private struct IslandPage<Page: View>: View {
+    let id: Island.ID?
+    let page: (Island?) -> Page
+    @Environment(AppModel.self) private var model
 
     var body: some View {
-        content.offset(x: Double(position) * state.width + state.offset)
+        let isCurrent = id == model.selectedIsland?.id
+        page(id.flatMap { model.workspace.island(id: $0) })
+            .allowsHitTesting(isCurrent)
+            .accessibilityHidden(!isCurrent)
+    }
+}
+
+/// The strip is an AppKit view with a hosting view per page, because only a layer can be moved
+/// by Core Animation, and SwiftUI does not give its views one to animate.
+private struct IslandStrip<Page: View>: NSViewRepresentable {
+    let state: IslandSwipeState
+    let order: [Island.ID?]
+    let anchor: Island.ID?
+    let crossfades: Bool
+    let page: (Island?) -> Page
+
+    func makeNSView(context: Context) -> IslandStripView {
+        IslandStripView(state: state)
+    }
+
+    func updateNSView(_ view: IslandStripView, context: Context) {
+        // A hosting view starts with an empty environment. The pages get the sidebar's, with the
+        // model, the list style and the tint in it.
+        let environment = context.environment
+        view.update(order: order, anchor: anchor, crossfades: crossfades) { id in
+            AnyView(IslandPage(id: id, page: page).environment(\.self, environment))
+        }
+    }
+}
+
+/// Lays the pages out side by side around the anchor. Under the fingers the pages are moved by
+/// their frames: AppKit only draws what it takes to be on screen, so it has to know where they
+/// are, or the list coming in stays empty. The springs move them all through the layer's sublayer
+/// transform, which AppKit leaves alone, unlike the frames and transforms of the views. That is
+/// fine for a spring: it always ends on the page that AppKit already has in view.
+@MainActor
+private final class IslandStripView: NSView {
+    private let state: IslandSwipeState
+    private var pages: [Island.ID?: NSHostingView<AnyView>] = [:]
+    private var order: [Island.ID?] = []
+    /// Builds a page's content, kept from the last update for pages made before the next one.
+    private var content: ((Island.ID?) -> AnyView)?
+    /// The anchor the pager asked for, for when the state has none of its own or a stale one.
+    private var fallbackAnchor: Island.ID?
+    private var hasLaidOut = false
+    private var springKeys: [String] = []
+    private var nextSpringKey = 0
+    private var shownFlight = 0
+
+    private static let fadeDuration = 0.2
+
+    init(state: IslandSwipeState) {
+        self.state = state
+        super.init(frame: .zero)
+        wantsLayer = true
+        // The pages next to the shown one are laid out beyond the bounds.
+        clipsToBounds = true
+        state.surface = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var isFlipped: Bool { true }
+
+    private func addPage(_ id: Island.ID?, content: (Island.ID?) -> AnyView) -> NSHostingView<AnyView> {
+        let page = NSHostingView(rootView: content(id))
+        // Sized by this view alone, and the sidebar's header and switcher already keep it
+        // clear of the window's edges.
+        page.sizingOptions = []
+        page.safeAreaRegions = []
+        addSubview(page)
+        pages[id] = page
+        return page
+    }
+
+    /// Puts `order` on screen with the state's motion right now, without waiting for the pager's
+    /// update: that comes at the end of a pass in which the whole window changes, and the slide
+    /// would only start after all of it. Only for a caller that has not changed the model yet,
+    /// since the flush would otherwise run that whole pass itself. A page that is missing is
+    /// built and laid out here, so the slide does not begin with an empty list.
+    func showNow(order: [Island.ID]) {
+        guard let content, window != nil else { return }
+        let added = order.filter { pages[$0] == nil }.map { addPage($0, content: content) }
+        for (id, page) in pages where !order.contains(where: { $0 == id }) {
+            pages[id] = nil
+            page.removeFromSuperview()
+        }
+        self.order = order
+        render()
+        added.forEach { $0.layoutSubtreeIfNeeded() }
+        CATransaction.flush()
+    }
+
+    func update(order: [Island.ID?], anchor: Island.ID?, crossfades: Bool, content: @escaping (Island.ID?) -> AnyView) {
+        self.content = content
+        let hadPages = !pages.isEmpty
+        for id in order {
+            if let page = pages[id] {
+                page.rootView = content(id)
+                continue
+            }
+            let page = addPage(id, content: content)
+            if crossfades, hadPages {
+                page.alphaValue = 0
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = Self.fadeDuration
+                    page.animator().alphaValue = 1
+                }
+            }
+        }
+        for (id, page) in pages where !order.contains(id) {
+            pages[id] = nil
+            guard crossfades else {
+                page.removeFromSuperview()
+                continue
+            }
+            // Reduce Motion: it stays where it is and fades into the page that replaced it.
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Self.fadeDuration
+                page.animator().alphaValue = 0
+            } completionHandler: {
+                MainActor.assumeIsolated { page.removeFromSuperview() }
+            }
+        }
+        self.order = order
+        fallbackAnchor = anchor
+        render()
+    }
+
+    override func layout() {
+        super.layout()
+        state.width = bounds.width
+        render()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Out of the window nothing animates, and no spring would ever report that it ended.
+        if window == nil {
+            state.reset()
+            state.fold()
+        } else {
+            render()
+        }
+    }
+
+    /// How far the springs under way have the strip moved on screen right now.
+    var springOffset: Double {
+        guard let layer, !springKeys.isEmpty, let shown = layer.presentation() else { return 0 }
+        return shown.sublayerTransform.m41
+    }
+
+    /// Lays out the pages and shows the state's motion. The page frames depend on the anchor and
+    /// the offset is measured from it, so both always change here, in one transaction.
+    func render() {
+        guard let layer, window != nil else { return }
+        let anchorIndex: Int
+        if let index = order.firstIndex(of: state.anchor) {
+            anchorIndex = index
+        } else if let index = order.firstIndex(of: fallbackAnchor) {
+            // The state moved on to an anchor whose page is not here yet. The pager is about to
+            // bring it; until then what is on screen stays as it is.
+            if let anchor = state.anchor, anchor != fallbackAnchor, hasLaidOut { return }
+            anchorIndex = index
+        } else {
+            anchorIndex = 0
+        }
+        hasLaidOut = true
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+
+        // On whole pixels, so the text stays sharp while the strip is held.
+        let scale = window?.backingScaleFactor ?? 2
+        let held = (state.held * scale).rounded() / scale
+        if shownFlight != state.flight {
+            shownFlight = state.flight
+            springKeys.forEach(layer.removeAnimation(forKey:))
+            springKeys = []
+        }
+
+        // At rest the neighbours reach one point into view, each along the edge it will come in
+        // from. A list that is entirely out of view has no rows yet and would make them only when
+        // a switch brings it in, which costs that switch several frames before it can start. The
+        // point they show is the empty margin beside their rows.
+        let isAtRest = state.held == 0 && state.launching.isEmpty && springKeys.isEmpty
+        for (index, id) in order.enumerated() {
+            let slot = index - anchorIndex
+            let peek = isAtRest ? CGFloat(-slot.signum()) : 0
+            let frame = CGRect(x: CGFloat(slot) * bounds.width + held + peek, y: 0, width: bounds.width, height: bounds.height)
+            if let page = pages[id], page.frame != frame { page.frame = frame }
+        }
+
+        let flight = state.flight
+        for spring in state.launching {
+            let animation = CAKeyframeAnimation(keyPath: "sublayerTransform.translation.x", adding: spring)
+            let key = "spring-\(nextSpringKey)"
+            nextSpringKey += 1
+            animation.delegate = AnimationEnd { [weak self] finished in
+                guard let self else { return }
+                self.springKeys.removeAll { $0 == key }
+                if finished { self.state.landed(flight: flight) }
+                if self.springKeys.isEmpty { self.render() }
+            }
+            layer.add(animation, forKey: key)
+            springKeys.append(key)
+        }
+        state.didLaunch()
+    }
+}
+
+extension CAKeyframeAnimation {
+    /// Plays `spring` on top of the layer's value and of the animations already running on it.
+    /// The layer is set to where it should end up; the spring is how far from there it still is.
+    convenience init(keyPath: String, adding spring: PageSpring) {
+        self.init(keyPath: keyPath)
+        let positions = spring.trajectory()
+        values = positions
+        duration = Double(positions.count - 1) / PageSpring.sampleRate
+        calculationMode = .linear
+        isAdditive = true
+    }
+}
+
+private final class AnimationEnd: NSObject, CAAnimationDelegate {
+    private let ended: @MainActor (_ finished: Bool) -> Void
+
+    init(ended: @escaping @MainActor (_ finished: Bool) -> Void) {
+        self.ended = ended
+    }
+
+    /// Replaced or dropped animations stop too, without having finished.
+    func animationDidStop(_ animation: CAAnimation, finished: Bool) {
+        MainActor.assumeIsolated { ended(finished) }
     }
 }
 
@@ -235,8 +480,21 @@ private struct IslandSwipeDriver: ViewModifier {
             }
         }
         .onAppear { if state.anchor == nil { state.anchor = model.selectedIsland?.id } }
+        // Switches come in twice: from the model right before they are made, and from here once
+        // SwiftUI updates. The second is a no-op then, and the only one for a change of island
+        // that is not a switch, like the selected island being deleted.
         .onChange(of: model.selectedIsland?.id) { old, new in enter(from: old, to: new) }
-        .onChange(of: isEnabled) { if !isEnabled { rest(at: model.selectedIsland?.id) } }
+        .onChange(of: isEnabled, initial: true) {
+            watchSwitches()
+            if !isEnabled { rest(at: model.selectedIsland?.id) }
+        }
+        .onChange(of: reduceMotion, initial: true) { watchSwitches() }
+    }
+
+    /// Installed again whenever what `enter` reads from this view changes: the closure keeps the
+    /// view as it was when it was made.
+    private func watchSwitches() {
+        model.islandWillSwitch = { old, new in enter(from: old, to: new, startsNow: true) }
     }
 
     // MARK: Swipe
@@ -259,15 +517,21 @@ private struct IslandSwipeDriver: ViewModifier {
             state.halt()
             state.ownsGesture = true
             state.headStart = reduceMotion ? 0 : state.offset - gesture.translation
-            withTransaction(Self.instant) {
-                state.strip = state.swipeStrip
-                state.anchor = currentAnchor
-            }
+            state.strip = state.swipeStrip
+            state.anchor = currentAnchor
+            // A strip caught already past halfway does not announce it.
+            var caught = gesture
+            caught.headStart = state.headStart
+            state.isPastCommitPoint = caught.isPastCommitPoint
         }
-        guard !reduceMotion else { return }
         var gesture = gesture
         gesture.headStart = state.headStart
-        withTransaction(Self.instant) { state.offset = gesture.offset }
+        // One tick on the way past halfway: from here, letting go switches. The switch itself
+        // has none, since the fingers have left the trackpad by then.
+        if gesture.isPastCommitPoint, !state.isPastCommitPoint { Haptics.levelChange() }
+        state.isPastCommitPoint = gesture.isPastCommitPoint
+        guard !reduceMotion else { return }
+        state.follow(gesture.offset)
     }
 
     private func release(_ gesture: IslandSwipe) {
@@ -278,11 +542,10 @@ private struct IslandSwipeDriver: ViewModifier {
         let strip = state.swipeStrip
         let target = gesture.settledIndex()
         guard target != gesture.selectedIndex, strip.indices.contains(target) else {
-            reduceMotion ? rest(at: currentAnchor) : state.settle(velocity: gesture.velocity)
+            reduceMotion ? rest(at: currentAnchor) : state.settle(velocity: gesture.contentVelocity, response: IslandSwipeState.swipeResponse)
             return
         }
         let id = strip[target]
-        if model.selectedIsland?.id != id { state.selectingBySwipe = true }
         if reduceMotion {
             crossfade(to: id)
             model.select(island: id)
@@ -290,23 +553,26 @@ private struct IslandSwipeDriver: ViewModifier {
         }
         // Re-anchor on the target. Nothing moves on screen, but selecting now lets the switcher
         // and the window update while the strip is still settling.
-        withTransaction(Self.instant) {
-            state.reanchor(to: id, shift: Double(target - gesture.selectedIndex) * state.width)
-        }
+        state.reanchor(to: id, shift: Double(target - gesture.selectedIndex) * state.width)
+        state.settle(velocity: gesture.contentVelocity, response: IslandSwipeState.dropResponse)
+        // Selecting keeps the main thread busy for several frames. Sent off first, the settle
+        // starts at the speed the fingers had, without the strip standing still in between.
+        CATransaction.flush()
         model.select(island: id)
-        state.settle(velocity: gesture.velocity)
     }
 
     // MARK: Switches
 
     /// Shortcuts, menu items, clicks and session jumps change the island without a swipe. The old
     /// list is still on screen when this runs, so both slide together: the old one out, the new one
-    /// in. A switch that comes while the strip is still moving takes it over at the same speed.
-    private func enter(from old: Island.ID?, to new: Island.ID?) {
-        if state.selectingBySwipe {
-            state.selectingBySwipe = false
-            return
-        }
+    /// in. A switch that comes while the strip is still moving adds to the motion under way.
+    ///
+    /// With `startsNow` the switch is yet to be made, and the slide is sent to the screen ahead of
+    /// it instead of with the next update, which only gets there after the new island's content.
+    private func enter(from old: Island.ID?, to new: Island.ID?, startsNow: Bool = false) {
+        // Already on its way there: a swipe made the switch and moves the strip itself, or this
+        // switch was started before it was made.
+        if state.anchor == new { return }
         // A swipe in progress loses the strip to the switch; its remaining events are dropped.
         state.generation += 1
         state.ownsGesture = false
@@ -315,6 +581,8 @@ private struct IslandSwipeDriver: ViewModifier {
             rest(at: new)
             return
         }
+        // A click on the switcher is felt. A swipe never gets here: it has its tick at halfway.
+        Haptics.levelChange()
         if reduceMotion {
             crossfade(to: new)
             return
@@ -340,32 +608,25 @@ private struct IslandSwipeDriver: ViewModifier {
             }
         }
         let shift = Double(strip.firstIndex(of: new)! - strip.firstIndex(of: anchor)!) * state.width
-        let wasMoving = state.spring != nil
-        withTransaction(Self.instant) {
-            state.strip = strip
-            state.reanchor(to: new, shift: shift)
-        }
-        if !wasMoving { state.settle(velocity: 0) }
+        state.strip = strip
+        state.reanchor(to: new, shift: shift)
+        state.settle(velocity: 0, response: IslandSwipeState.switchResponse)
+        if startsNow { state.surface?.showNow(order: strip) }
+        state.switched()
     }
 
-    /// Reduce Motion: no sliding, the lists fade into each other in place.
+    /// Reduce Motion: no sliding. The strip view fades the lists into each other in place.
     private func crossfade(to id: Island.ID) {
-        state.halt()
-        withTransaction(Self.instant) {
-            state.strip = []
-            state.offset = 0
-        }
-        withAnimation(.easeInOut(duration: 0.2)) { state.anchor = id }
+        state.strip = []
+        state.anchor = id
+        state.reset()
     }
 
     private func rest(at id: Island.ID?) {
-        state.halt()
         state.ownsGesture = false
-        withTransaction(Self.instant) {
-            state.strip = []
-            state.anchor = id
-            state.offset = 0
-        }
+        state.strip = []
+        state.anchor = id
+        state.reset()
     }
 
     // MARK: Layout
@@ -385,12 +646,6 @@ private struct IslandSwipeDriver: ViewModifier {
         if strip.first == anchor, index > 0 { strip.insert(islands[index - 1].id, at: 0) }
         if strip.last == anchor, index < islands.count - 1 { strip.append(islands[index + 1].id) }
         return strip
-    }
-
-    private static var instant: Transaction {
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        return transaction
     }
 }
 

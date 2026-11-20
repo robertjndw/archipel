@@ -71,13 +71,20 @@ private struct WindowButtonPlacement: NSViewRepresentable {
         view.center = center
     }
 
-    /// AppKit lays the buttons out again whenever it rebuilds the title bar: on resizes, on leaving
-    /// full screen, on a move to a display with another scale, and at times without any frame
-    /// notification at all. So besides those occasions this checks after every window update, the
-    /// last step of each event before the window draws, which catches a reset before it is seen.
-    /// The check is a comparison of two points. Moving all three buttons by the same distance
-    /// keeps AppKit's spacing between them and makes a second pass a no-op, so the frame change
-    /// that the move itself causes ends right there.
+    /// AppKit puts the buttons back whenever it lays out the title bar: on resizes, on leaving full
+    /// screen, on a move to a display with another scale, and every time the window's title
+    /// changes, which is every switch of worktree or island. A title set by SwiftUI changes at the
+    /// end of the run loop pass, after the window update of that event, so a check on window
+    /// updates alone leaves the buttons in AppKit's place until the next event comes along.
+    ///
+    /// So each button reports when its frame changes, which asks for a layout of this view, and
+    /// the layout moves the buttons. That is still inside the pass in which AppKit laid them out
+    /// and before anything is drawn. Moving a button right in its frame change does not last:
+    /// AppKit is in the middle of setting that frame then and writes its own value again after.
+    ///
+    /// The window notifications stay as a fallback, for a layout that changes no frame AppKit
+    /// reports. Every check only compares points and is a no-op once the buttons are in place, so
+    /// the frame changes that the moves themselves cause end right there.
     final class Anchor: NSView {
         var center: CGFloat = 16 {
             didSet { if center != oldValue { place() } }
@@ -85,6 +92,11 @@ private struct WindowButtonPlacement: NSViewRepresentable {
         var onMetricsChange: ((WindowMetrics) -> Void)?
         private var reported = WindowMetrics()
         private var observers: [NSObjectProtocol] = []
+        /// Where AppKit last put each button, and where this view moved it from there. A button
+        /// found anywhere else than where it was moved to has been laid out by AppKit again.
+        private var positions: [NSWindow.ButtonType: (appKit: NSPoint, moved: NSPoint)] = [:]
+
+        private static let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
 
         // It sits behind the window's content and must never take a click.
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -93,6 +105,7 @@ private struct WindowButtonPlacement: NSViewRepresentable {
             super.viewDidMoveToWindow()
             observers.forEach(NotificationCenter.default.removeObserver)
             observers = []
+            positions = [:]
             guard let window else { return }
             let notifications = NotificationCenter.default
             let names: [Notification.Name] = [
@@ -109,10 +122,11 @@ private struct WindowButtonPlacement: NSViewRepresentable {
                     MainActor.assumeIsolated { self?.place() }
                 })
             }
-            if let close = window.standardWindowButton(.closeButton) {
-                close.postsFrameChangedNotifications = true
-                observers.append(notifications.addObserver(forName: NSView.frameDidChangeNotification, object: close, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.place() }
+            for button in Self.buttons.compactMap({ window.standardWindowButton($0) }) {
+                button.postsFrameChangedNotifications = true
+                // No queue: the layout has to be asked for while AppKit is still at it.
+                observers.append(notifications.addObserver(forName: NSView.frameDidChangeNotification, object: button, queue: nil) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.needsLayout = true }
                 })
             }
             place()
@@ -120,6 +134,11 @@ private struct WindowButtonPlacement: NSViewRepresentable {
 
         isolated deinit {
             observers.forEach(NotificationCenter.default.removeObserver)
+        }
+
+        override func layout() {
+            super.layout()
+            place()
         }
 
         private func place() {
@@ -130,16 +149,27 @@ private struct WindowButtonPlacement: NSViewRepresentable {
             guard !window.styleMask.contains(.fullScreen),
                   let close = window.standardWindowButton(.closeButton),
                   let superview = close.superview else { return }
-            let current = close.convert(NSPoint(x: close.bounds.midX, y: close.bounds.midY), to: nil)
-            let target = NSPoint(x: center, y: window.frame.height - center)
-            let dx = target.x - current.x
-            var dy = target.y - current.y
-            guard abs(dx) >= 0.5 || abs(dy) >= 0.5 else { return }
-            if superview.isFlipped { dy = -dy }
-            let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
-                .compactMap { window.standardWindowButton($0) }
-            for button in buttons {
-                button.setFrameOrigin(NSPoint(x: button.frame.origin.x + dx, y: button.frame.origin.y + dy))
+
+            for type in Self.buttons {
+                guard let button = window.standardWindowButton(type) else { continue }
+                let origin = button.frame.origin
+                if positions[type].map({ !origin.isClose(to: $0.moved) }) ?? true {
+                    positions[type] = (appKit: origin, moved: origin)
+                }
+            }
+            // All three move by what brings the close button's middle to `center` from the
+            // window's top and leading edges, which keeps AppKit's spacing between them.
+            guard let closePosition = positions[.closeButton] else { return }
+            let target = superview.convert(NSPoint(x: center, y: window.frame.height - center), from: nil)
+            let dx = target.x - (closePosition.appKit.x + close.frame.width / 2)
+            let dy = target.y - (closePosition.appKit.y + close.frame.height / 2)
+
+            for type in Self.buttons {
+                guard let button = window.standardWindowButton(type), let position = positions[type] else { continue }
+                let moved = NSPoint(x: position.appKit.x + dx, y: position.appKit.y + dy)
+                guard !button.frame.origin.isClose(to: moved) else { continue }
+                positions[type] = (appKit: position.appKit, moved: moved)
+                button.setFrameOrigin(moved)
             }
         }
 
@@ -157,5 +187,11 @@ private struct WindowButtonPlacement: NSViewRepresentable {
             // change after it.
             DispatchQueue.main.async { [weak self] in self?.onMetricsChange?(metrics) }
         }
+    }
+}
+
+extension NSPoint {
+    fileprivate func isClose(to other: NSPoint) -> Bool {
+        abs(x - other.x) < 0.01 && abs(y - other.y) < 0.01
     }
 }

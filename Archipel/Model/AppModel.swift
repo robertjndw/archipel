@@ -518,12 +518,24 @@ final class AppModel {
         }
     }
 
+    /// Called right before another island is selected, while the workspace is still unchanged.
+    /// Putting the new island's content on screen keeps the main thread busy for several frames.
+    /// The sidebar sends its slide to the screen from here, which only works ahead of the change:
+    /// once views are waiting to update, nothing reaches the screen before they all have.
+    @ObservationIgnored var islandWillSwitch: ((_ old: Island.ID?, _ new: Island.ID?) -> Void)?
+
     /// Every mutation that can change which session is on screen goes through
     /// here, so the terminal that left the screen stops rendering and the one
     /// that entered it is started and marked as seen.
     func changingSelection(_ change: (inout Workspace) -> Void) {
         let previous = Set(visibleSessionIDs)
         let previousPlace = (selectedIsland?.id, selectedWorktree?.id)
+        if let islandWillSwitch {
+            // Tried on a copy first, to know where the change leads before it is made.
+            var next = workspace
+            change(&next)
+            if next.selectedIslandID != previousPlace.0 { islandWillSwitch(previousPlace.0, next.selectedIslandID) }
+        }
         mutate(change)
         if showsOnlyNeedsMe { needsMePin = selectedWorktree?.id }
         if previousPlace.1 != selectedWorktree?.id { SidebarTips.worktreeSwitched() }

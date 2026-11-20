@@ -1,4 +1,6 @@
+import AppKit
 import ArchipelCore
+import QuartzCore
 import SwiftUI
 
 /// The island picker at the bottom of the sidebar. Built like the inspector's Files/Changes
@@ -12,6 +14,8 @@ import SwiftUI
 /// If the name does not fit (narrow sidebar, many islands), the selected island shows only its
 /// icon too. The row scrolls only when the icons alone do not fit.
 struct IslandSwitcher: View {
+    /// Where the sidebar is heading, which the highlight follows. Without it, the selection.
+    var swipe: IslandSwipeState?
     @Environment(AppModel.self) private var model
     @State private var editor: IslandEditor.Mode?
     @State private var deleting: Island?
@@ -29,6 +33,9 @@ struct IslandSwitcher: View {
     var body: some View {
         let islands = model.workspace.islands
         let selectedID = model.selectedIsland?.id
+        // Known the moment a switch starts, while the selection only follows once the model has
+        // changed and the views have caught up.
+        let headingID = swipe?.heading.flatMap { model.workspace.island(id: $0) }?.id ?? selectedID
         let summaries = model.islandSummaries()
         let isSwitching = islands.count > 1
         // Measured rather than left to ViewThatFits, so the name can fold away with an animation
@@ -38,10 +45,16 @@ struct IslandSwitcher: View {
         // ViewThatFits takes the plain row while it fits, so the capsule hugs and centers the islands;
         // only when it does not does the scrolling variant take the full width.
         ViewThatFits(in: .horizontal) {
-            row(islands, selectedID: selectedID, summaries: summaries, showsSelection: isSwitching, showsName: showsName)
+            row(islands, selectedID: selectedID, summaries: summaries, showsName: showsName)
+                .background {
+                    if isSwitching { highlight(islands, headingID: headingID, summaries: summaries, showsName: showsName) }
+                }
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    row(islands, selectedID: selectedID, summaries: summaries, showsSelection: isSwitching, showsName: false)
+                    row(islands, selectedID: selectedID, summaries: summaries, showsName: false)
+                        .background(alignment: .leading) {
+                            if isSwitching { highlight(islands, headingID: headingID, summaries: summaries, showsName: false) }
+                        }
                 }
                 // .hidden still shows a scroller when the system is set to always show them.
                 .scrollIndicators(.never)
@@ -51,10 +64,12 @@ struct IslandSwitcher: View {
                 }
             }
         }
+        // The highlight is at its final place at once while the row around it still grows.
+        .clipShape(.capsule)
         .glassEffect(isSwitching ? .regular : .identity, in: .capsule)
         .background {
             // The row as it would be with the name, laid out on its own and never shown.
-            row(islands, selectedID: selectedID, summaries: summaries, showsSelection: isSwitching, showsName: true)
+            row(islands, selectedID: selectedID, summaries: summaries, showsName: true)
                 .fixedSize()
                 .hidden()
                 .accessibilityHidden(true)
@@ -78,7 +93,6 @@ struct IslandSwitcher: View {
         // The bottom line runs through the middle of this, as it does through the status bar.
         .frame(height: 2 * Chrome.bottomLineInset)
         .animation(reduceMotion ? nil : Motion.page, value: selectedID)
-        .onChange(of: selectedID) { Haptics.levelChange() }
         .sheet(item: $editor) { mode in
             IslandEditor(mode: mode)
         }
@@ -95,11 +109,10 @@ struct IslandSwitcher: View {
         }
     }
 
-    private func row(_ islands: [Island], selectedID: Island.ID?, summaries: [Island.ID: AttentionSummary], showsSelection: Bool, showsName: Bool) -> some View {
-        let selectedTint = islands.first { $0.id == selectedID }?.tint.color
-        return HStack(spacing: 2) {
+    private func row(_ islands: [Island], selectedID: Island.ID?, summaries: [Island.ID: AttentionSummary], showsName: Bool, isTemplate: Bool = false) -> some View {
+        HStack(spacing: 2) {
             ForEach(Array(islands.enumerated()), id: \.element.id) { index, island in
-                IslandButton(
+                let button = IslandButton(
                     island: island,
                     isSelected: island.id == selectedID,
                     showsName: showsName,
@@ -108,26 +121,47 @@ struct IslandSwitcher: View {
                 ) {
                     model.select(island: island.id)
                 }
-                .id(island.id)
-                .contextMenu { menu(for: island) }
-            }
-        }
-        // One highlight drawn behind the whole row, placed on the selected button's frame. A
-        // matchedGeometryEffect would be declared twice here, once in each ViewThatFits variant,
-        // and the two sources fight over the frame mid-animation.
-        .backgroundPreferenceValue(SelectedIslandBounds.self) { anchor in
-            GeometryReader { proxy in
-                if let anchor, let selectedTint, showsSelection {
-                    let rect = proxy[anchor]
-                    // A fill and nothing else, like the Files/Changes switcher's.
-                    Capsule()
-                        .fill(selectedTint.opacity(0.18))
-                        .frame(width: rect.width, height: rect.height)
-                        .offset(x: rect.minX, y: rect.minY)
+                if isTemplate {
+                    button
+                } else {
+                    button
+                        .id(island.id)
+                        .contextMenu { menu(for: island) }
                 }
             }
         }
         .padding(2)
+    }
+
+    /// The fill under the island the sidebar is heading to.
+    ///
+    /// It needs to know where that island's button ends up, and the row cannot say: its buttons
+    /// change width over the animation, so their frames arrive a frame at a time. So the row is
+    /// laid out a second time, invisibly, as it will be once the switch is done and without any
+    /// animation, and the fill is placed on the selected button of that one. Both rows are laid
+    /// out the same way in the same place, so that is where the visible button comes to rest.
+    ///
+    /// One fill behind the whole row rather than a matchedGeometryEffect, which would be declared
+    /// twice here, once in each ViewThatFits variant, with the two sources fighting over the frame.
+    private func highlight(_ islands: [Island], headingID: Island.ID?, summaries: [Island.ID: AttentionSummary], showsName: Bool) -> some View {
+        let tint = islands.first { $0.id == headingID }?.tint.color
+        return row(islands, selectedID: headingID, summaries: summaries, showsName: showsName, isTemplate: true)
+            .opacity(0)
+            .backgroundPreferenceValue(SelectedIslandBounds.self) { anchor in
+                GeometryReader { proxy in
+                    if let anchor, let tint, let headingID {
+                        // A fill and nothing else, like the Files/Changes switcher's.
+                        IslandPill(frame: proxy[anchor], color: tint.opacity(0.18), island: headingID, slides: !reduceMotion)
+                    }
+                }
+            }
+            .fixedSize()
+            .transaction {
+                $0.animation = nil
+                $0.disablesAnimations = true
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -265,6 +299,104 @@ private struct StatusDot: View {
         case .unread: StatusPulse.finished.color
         case .working, nil: nil
         }
+    }
+}
+
+/// The switcher's highlight as a layer. Its slide from one island to the next is handed to Core
+/// Animation, like the lists' above it, so the two move as one while the app is busy with the
+/// switch. Any other change of its frame, like a sidebar being resized, is followed at once.
+private struct IslandPill: NSViewRepresentable {
+    let frame: CGRect
+    let color: Color
+    let island: Island.ID
+    let slides: Bool
+
+    func makeNSView(context: Context) -> PillView { PillView() }
+
+    func updateNSView(_ view: PillView, context: Context) {
+        view.show(frame: frame, color: NSColor(color), island: island, slides: slides)
+    }
+
+    final class PillView: NSView {
+        private let pill = CALayer()
+        private var target = CGRect.zero
+        private var island: Island.ID?
+        /// The island and the place in the window the pill was last laid out for.
+        private var shown: (island: Island.ID, frame: CGRect)?
+        private var slides = false
+        private var nextKey = 0
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            layer?.addSublayer(pill)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+        override var isFlipped: Bool { true }
+
+        // It sits behind the buttons and must never take a click.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        func show(frame: CGRect, color: NSColor, island: Island.ID, slides: Bool) {
+            target = frame
+            self.island = island
+            self.slides = slides
+            // Its own appearance, so a dynamic color resolves for this view's light or dark mode.
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                let resolved = color.cgColor
+                guard pill.backgroundColor != resolved else { return }
+                if shown != nil, slides {
+                    let fade = CABasicAnimation(keyPath: "backgroundColor")
+                    fade.fromValue = pill.presentation()?.backgroundColor ?? pill.backgroundColor
+                    fade.duration = 0.2
+                    pill.add(fade, forKey: "color")
+                }
+                pill.backgroundColor = resolved
+            }
+            needsLayout = true
+        }
+
+        /// In layout, where this view's own place in the window is settled: the row it belongs to
+        /// is re-centered when the names change width, and the slide has to start from where the
+        /// pill is on screen, not from where it was inside this view.
+        override func layout() {
+            super.layout()
+            guard let island, window != nil else { return }
+            var frame = convert(target, to: nil)
+            // The row this sits in is centered on one whose width is still animating, which moves
+            // it back and forth by a fraction of a point until that is done. Not followed.
+            if let shown, shown.island == island, shown.frame.isWithinAPoint(of: frame) { frame = shown.frame }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            defer { CATransaction.commit() }
+
+            if let shown, shown.island != island, slides {
+                // Where it is on screen, the springs still running included.
+                let running = pill.presentation().map { ($0.position.x - pill.position.x, $0.bounds.width - pill.bounds.width) } ?? (0, 0)
+                let from = (x: shown.frame.midX + running.0, width: shown.frame.width + running.1)
+                add(distance: from.x - frame.midX, to: "position.x")
+                add(distance: from.width - frame.width, to: "bounds.size.width")
+            }
+            pill.frame = convert(frame, from: nil)
+            pill.cornerRadius = frame.height / 2
+            shown = (island, frame)
+        }
+
+        private func add(distance: Double, to keyPath: String) {
+            let spring = PageSpring(position: distance, response: IslandSwipeState.switchResponse, damping: IslandSwipeState.damping)
+            guard !spring.isSettled else { return }
+            pill.add(CAKeyframeAnimation(keyPath: keyPath, adding: spring), forKey: "spring-\(nextKey)")
+            nextKey += 1
+        }
+    }
+}
+
+extension CGRect {
+    fileprivate func isWithinAPoint(of other: CGRect) -> Bool {
+        abs(minX - other.minX) < 1 && abs(minY - other.minY) < 1 && abs(width - other.width) < 1 && abs(height - other.height) < 1
     }
 }
 

@@ -42,7 +42,7 @@ struct SidebarView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Hidden rather than disabled: while the list spans every island there is no current one to move from.
             if !model.showsOnlyNeedsMe {
-                IslandSwitcher()
+                IslandSwitcher(swipe: swipe)
                     .popoverTip(SidebarTips.group.currentTip as? IslandSwipeTip, arrowEdge: .top)
                     .tipViewStyle(CompactTipStyle())
             }
@@ -79,6 +79,9 @@ struct SidebarView: View {
             }
         }
         .scrollPosition(swipe.scrollPosition(of: island?.id))
+        // Here as well as on the sidebar: each page of the pager is a hosting view of its own,
+        // which animations from outside do not reach.
+        .animation(.snappy, value: model.settings.sidebarDensity)
         .accessibilityIdentifier("sidebar")
         .overlay {
             if let island, island.projects.isEmpty {
