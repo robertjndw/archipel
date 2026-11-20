@@ -41,8 +41,19 @@ final class IslandTests: ArchipelUITestCase {
         assertExists(sidebarProject("other"), "The second island's project should be listed.")
         chooseMenu("Islands", "Personal")
         assertExists(sidebarProject("repo24"), "The first island's projects should be back.")
-        XCTAssertTrue(sidebarProject("repo24").isHittable, "The list should come back where it was scrolled to.")
+        waitUntil("the list is back where it was scrolled to") { sidebarProject("repo24").isHittable }
         XCTAssertFalse(sidebarProject("repo01").isHittable, "The list should not jump back to the top.")
+
+        // The same once the first island's list is gone and has to be built again. A list that is
+        // not shown is kept for 20 seconds after a switch, and for less once the pointer has left
+        // the sidebar. CI ran into that without the wait.
+        chooseMenu("Islands", "Work")
+        assertExists(sidebarProject("other"), "The second island's project should be listed.")
+        Thread.sleep(forTimeInterval: 23)
+        chooseMenu("Islands", "Personal")
+        assertExists(sidebarProject("repo24"), "The first island's projects should be back.")
+        waitUntil("a rebuilt list is back where it was scrolled to") { sidebarProject("repo24").isHittable }
+        XCTAssertFalse(sidebarProject("repo01").isHittable, "A rebuilt list should not start at the top.")
     }
 
     func testSwitchingIslandsFromTheMenu() throws {

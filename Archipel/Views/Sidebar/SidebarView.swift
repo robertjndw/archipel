@@ -80,7 +80,6 @@ struct SidebarView: View {
                 }
             }
         }
-        .scrollPosition(swipe.scrollPosition(of: island?.id))
         // Here as well as on the sidebar: each page of the pager is a hosting view of its own,
         // which animations from outside do not reach.
         .animation(.snappy, value: model.settings.sidebarDensity)

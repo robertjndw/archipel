@@ -50,7 +50,8 @@ final class IslandSwipeState {
     @ObservationIgnored fileprivate var swipeGeneration = -1
     @ObservationIgnored private var cooling: Task<Void, Never>?
     @ObservationIgnored private var isHovered = false
-    @ObservationIgnored private var scrollPositions: [Island.ID: ScrollPosition] = [:]
+    /// Where each island's list was scrolled to when its page was last taken down.
+    @ObservationIgnored fileprivate var scrollAnchors: [Island.ID: ListScrollAnchor] = [:]
 
     /// The spring's response when a swipe is let go short of halfway and the strip goes back.
     static let swipeResponse = 0.3
@@ -179,13 +180,6 @@ final class IslandSwipeState {
         return islands[max(index - 1, 0)...min(index + 1, islands.count - 1)].map(\.id)
     }
 
-    /// Each island's list keeps its own scroll position, also across the pages being rebuilt.
-    func scrollPosition(of island: Island.ID?) -> Binding<ScrollPosition> {
-        Binding(
-            get: { [weak self] in island.flatMap { self?.scrollPositions[$0] } ?? ScrollPosition(edge: .top) },
-            set: { [weak self] in if let island { self?.scrollPositions[island] = $0 } }
-        )
-    }
 }
 
 extension View {
@@ -194,6 +188,16 @@ extension View {
     func islandSwipe(_ state: IslandSwipeState, isEnabled: Bool = true) -> some View {
         modifier(IslandSwipeDriver(state: state, isEnabled: isEnabled))
     }
+}
+
+/// A place in a list that a new list with the same rows can be scrolled back to. Not a distance
+/// from the top: a new list works with estimated row heights until it has drawn its rows, so the
+/// same distance is a different place in it, or past its end.
+fileprivate struct ListScrollAnchor {
+    /// The row at the top edge.
+    let row: Int
+    /// How far that row is scrolled past the top edge.
+    let offset: CGFloat
 }
 
 /// Draws `page` for the shown island, and for the others in the strip. Only the selected island's
@@ -270,6 +274,8 @@ private final class IslandStripView: NSView {
     /// What the pager last asked for.
     private var wanted: (order: [Island.ID?], anchor: Island.ID?, crossfades: Bool)?
     private var hasBeenAskedForAccessibility = false
+    /// Islands whose new list has yet to be scrolled back to where the last one was.
+    private var awaitingScroll: [Island.ID: ListScrollAnchor] = [:]
     private var springKeys: [String] = []
     private var nextSpringKey = 0
     private var shownFlight = 0
@@ -300,12 +306,71 @@ private final class IslandStripView: NSView {
             hasBeenAskedForAccessibility = true
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.pages.values.forEach { $0.removeFromSuperview() }
-                self.pages = [:]
+                self.pages.keys.forEach(self.removePage)
                 self.buildPages()
             }
         }
         return super.accessibilityChildren()
+    }
+
+    /// Takes a page down and remembers how far its list was scrolled. A page only lives while its
+    /// island is shown or kept warm next to the shown one. Coming back to an island later makes
+    /// a new list, which would start at the top.
+    private func removePage(_ id: Island.ID?) {
+        guard let page = pages.removeValue(forKey: id) else { return }
+        rememberScroll(of: id, in: page)
+        page.removeFromSuperview()
+    }
+
+    private func rememberScroll(of id: Island.ID?, in page: NSView) {
+        // A list that has not been scrolled back yet is still at the top, not where it belongs.
+        guard let id, awaitingScroll[id] == nil, let list = Self.list(in: page),
+              let table = list.documentView as? NSTableView
+        else { return }
+        let top = list.contentView.bounds.minY
+        let row = table.row(at: NSPoint(x: table.bounds.midX, y: max(top, 0)))
+        guard row >= 0 else {
+            state.scrollAnchors[id] = nil
+            return
+        }
+        state.scrollAnchors[id] = ListScrollAnchor(row: row, offset: top - table.rect(ofRow: row).minY)
+    }
+
+    /// Scrolls a new page's list back to where the island's last one was. SwiftUI may fill the
+    /// list a pass or two after the page is made, and the list is shorter than it will be until
+    /// the rows near its end have been measured, so this tries again for a few turns of the run
+    /// loop before it settles for as far as it got.
+    private func restoreScroll(of id: Island.ID?, in page: NSView, attempts: Int = 8) {
+        guard let id, let anchor = state.scrollAnchors[id], pages[id] === page else { return }
+        awaitingScroll[id] = anchor
+        page.layoutSubtreeIfNeeded()
+        if let list = Self.list(in: page), let table = list.documentView as? NSTableView, table.numberOfRows > anchor.row {
+            let wanted = table.rect(ofRow: anchor.row).minY + anchor.offset
+            let furthest = max(table.frame.height - list.contentView.bounds.height, 0)
+            list.contentView.scroll(to: NSPoint(x: list.contentView.bounds.minX, y: min(wanted, furthest)))
+            list.reflectScrolledClipView(list.contentView)
+            if wanted <= furthest {
+                awaitingScroll[id] = nil
+                return
+            }
+        }
+        guard attempts > 0 else {
+            awaitingScroll[id] = nil
+            return
+        }
+        DispatchQueue.main.async { [weak self, weak page] in
+            guard let self, let page else { return }
+            self.restoreScroll(of: id, in: page, attempts: attempts - 1)
+        }
+    }
+
+    /// The scroll view of the page's list.
+    private static func list(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView, scroll.documentView is NSTableView { return scroll }
+        for subview in view.subviews {
+            if let found = list(in: subview) { return found }
+        }
+        return nil
     }
 
     private func addPage(_ id: Island.ID?, content: (Island.ID?) -> AnyView) -> NSHostingView<AnyView> {
@@ -327,13 +392,15 @@ private final class IslandStripView: NSView {
     func showNow(order: [Island.ID]) {
         guard let content, window != nil else { return }
         let added = order.filter { pages[$0] == nil }.map { addPage($0, content: content) }
-        for (id, page) in pages where !order.contains(where: { $0 == id }) {
-            pages[id] = nil
-            page.removeFromSuperview()
+        for id in pages.keys where !order.contains(where: { $0 == id }) {
+            removePage(id)
         }
         self.order = order
         render()
         added.forEach { $0.layoutSubtreeIfNeeded() }
+        for (id, page) in pages where added.contains(page) {
+            restoreScroll(of: id, in: page)
+        }
         CATransaction.flush()
     }
 
@@ -348,12 +415,14 @@ private final class IslandStripView: NSView {
         // accessibility at all, whenever a client comes along.
         guard let content, let (order, anchor, crossfades) = wanted, window != nil else { return }
         let hadPages = !pages.isEmpty
+        var added: [Island.ID?] = []
         for id in order {
             if let page = pages[id] {
                 page.rootView = content(id)
                 continue
             }
             let page = addPage(id, content: content)
+            added.append(id)
             if crossfades, hadPages {
                 page.alphaValue = 0
                 NSAnimationContext.runAnimationGroup { context in
@@ -363,11 +432,12 @@ private final class IslandStripView: NSView {
             }
         }
         for (id, page) in pages where !order.contains(id) {
-            pages[id] = nil
             guard crossfades else {
-                page.removeFromSuperview()
+                removePage(id)
                 continue
             }
+            pages[id] = nil
+            rememberScroll(of: id, in: page)
             // Reduce Motion: it stays where it is and fades into the page that replaced it.
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = Self.fadeDuration
@@ -379,6 +449,10 @@ private final class IslandStripView: NSView {
         self.order = order
         fallbackAnchor = anchor
         render()
+        // After the render, which is what gives a new page its size.
+        for id in added {
+            if let page = pages[id] { restoreScroll(of: id, in: page) }
+        }
     }
 
     override func layout() {
