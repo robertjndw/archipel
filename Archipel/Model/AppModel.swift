@@ -1619,6 +1619,10 @@ final class AppModel {
             if isPlainShell(session) { receiveUserSettingsHook(message, for: session.id) }
             return
         }
+        // Archipel never launches a plain shell with hooks, so a launch hook here comes from an
+        // older helper that sends no origin. Acting on it would save a Claude conversation id on
+        // the shell session.
+        if isPlainShell(session) { return }
         if let context = message.context {
             recordContext(context, for: session.id)
         } else if message.usage != nil {
