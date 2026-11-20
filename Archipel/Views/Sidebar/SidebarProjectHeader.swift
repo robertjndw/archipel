@@ -17,6 +17,10 @@ struct SidebarProjectHeader: View {
         HStack(spacing: 8) {
             // The rows' icon column, so a worktree sits exactly one indent step right of its project.
             ProjectIconView(project: project, size: density.projectIconSize)
+                // For its worktrees, whose rows are not there to play it while it is collapsed. Not
+                // a light around the header: its content runs wider than a row's card, which would
+                // cut through the badge at the trailing edge.
+                .statusSpot(model.projectPulses[project.id], diameter: density.projectIconSize + 12)
                 .frame(width: SidebarWorktreeRow.iconColumnWidth)
             // Primary, unlike a plain section title: the project is an item with an icon of its
             // own, the way a project or an account heads its group in Xcode and Mail.

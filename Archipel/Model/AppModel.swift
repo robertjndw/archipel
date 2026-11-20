@@ -47,9 +47,14 @@ final class AppModel {
     @ObservationIgnored private var launchGenerations: [Session.ID: Int] = [:]
     /// The glow each worktree row last played. Not persisted, so nothing glows after a launch.
     private(set) var statusPulses: [Worktree.ID: StatusPulseCount] = [:]
+    /// Glows of worktrees whose row is not in the sidebar. A collapsed project plays them on its
+    /// header, an island other than the selected one on its button in the switcher.
+    private(set) var projectPulses: [Project.ID: StatusPulseCount] = [:]
+    private(set) var islandPulses: [Island.ID: StatusPulseCount] = [:]
     /// Glows of changes that happened while Archipel was in the background. They would play behind
     /// another app where nobody sees them, so they wait for the app to come back.
     @ObservationIgnored private var pulsesAwaitingActivation: [Worktree.ID: StatusPulse] = [:]
+    @ObservationIgnored private var awaitedPulsesTask: Task<Void, Never>?
     @ObservationIgnored private var subagentExpiry: (date: Date, task: Task<Void, Never>)?
     /// Shown as an alert, one message at a time. Assigning while another message is still up puts
     /// the new one in line instead of replacing what the user has not read yet (a failed save
@@ -450,10 +455,7 @@ final class AppModel {
         }
         isAppActive = true
         terminalApp?.setAppFocused(true)
-        for (id, kind) in pulsesAwaitingActivation where workspace.worktree(id: id) != nil {
-            statusPulses[id, default: StatusPulseCount()].play(kind)
-        }
-        pulsesAwaitingActivation.removeAll()
+        playAwaitedPulses()
         // Coming back to the app does not mark anything as seen: the window may have been in front
         // all along with nobody at the desk. Clicking or typing into a session does; see
         // watchSessionInteraction().
@@ -466,6 +468,61 @@ final class AppModel {
         refreshGitStatus(lookingUpPullRequests: true, minimumPullRequestAge: .seconds(30))
         fetchRemotesIfDue()
         startGitStatusTimer()
+    }
+
+    /// Plays the glows that waited for the app to come back, one after the other from the top of
+    /// the sidebar down. Started together they would all run in step.
+    private func playAwaitedPulses() {
+        awaitedPulsesTask?.cancel()
+        awaitedPulsesTask = Task { @MainActor [weak self] in
+            // The window is still coming to the front, and the start of the glow would be missed.
+            try? await Task.sleep(for: .milliseconds(300))
+            // The user may have switched away again by now. Then they keep waiting.
+            guard let self, isAppActive, !Task.isCancelled else { return }
+            // Several worktrees can share a project header or an island button, which then plays
+            // once, for whatever needs the user most.
+            var order: [PulseTarget] = []
+            var pulses: [PulseTarget: StatusPulse] = [:]
+            for id in workspace.allWorktrees.lazy.map(\.id) {
+                guard let pulse = pulsesAwaitingActivation[id] else { continue }
+                let target = pulseTarget(for: id)
+                if pulses[target] == nil { order.append(target) }
+                pulses[target] = max(pulses[target] ?? pulse, pulse)
+            }
+            pulsesAwaitingActivation.removeAll()
+            for target in order {
+                guard let pulse = pulses[target] else { continue }
+                play(pulse, on: target)
+                try? await Task.sleep(for: .milliseconds(80))
+            }
+        }
+    }
+
+    /// Where a worktree's glow can be seen right now.
+    private enum PulseTarget: Hashable {
+        case worktree(Worktree.ID)
+        case project(Project.ID)
+        case island(Island.ID)
+    }
+
+    private func pulseTarget(for id: Worktree.ID) -> PulseTarget {
+        // The "Needs Me" list has rows from every island and ignores what is collapsed.
+        guard !showsOnlyNeedsMe else { return .worktree(id) }
+        if let island = workspace.island(containingWorktree: id), island.id != selectedIsland?.id {
+            return .island(island.id)
+        }
+        if let project = workspace.project(containingWorktree: id), !project.isExpanded {
+            return .project(project.id)
+        }
+        return .worktree(id)
+    }
+
+    private func play(_ pulse: StatusPulse, on target: PulseTarget) {
+        switch target {
+        case .worktree(let id): statusPulses[id, default: StatusPulseCount()].play(pulse)
+        case .project(let id): projectPulses[id, default: StatusPulseCount()].play(pulse)
+        case .island(let id): islandPulses[id, default: StatusPulseCount()].play(pulse)
+        }
     }
 
     func appDidResignActive() {
@@ -1034,6 +1091,12 @@ final class AppModel {
         branchGenerations = branchGenerations.filter { worktrees.contains($0.key) }
         gitRefresh.diffStatCheckedAt = gitRefresh.diffStatCheckedAt.filter { worktrees.contains($0.key) }
         let projects = Set(workspace.islands.lazy.flatMap(\.projects).map(\.id))
+        if !projectPulses.keys.allSatisfy(projects.contains) {
+            projectPulses = projectPulses.filter { projects.contains($0.key) }
+        }
+        if !islandPulses.keys.allSatisfy({ workspace.island(id: $0) != nil }) {
+            islandPulses = islandPulses.filter { workspace.island(id: $0.key) != nil }
+        }
         if !projectIcons.keys.allSatisfy(projects.contains) {
             projectIcons = projectIcons.filter { projects.contains($0.key) }
         }
@@ -1546,7 +1609,7 @@ final class AppModel {
         let pulse = StatusPulse.kind(from: before, to: activity, siblings: siblings)
         if let pulse, let worktreeID = worktree?.id {
             if NSApp.isActive {
-                statusPulses[worktreeID, default: StatusPulseCount()].play(pulse)
+                play(pulse, on: pulseTarget(for: worktreeID))
             } else {
                 pulsesAwaitingActivation[worktreeID] = max(pulsesAwaitingActivation[worktreeID] ?? pulse, pulse)
             }

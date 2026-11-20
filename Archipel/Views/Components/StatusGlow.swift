@@ -31,12 +31,66 @@ extension View {
     }
 }
 
+extension View {
+    /// The glow for something too small to run a light around: a soft spot of the status color
+    /// behind it that swells and fades each time `pulse` goes up.
+    func statusSpot(_ pulse: StatusPulseCount?, diameter: CGFloat) -> some View {
+        modifier(StatusSpot(pulse: pulse ?? StatusPulseCount(), diameter: diameter))
+    }
+}
+
+private struct StatusSpot: ViewModifier {
+    let pulse: StatusPulseCount
+    let diameter: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Counts plays only, like `StatusGlow.plays`.
+    @State private var plays = 0
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                Circle()
+                    .fill(pulse.kind.color)
+                    .frame(width: diameter, height: diameter)
+                    .blur(radius: 5)
+                    .keyframeAnimator(initialValue: Spot(), trigger: plays) { view, spot in
+                        view
+                            .scaleEffect(reduceMotion ? 1 : spot.scale)
+                            .opacity(0.6 * spot.light)
+                    } keyframes: { _ in
+                        KeyframeTrack(\.light) {
+                            CubicKeyframe(1, duration: 0.25)
+                            LinearKeyframe(1, duration: 0.9)
+                            CubicKeyframe(0, duration: 0.65)
+                        }
+                        KeyframeTrack(\.scale) {
+                            LinearKeyframe(0.5, duration: 0.001)
+                            SpringKeyframe(1, duration: 0.5, spring: .smooth)
+                        }
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .onChange(of: pulse.count) { old, new in
+                if new > old { plays += 1 }
+            }
+    }
+
+    private struct Spot {
+        var light = 0.0
+        var scale = 0.5
+    }
+}
+
 private struct StatusGlow: ViewModifier {
     let pulse: StatusPulseCount
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Separate from `pulse` so that it only ever counts plays: the keyframes start when it changes,
     /// and the view appearing with an old pulse value must not start them.
     @State private var plays = 0
+
+    private static let lapDuration = 2.2
+    private static let tailDelay = 0.32
 
     func body(content: Content) -> some View {
         let reduceMotion = reduceMotion
@@ -48,20 +102,32 @@ private struct StatusGlow: ViewModifier {
                 Color.clear
                     .keyframeAnimator(initialValue: BacklightFrame(), trigger: plays) { view, frame in
                         view.background { BacklightHost(frame: frame, tint: tint, still: reduceMotion) }
-                    } keyframes: { _ in
-                        KeyframeTrack(\.lap) {
-                            LinearKeyframe(0, duration: 0.001)
-                            // Eases out so the light slows down toward the end of the lap.
-                            CubicKeyframe(1, duration: reduceMotion ? 0.001 : 2.2)
+                    } keyframes: { current in
+                        // A lap ends where it began, so a new one picks up wherever the light is. That
+                        // is the start after a finished lap, and mid-lap it keeps the light from
+                        // jumping back when a second change comes in.
+                        let start = current.head - current.head.rounded(.down)
+                        let trailing = max(current.head - current.tail, 0)
+                        KeyframeTrack(\.head) {
+                            LinearKeyframe(start, duration: 0.001)
+                            CubicKeyframe(start + 1, duration: Self.lapDuration)
                         }
+                        // The same lap a moment later. The light spans from here to the head, so it
+                        // grows out of a point as it picks up speed and gathers again as it comes to
+                        // rest, instead of standing still with its whole trail out.
+                        KeyframeTrack(\.tail) {
+                            LinearKeyframe(start - trailing, duration: 0.001 + Self.tailDelay)
+                            CubicKeyframe(start + 1, duration: Self.lapDuration)
+                        }
+                        // Lasts until the tail has caught up, so the light never goes out mid-stretch.
                         KeyframeTrack(\.light) {
                             CubicKeyframe(1, duration: 0.25)
-                            LinearKeyframe(1, duration: reduceMotion ? 0.4 : 1.5)
-                            CubicKeyframe(0, duration: 0.5)
+                            LinearKeyframe(1, duration: reduceMotion ? 0.4 : 1.6)
+                            CubicKeyframe(0, duration: 0.65)
                         }
                         KeyframeTrack(\.card) {
                             CubicKeyframe(1, duration: 0.4)
-                            LinearKeyframe(1, duration: reduceMotion ? 0.7 : 1.4)
+                            LinearKeyframe(1, duration: reduceMotion ? 0.7 : 1.5)
                             CubicKeyframe(0, duration: 0.7)
                         }
                     }
@@ -75,8 +141,10 @@ private struct StatusGlow: ViewModifier {
 }
 
 struct BacklightFrame {
-    /// Where the light is along the card's outline, 0...1 for one lap.
-    var lap = 0.0
+    /// Where the front of the light is along the card's outline, in laps. Only the fraction matters.
+    var head = 0.0
+    /// Where the light ends, in laps. Never ahead of `head`.
+    var tail = 0.0
     /// Strength of the light, 0...1.
     var light = 0.0
     /// Strength of the card surface, 0...1. Gives rows that are not selected a card to light.
@@ -170,8 +238,8 @@ private final class LightView: NSHostingView<Backlight> {
 }
 
 /// A colored light that runs around behind the card. Only a soft halo just outside the card shows,
-/// lit near the light and faded out before the spill area ends so nothing gets clipped. The card's
-/// edge picks up a bit of it as it passes.
+/// brightest at the head and thinning out along the tail, faded out before the spill area ends so
+/// nothing gets clipped. The card's edge picks up a bit of it as it passes.
 private struct Backlight: View {
     let frame: BacklightFrame
     let tint: Color
@@ -179,17 +247,20 @@ private struct Backlight: View {
     let still: Bool
 
     /// Room around the card for the halo. Sideways it is the card's whole 10pt inset from the
-    /// sidebar's edges; the halo has faded out by then, so the list's edge does not cut it off.
+    /// sidebar's edges, which is less than the halo reaches, so it is faded out over `edgeFade`.
     static let spill = CGSize(width: 10, height: 16)
     /// Matches the sidebar's selection card.
     static let cornerRadius = Chrome.controlRadius
-    /// The halo: a band along the outline, blurred so it fades out within the spill.
+    /// The halo: a band along the outline, blurred so it fades out within the spill. It is as wide
+    /// as `haloWidth` at the head and narrows to `tailWidth`.
     private static let haloWidth: CGFloat = 8
+    private static let tailWidth: CGFloat = 6
     private static let haloBlur: CGFloat = 4.5
-    /// The light source: soft spots along the outline that decide where the halo is lit.
-    private static let spotRadius: CGFloat = 34
-    private static let trail = 14
-    private static let trailSpacing = 0.017
+    private static let edgeFade: CGFloat = 4
+    /// How far the light reaches ahead of the head, so its front is as soft as its sides.
+    private static let lead: CGFloat = 20
+    /// Brightness steps from the dim ends to the head. The blur hides the steps.
+    private static let levels = 24
 
     var body: some View {
         let frame = frame
@@ -205,50 +276,97 @@ private struct Backlight: View {
             context.fill(outline, with: .color(.primary.opacity(0.05 * frame.card)))
             guard frame.light > 0 else { return }
 
+            let light = still
+                ? [Stretch(path: outline, opacity: 1, strength: 1)]
+                : Self.stretches(of: outline, around: cardRect, head: frame.head, tail: frame.tail)
+
             // Behind the card: nothing of the halo shows inside it.
             var around = context
-            around.clip(to: Path(bounds).subtracting(outline))
+            var outside = Path(bounds)
+            outside.addPath(outline)
+            around.clip(to: outside, style: FillStyle(eoFill: true))
             around.opacity = frame.light
             around.drawLayer { halo in
                 halo.drawLayer { band in
                     band.addFilter(.blur(radius: Self.haloBlur))
-                    band.stroke(outline, with: .color(tint), lineWidth: Self.haloWidth)
-                }
-                guard !still else { return }
-                // Keeps only the part of the band near the light.
-                halo.blendMode = .destinationIn
-                halo.drawLayer { spots in
-                    for step in (0..<Self.trail).reversed() {
-                        let fade = 1 - Double(step) / Double(Self.trail)
-                        let center = Self.point(on: outline, at: frame.lap - Double(step) * Self.trailSpacing)
-                        let radius = Self.spotRadius * (0.5 + 0.5 * fade)
-                        spots.fill(
-                            Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
-                            with: .radialGradient(
-                                Gradient(colors: [.white.opacity(fade), .white.opacity(0)]),
-                                center: center, startRadius: 0, endRadius: radius
-                            )
-                        )
+                    for stretch in light {
+                        let width = Self.tailWidth + (Self.haloWidth - Self.tailWidth) * stretch.strength
+                        band.stroke(stretch.path, with: .color(tint.opacity(stretch.opacity)), lineWidth: width)
                     }
                 }
+                // The list ends where the spill does on the left and right. The halo is still
+                // visible there, so without this it would end in a straight line.
+                let fade = Self.edgeFade / size.width
+                halo.blendMode = .destinationIn
+                halo.fill(
+                    Path(bounds),
+                    with: .linearGradient(
+                        Gradient(stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white, location: fade),
+                            .init(color: .white, location: 1 - fade),
+                            .init(color: .clear, location: 1),
+                        ]),
+                        startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)
+                    )
+                )
             }
 
-            // Where the light passes behind it, the card's edge picks up a little of it.
-            let rim: GraphicsContext.Shading = still
-                ? .color(tint.opacity(0.35 * frame.light))
-                : .radialGradient(
-                    Gradient(colors: [tint.opacity(0.55 * frame.light), tint.opacity(0)]),
-                    center: Self.point(on: outline, at: frame.lap), startRadius: 0, endRadius: Self.spotRadius
-                )
-            context.stroke(outline, with: rim, lineWidth: 1)
+            // Where the light is behind it, the card's edge picks up a little of it.
+            var rim = context
+            rim.opacity = (still ? 0.35 : 0.6) * frame.light
+            rim.drawLayer { edge in
+                for stretch in light {
+                    edge.stroke(stretch.path, with: .color(tint.opacity(stretch.opacity)), lineWidth: 1)
+                }
+            }
         }
         .allowsHitTesting(false)
     }
 
-    /// The point `fraction` of the way along the outline, wrapping around for values outside 0...1.
-    private static func point(on outline: Path, at fraction: Double) -> CGPoint {
-        let wrapped = fraction - fraction.rounded(.down)
-        return outline.trimmedPath(from: 0, to: max(wrapped, 0.0001)).currentPoint ?? .zero
+    /// A piece of the outline and how much light it adds to what is drawn before it.
+    private struct Stretch {
+        let path: Path
+        let opacity: Double
+        /// 0...1, how close to the head's full brightness this piece brings the light.
+        let strength: Double
+    }
+
+    /// The light as pieces of the outline, each inside the one before and drawn over it: the first
+    /// spans the whole light, the last only the head. Stacked, they brighten in even steps.
+    ///
+    /// The light is measured along the outline, not as a distance from the head. On a low row the
+    /// opposite edge is closer to the head than the tail is, and would light up with it.
+    private static func stretches(of outline: Path, around card: CGRect, head: Double, tail: Double) -> [Stretch] {
+        // Assumes circular corners. The continuous ones are a little longer, which does not show.
+        let perimeter = 2 * (card.width + card.height) - (8 - 2 * .pi) * cornerRadius
+        let lead = lead / perimeter
+        // With the tail caught up there is still a spot as long behind the head as ahead of it.
+        let body = max(head - tail, 0) + lead
+        return (1...levels).map { level in
+            let strength = Double(level) / Double(levels)
+            // Fades in a nearly straight line along the tail, and faster than that ahead.
+            let behind = body * (1 - pow(strength, 1 / 0.85))
+            let ahead = lead * (1 - strength.squareRoot())
+            return Stretch(
+                path: arc(of: outline, from: head - behind, to: head + ahead),
+                // What it takes on top of the levels below to reach `strength`.
+                opacity: 1 / Double(levels - level + 1),
+                strength: strength
+            )
+        }
+    }
+
+    /// The outline between two positions given in laps, across the outline's start if need be.
+    private static func arc(of outline: Path, from start: Double, to end: Double) -> Path {
+        let length = end - start
+        guard length < 1 else { return outline }
+        let from = start - start.rounded(.down)
+        let to = from + max(length, 0.0001)
+        guard to > 1 else { return outline.trimmedPath(from: from, to: to) }
+        var path = outline.trimmedPath(from: from, to: 1)
+        path.addPath(outline.trimmedPath(from: 0, to: to - 1))
+        return path
     }
 }
 

@@ -117,6 +117,7 @@ struct IslandSwitcher: View {
                     isSelected: island.id == selectedID,
                     showsName: showsName,
                     summary: summaries[island.id] ?? .zero,
+                    pulse: isTemplate ? nil : model.islandPulses[island.id],
                     shortcutIndex: index < 9 ? index + 1 : nil
                 ) {
                     model.select(island: island.id)
@@ -184,6 +185,8 @@ private struct IslandButton: View {
     /// Off when the switcher is too narrow for it; the island is then marked by the fill alone.
     let showsName: Bool
     let summary: AttentionSummary
+    /// The glows of the island's worktrees while it is not the one on screen.
+    let pulse: StatusPulseCount?
     let shortcutIndex: Int?
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -217,6 +220,7 @@ private struct IslandButton: View {
                     SpringKeyframe(1.0, duration: 0.4, spring: .bouncy(extraBounce: 0.15))
                 }
                 .frame(width: 16)
+                .statusSpot(pulse, diameter: 26)
                 .overlay(alignment: .topTrailing) {
                     StatusDot(summary: summary)
                         .offset(x: 3, y: -2)
