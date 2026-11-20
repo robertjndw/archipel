@@ -54,10 +54,9 @@ struct StatusGlyph: View {
                     .accessibilityLabel(code == 0 ? "Ended" : "Exited with an error")
                     .help(activity.status.label)
             case .notStarted:
-                Image(systemName: "moon.zzz")
-                    .foregroundStyle(.tertiary)
-                    .accessibilityLabel(activity.status.label)
-                    .help(activity.status.label)
+                // Nothing: a session that has not started yet is the normal state of most of them,
+                // and a glyph on every one of them says nothing. Selecting it starts it.
+                EmptyView()
             }
         }
         .frame(width: 18)

@@ -35,7 +35,7 @@ struct SymbolPicker: View {
                 }
                 // The island editor's form turns scrolling off for itself, and that reaches in here.
                 .scrollDisabled(false)
-                .frame(height: 220)
+                .frame(height: gridHeight(for: results.count))
                 .overlay {
                     if results.isEmpty { ContentUnavailableView.search(text: query) }
                 }
@@ -49,12 +49,6 @@ struct SymbolPicker: View {
                 .onChange(of: category) { scrollToTop(proxy, results: self.results) }
                 .onChange(of: query) { scrollToTop(proxy, results: self.results) }
             }
-            Text(selection)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .lineLimit(1)
-                .truncationMode(.middle)
         }
         .padding(.vertical, 4)
     }
@@ -65,8 +59,12 @@ struct SymbolPicker: View {
         HStack(spacing: 5) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Search Symbols", text: $query)
+            // A prompt, not a title: in the editor's grouped form a title becomes a row label,
+            // which wraps onto two lines next to an empty field.
+            TextField(text: $query, prompt: Text("Search Symbols")) { EmptyView() }
                 .textFieldStyle(.plain)
+                .labelsHidden()
+                .lineLimit(1)
             if !query.isEmpty {
                 Button("Clear Search", systemImage: "xmark.circle.fill") { query = "" }
                     .labelStyle(.iconOnly)
@@ -76,7 +74,7 @@ struct SymbolPicker: View {
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 4)
-        .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 7, style: .continuous))
+        .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: Chrome.controlRadius, style: .continuous))
         .disabled(catalog.symbols.isEmpty)
     }
 
@@ -109,6 +107,7 @@ struct SymbolPicker: View {
         }
         .menuStyle(.button)
         .fixedSize()
+        .untinted()
         .help("Symbol Category")
     }
 
@@ -123,7 +122,7 @@ struct SymbolPicker: View {
                 .foregroundStyle(isChosen ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
                 .background(
                     isChosen ? AnyShapeStyle(tint.gradient) : AnyShapeStyle(.quaternary.opacity(0.5)),
-                    in: .rect(cornerRadius: 8, style: .continuous)
+                    in: .rect(cornerRadius: Chrome.controlRadius, style: .continuous)
                 )
                 .contentShape(.rect)
         }
@@ -131,6 +130,15 @@ struct SymbolPicker: View {
         .help(candidate)
         .accessibilityLabel(candidate.replacingOccurrences(of: ".", with: " "))
         .accessibilityAddTraits(isChosen ? .isSelected : [])
+    }
+
+    /// Fits the rows there are, up to a little over five, so a short list of suggestions leaves no
+    /// empty space and a long one shows that it scrolls. An empty result keeps room for its message.
+    private func gridHeight(for count: Int) -> CGFloat {
+        let rowHeight: CGFloat = 34
+        let rows = (count + columns.count - 1) / columns.count
+        let content = CGFloat(rows) * rowHeight + CGFloat(max(rows - 1, 0)) * 6 + 4
+        return min(max(content, 120), 220)
     }
 
     private func scrollToTop(_ proxy: ScrollViewProxy, results: [String]) {

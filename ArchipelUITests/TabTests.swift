@@ -58,6 +58,11 @@ final class TabTests: ArchipelUITestCase {
         chooseMenu("Tab", "Split Right")
 
         waitUntil("there are two panes") { self.panes.count == 2 }
+        // Before 27.2 the panes are laid out by hand, without a split view, and always start out equal.
+        if #available(macOS 27.2, *) {
+            let position = try XCTUnwrap(paneDividerPosition, "The panes should sit in a split view.")
+            XCTAssertEqual(position, 0.5, accuracy: 0.02, "A new split should give both panes half the width.")
+        }
         // Each pane shows one of the two sessions now, so both tabs are the selected one of theirs.
         XCTAssertTrue(tab("One").isSelected)
         XCTAssertTrue(tab("Two").isSelected)
@@ -75,6 +80,43 @@ final class TabTests: ArchipelUITestCase {
         waitUntil("the emptied pane is gone") { self.panes.count == 1 }
         assertExists(tab("One"), "The other pane's tab should stay.")
         assertGone(tab("Two"), "The closed tab should be gone.")
+    }
+
+    func testUndoingCloseTabAndSplit() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let sessions = [Session.shell("One"), .shell("Two"), .shell("Three")]
+        try launch(with: repository.workspace(sessions: sessions))
+
+        assertExists(tab("Two"), "The seeded sessions should have tabs.")
+        tab("Two").click()
+        waitUntil("the tab to close is selected") { self.tab("Two").isSelected }
+        chooseMenu("File", "Close Tab")
+        assertGone(tab("Two"), "Close Tab should close the focused tab.")
+
+        // The same session comes back, so an agent would resume its conversation.
+        undo()
+        assertExists(tab("Two"), "Undo should bring the closed tab back.")
+        XCTAssertTrue(tab("Two").isSelected, "The reopened tab should be selected.")
+        waitUntil("the session is back in its place") {
+            try sandbox.savedWorkspace().allWorktrees[0].panes[0].tabs.map(\.content)
+                == sessions.map { .session($0.id) }
+        }
+
+        redo()
+        assertGone(tab("Two"), "Redo should close the tab again.")
+        undo()
+        assertExists(tab("Two"), "A second undo should bring it back again.")
+
+        tab("Three").click()
+        waitUntil("the tab to split off is selected") { self.tab("Three").isSelected }
+        chooseMenu("Tab", "Split Right")
+        waitUntil("there are two panes") { self.panes.count == 2 }
+        undo()
+        waitUntil("the split is undone") { self.panes.count == 1 }
+        waitUntil("the tab is back where it was") {
+            try sandbox.savedWorkspace().allWorktrees[0].panes.map { $0.tabs.map(\.content) }
+                == [sessions.map { .session($0.id) }]
+        }
     }
 
     func testRenamingASession() throws {
@@ -95,6 +137,61 @@ final class TabTests: ArchipelUITestCase {
             let session = try sandbox.savedWorkspace().allSessions[0]
             return session.title == "Dev Server" && session.hasCustomTitle
         }
+    }
+
+    func testUndoingARename() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try launch(with: repository.workspace(sessions: [.shell()]))
+
+        assertExists(tab("Shell"), "The seeded session should have a tab.")
+        tab("Shell").rightClick()
+        chooseContextMenu("Rename Session…")
+        let alert = mainWindow.sheets.element(boundBy: 0)
+        assertExists(alert.textFields.element(boundBy: 0), "The rename alert did not come up.")
+        replaceText(with: "Dev Server")
+        alert.buttons["Rename"].click()
+        assertExists(tab("Dev Server"), "The tab should show the new name.")
+
+        undo()
+        assertExists(tab("Shell"), "Undo should bring the old name back.")
+        // The old name was the automatic one, so the session goes back to following its title.
+        waitUntil("the automatic name is saved again") {
+            let session = try sandbox.savedWorkspace().allSessions[0]
+            return session.title == "Shell" && !session.hasCustomTitle
+        }
+
+        redo()
+        assertExists(tab("Dev Server"), "Redo should rename it again.")
+    }
+
+    /// The editor keeps an undo stack of its own. ⌘Z while typing must take back the typing, not
+    /// reopen a tab that was closed before.
+    func testUndoInTheEditorUndoesTyping() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try launch(with: repository.workspace(sessions: [.shell("One"), .shell("Two")]))
+
+        assertExists(tab("Two"), "The seeded sessions should have tabs.")
+        tab("Two").click()
+        waitUntil("the tab to close is selected") { self.tab("Two").isSelected }
+        chooseMenu("File", "Close Tab")
+        assertGone(tab("Two"), "Close Tab should close the focused tab.")
+
+        app.typeKey("p", modifierFlags: .command)
+        assertExists(paletteField, "Open Quickly did not come up.")
+        app.typeText("notes.txt")
+        let row = paletteRow(startingWith: "notes.txt")
+        assertExists(row, "Open Quickly should list notes.txt.")
+        row.click()
+        let editor = mainWindow.textViews.element(boundBy: 0)
+        assertExists(editor, "The file should open in the editor.")
+        editor.click()
+        app.typeKey(.downArrow, modifierFlags: .command)
+        app.typeText("typed")
+        waitUntil("the editor has the typed text") { (editor.value as? String)?.contains("typed") == true }
+
+        app.typeKey("z", modifierFlags: .command)
+        waitUntil("the typing is undone") { (editor.value as? String)?.contains("typed") == false }
+        XCTAssertFalse(tab("Two").exists, "⌘Z in the editor must not reopen the closed tab.")
     }
 
     func testAShellSessionRunsInItsWorktree() throws {

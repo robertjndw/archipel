@@ -179,6 +179,27 @@ extension GitPullRequest {
     }
 }
 
+/// Glass only while the button is enabled. A disabled glass button still draws a full-width
+/// outline right under the message field, so while disabled it is only its dimmed title, at the
+/// same height so nothing moves when it becomes enabled.
+private struct PrimaryActionStyle: ViewModifier {
+    let isEnabled: Bool
+
+    /// The height of a large prominent glass button, so nothing below moves when it switches.
+    private static let height: CGFloat = 29
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.buttonStyle(.glassProminent)
+        } else {
+            content
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .frame(height: Self.height)
+        }
+    }
+}
+
 /// Pinned under the file list: message, the primary action and the pull request control.
 struct CommitArea: View {
     @Bindable var model: ChangesModel
@@ -200,7 +221,10 @@ struct CommitArea: View {
                 .accessibilityIdentifier("changes.commitMessage")
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                // Half the one-line height (a 16pt line plus 7pt above and below), so a single
+                // line is a capsule. Fixed rather than .capsule, which would keep rounding the
+                // whole side as a longer message grows the field.
+                .glassEffect(.regular, in: .rect(cornerRadius: 15))
                 .disabled(model.activity == .commit)
                 // `initial` too: the request usually arrives while the Changes tab is still being built.
                 .onChange(of: focusRequest, initial: true) {
@@ -209,61 +233,70 @@ struct CommitArea: View {
                     focusRequest = false
                 }
 
-            Button(action: model.performPrimaryAction) {
-                HStack(spacing: 6) {
-                    if showsCommitDone {
-                        Image(systemName: "checkmark")
-                            .transition(.symbolEffect)
-                    } else if let symbol = action.symbol {
-                        SyncArrow(
-                            systemName: symbol,
-                            direction: action.direction,
-                            isBusy: model.activity == action.activity,
-                            completion: model.syncCompletion
-                        )
-                        .contentTransition(.symbolEffect(.replace))
-                    } else if model.activity == action.activity {
-                        ProgressView().controlSize(.small)
-                    }
-                    if showsCommitDone {
-                        // The button already describes the next step by now ("Push 1 Commit"), and a
-                        // checkmark beside that would read as the push having happened.
-                        Text("Committed")
-                    } else if case .pull(let behind, let ahead, _) = action, ahead > 0 {
-                        DivergedCounts(behind: behind, ahead: ahead)
-                    } else {
-                        Text(action.title)
-                    }
+            // Same row and control size, otherwise the PR button ends up with a smaller radius.
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    primaryButton(action)
+                    pullRequestButton
                 }
-                .frame(maxWidth: .infinity)
+                .controlSize(.large)
+                .animation(.smooth(duration: 0.2), value: model.pullRequest)
             }
-            .buttonStyle(.glassProminent)
-            .controlSize(.large)
-            .disabled(!action.isEnabled)
-            .accessibilityIdentifier("changes.primaryAction")
-            // Only while the field is focused and the button commits, so Cmd-Return never pushes.
-            .keyboardShortcut(messageFocused && action.activity == .commit ? KeyboardShortcut(.return, modifiers: .command) : nil)
-            .help(help(for: action))
-            // The digits roll when a count changes ("Push 3 Commits"); a crossfade under Reduce Motion.
-            .contentTransition(reduceMotion ? .interpolate : .numericText())
-            .animation(.smooth(duration: 0.2), value: action)
-            .onChange(of: model.commitCompletions) {
-                withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { showsCommitDone = true }
-            }
-            // Keyed on the count, so a second commit while the mark is up restarts the wait.
-            .task(id: model.commitCompletions) {
-                guard showsCommitDone else { return }
-                try? await Task.sleep(for: .seconds(1.2))
-                guard !Task.isCancelled else { return }
-                withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { showsCommitDone = false }
-            }
-
-            pullRequestButton
         }
         .controlSize(.regular)
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+
+    private func primaryButton(_ action: PrimaryAction) -> some View {
+        Button(action: model.performPrimaryAction) {
+            HStack(spacing: 6) {
+                if showsCommitDone {
+                    Image(systemName: "checkmark")
+                        .transition(.symbolEffect)
+                } else if let symbol = action.symbol {
+                    SyncArrow(
+                        systemName: symbol,
+                        direction: action.direction,
+                        isBusy: model.activity == action.activity,
+                        completion: model.syncCompletion
+                    )
+                    .contentTransition(.symbolEffect(.replace))
+                } else if model.activity == action.activity {
+                    ProgressView().controlSize(.small)
+                }
+                if showsCommitDone {
+                    // The button already describes the next step by now ("Push 1 Commit"), and a
+                    // checkmark beside that would read as the push having happened.
+                    Text("Committed")
+                } else if case .pull(let behind, let ahead, _) = action, ahead > 0 {
+                    DivergedCounts(behind: behind, ahead: ahead)
+                } else {
+                    Text(action.title)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .modifier(PrimaryActionStyle(isEnabled: action.isEnabled))
+        .disabled(!action.isEnabled)
+        .accessibilityIdentifier("changes.primaryAction")
+        // Only while the field is focused and the button commits, so Cmd-Return never pushes.
+        .keyboardShortcut(messageFocused && action.activity == .commit ? KeyboardShortcut(.return, modifiers: .command) : nil)
+        .help(help(for: action))
+        // The digits roll when a count changes ("Push 3 Commits"); a crossfade under Reduce Motion.
+        .contentTransition(reduceMotion ? .interpolate : .numericText())
+        .animation(.smooth(duration: 0.2), value: action)
+        .onChange(of: model.commitCompletions) {
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { showsCommitDone = true }
+        }
+        // Keyed on the count, so a second commit while the mark is up restarts the wait.
+        .task(id: model.commitCompletions) {
+            guard showsCommitDone else { return }
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled else { return }
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { showsCommitDone = false }
+        }
     }
 
     private func help(for action: PrimaryAction) -> LocalizedStringKey {
@@ -283,15 +316,16 @@ struct CommitArea: View {
             Button {
                 NSWorkspace.shared.open(pullRequest.url)
             } label: {
-                Label {
-                    Text("PR #\(pullRequest.number)")
-                } icon: {
+                HStack(spacing: 4) {
                     Image(systemName: pullRequest.symbol).foregroundStyle(pullRequest.color)
+                    Text("#\(pullRequest.number)").monospacedDigit()
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.glass)
+            .fixedSize()
             .help(pullRequest.title)
+            .accessibilityLabel("Pull Request #\(pullRequest.number)")
+            .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .trailing)))
         }
     }
 }

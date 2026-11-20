@@ -57,6 +57,9 @@ struct SidebarWorktreeRow: View {
                 // switches at once and the two just dissolve into each other at the trailing edge.
                 trailing
                     .animation(reduceMotion ? nil : Motion.hover, value: isHovered)
+                    // Out here and not on the glyph: the glyph often only appears with the change
+                    // that starts the glow, and a view that new would miss it.
+                    .statusGlowLanding(model.statusPulses[worktree.id])
             }
             if !sessions.isEmpty {
                 VStack(spacing: 0) {

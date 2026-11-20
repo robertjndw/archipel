@@ -383,7 +383,7 @@ public struct Workspace: Codable, Equatable, Sendable {
 
     /// Runs `body` on the worktree and restores its invariants afterwards. Nil when the worktree is unknown.
     @discardableResult
-    private mutating func edit<T>(_ id: Worktree.ID, _ body: (inout Worktree) -> T) -> T? {
+    mutating func edit<T>(_ id: Worktree.ID, _ body: (inout Worktree) -> T) -> T? {
         guard let loc = locate(worktreeID: id) else { return nil }
         let result = body(&islands[loc.island].projects[loc.project].worktrees[loc.worktree])
         islands[loc.island].projects[loc.project].worktrees[loc.worktree].normalize()

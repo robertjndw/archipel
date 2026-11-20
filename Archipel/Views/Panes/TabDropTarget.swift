@@ -2,17 +2,19 @@ import ArchipelCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Everything that can be dropped on a tab: another tab being moved, which
-/// arrives as its id string, and files or text from elsewhere, which go into
-/// the tab's session as a paste.
+/// Files and text dropped on a tab get pasted into its session. Moving tabs is handled by the
+/// reorder container in the tab bar (see `TabDragItem`).
+///
+/// Hovering a drag over a tab for half a second selects it, like spring-loaded folders in Finder,
+/// so you can drop a file into a session that's in the background.
 struct TabDropTarget: ViewModifier {
     @Environment(AppModel.self) private var model
     let tab: ArchipelCore.Tab
-    /// Any drag hovering over the tab, including a tab being reordered, which never lights it up.
-    let targetChanged: (Bool) -> Void
-    /// Moves the dropped tab next to this one.
-    let moveTab: (ArchipelCore.Tab.ID) -> Void
     @State private var isTargeted = false
+    @State private var springLoad: Task<Void, Never>?
+
+    /// Finder's default spring-loading delay.
+    private static let springLoadDelay = Duration.milliseconds(500)
 
     func body(content: Content) -> some View {
         content
@@ -28,8 +30,22 @@ struct TabDropTarget: ViewModifier {
             .animation(Motion.hover, value: isTargeted)
             .onDrop(
                 of: TabDropDelegate.types,
-                delegate: TabDropDelegate(model: model, tab: tab, targetChanged: targetChanged, moveTab: moveTab, isTargeted: $isTargeted)
+                delegate: TabDropDelegate(model: model, tab: tab, isTargeted: $isTargeted, springLoad: springLoad(_:))
             )
+            .onDisappear { springLoad(false) }
+    }
+
+    private func springLoad(_ armed: Bool) {
+        springLoad?.cancel()
+        springLoad = nil
+        guard armed else { return }
+        let id = tab.id
+        springLoad = Task { @MainActor in
+            try? await Task.sleep(for: Self.springLoadDelay)
+            guard !Task.isCancelled else { return }
+            model.select(tab: id)
+            Haptics.levelChange()
+        }
     }
 }
 
@@ -38,9 +54,8 @@ private struct TabDropDelegate: DropDelegate {
 
     let model: AppModel
     let tab: ArchipelCore.Tab
-    let targetChanged: (Bool) -> Void
-    let moveTab: (ArchipelCore.Tab.ID) -> Void
     @Binding var isTargeted: Bool
+    let springLoad: (Bool) -> Void
 
     private var acceptsPaste: Bool { model.dropTargetSession(of: tab) != nil }
 
@@ -49,21 +64,21 @@ private struct TabDropDelegate: DropDelegate {
         return info.hasItemsConforming(to: [.plainText])
     }
 
-    // Only files light the tab up. Text cannot be told apart from a tab being
-    // reordered until it is dropped, and reordering never had a highlight.
     func dropEntered(info: DropInfo) {
-        targetChanged(true)
-        if acceptsPaste, info.hasItemsConforming(to: [.fileURL]) { isTargeted = true }
+        if info.hasItemsConforming(to: [.fileURL]) { isTargeted = acceptsPaste }
+        // Also for tabs that won't take the drop, so you can switch to one and drop into its
+        // content instead.
+        springLoad(true)
     }
 
     func dropExited(info: DropInfo) {
-        targetChanged(false)
         isTargeted = false
+        springLoad(false)
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        targetChanged(false)
         isTargeted = false
+        springLoad(false)
         let tabID = tab.id
         let files = info.itemProviders(for: [.fileURL])
         if !files.isEmpty {
@@ -84,11 +99,7 @@ private struct TabDropDelegate: DropDelegate {
             for provider in texts {
                 if let string = await provider.loadedObject(String.self) { strings.append(string) }
             }
-            if strings.count == 1, let id = UUID(uuidString: strings[0]), model.workspace.tab(id: id) != nil {
-                moveTab(id)
-            } else {
-                model.pasteText(strings.joined(separator: "\n"), intoSessionOf: tabID)
-            }
+            model.pasteText(strings.joined(separator: "\n"), intoSessionOf: tabID)
         }
         return true
     }

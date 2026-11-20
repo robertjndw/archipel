@@ -93,6 +93,7 @@ struct WorktreeSheet: View {
                         addTask?.cancel()
                         dismiss()
                     }
+                    .untinted()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(actionTitle(for: selected)) { startAdd() }

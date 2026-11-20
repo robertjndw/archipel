@@ -1,3 +1,4 @@
+import InspectorUI
 import SwiftUI
 
 /// Shared measurements for the window chrome, so the tab rows, their toolbar
@@ -9,6 +10,55 @@ enum Chrome {
     /// Corner radius of the command palette. Rows inside it are inset so their
     /// own radius stays concentric with it.
     static let panelRadius: CGFloat = 20
+    /// Room around each pane in the comfortable pane style. Between two panes the gap is this plus
+    /// the 1pt split divider, which stays there to be dragged.
+    static let paneGap: CGFloat = 6
+    /// The room around each pane in this style: the top line's distance from the window's top
+    /// edge, and how far the status bar reaches up into the cards' bottom gap. The gap and the bar
+    /// together are the strip under the cards, whose middle is the bottom line.
+    static func paneGap(for style: AppSettings.PaneStyle) -> CGFloat {
+        style == .comfortable ? paneGap : 0
+    }
+    /// Corner radius of a pane: concentric with the window's corners, which sit `paneGap` away
+    /// from the outer cards, and drawn with the same continuous curve. Every corner gets it, the
+    /// inner ones too, so all cards have one shape. Square in the compact style.
+    static func paneRadius(for style: AppSettings.PaneStyle, windowRadius: CGFloat) -> CGFloat {
+        style == .comfortable ? concentricRadius(windowRadius, inset: paneGap) : 0
+    }
+    /// Radius for a shape nested `inset` inside a corner of `radius`. Clamped to 4pt so it never
+    /// turns square.
+    static func concentricRadius(_ radius: CGFloat, inset: CGFloat) -> CGFloat {
+        max(radius - inset, 4)
+    }
+    /// How far a file, diff or web pane without focus fades into its own background.
+    /// Matches Ghostty's default unfocused-split-opacity of 0.7, which terminals follow.
+    static let unfocusedPaneDim: Double = 0.3
+    /// The one surface of the window around the content: between the panes, under the status bar,
+    /// and in the inspector, which paints the same measured color.
+    static let windowSurface = Color.inspectorBackground
+    /// Corner radius of small controls that stand on their own: selection fills in lists, search
+    /// fields, the symbol picker's cells, the settings tiles' rings. A shape nested inside one of
+    /// these takes this minus its inset, so the two stay concentric.
+    static let controlRadius: CGFloat = 8
+
+    /// Height of the controls on the bottom line, the island switcher's capsule among them: the
+    /// small control size.
+    static let bottomControlHeight: CGFloat = 22
+
+    /// The middle of the window's bottom line, from its bottom edge: the status bar's items, the
+    /// island switcher and its new island button. The strip under the cards is twice this, 30pt,
+    /// which leaves a small control 4pt above and below.
+    static let bottomLineInset: CGFloat = 15
+}
+
+extension View {
+    /// For a sheet's Cancel button and other plain buttons and menus in sheets. The window's island
+    /// tint reaches into sheets, and `tint` colors the text of every bordered button and menu,
+    /// where the system's accent color only fills the default button. Without this, Cancel reads
+    /// as the action to take.
+    func untinted() -> some View {
+        tint(nil)
+    }
 }
 
 /// The curves the chrome shares. The package has the same enum in UISupport, which the app target
@@ -18,6 +68,9 @@ enum Motion {
     static let selection = Animation.spring(duration: 0.35, bounce: 0.15)
     /// Hover highlights and the reveal of hover-only controls.
     static let hover = Animation.easeOut(duration: 0.15)
+    /// The island switcher's labels. Matches the spring the sidebar strip uses for a shortcut or a
+    /// click (same response and damping), so the labels and the lists arrive together.
+    static let page = Animation.spring(duration: 0.25, bounce: 0.1)
     /// Expanding and collapsing a section in place.
     static let disclosure = Animation.snappy(duration: 0.2)
 }

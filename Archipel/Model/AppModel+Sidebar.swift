@@ -21,6 +21,11 @@ extension AppModel {
         isInstalled(agent) || agent.id == defaultAgent.id
     }
 
+    /// Title of the "Needs Me" toggle in the menu bar and the palette.
+    var needsMeFilterTitle: String { showsOnlyNeedsMe ? "Show All in Sidebar" : "Show Only What Needs Me" }
+    /// Filled while the filter is on.
+    var needsMeFilterSymbol: String { showsOnlyNeedsMe ? "bell.fill" : "bell" }
+
     /// The island before or after the selected one, wrapping around.
     func selectAdjacentIsland(offset: Int) {
         let islands = workspace.islands
@@ -40,6 +45,20 @@ extension AppModel {
         }
         // The status poll skipped the projects that were collapsed.
         if expanded { refreshGitStatus(lookingUpPullRequests: true) }
+    }
+
+    /// What the sidebar lists while it shows only what needs the user: islands and projects in their
+    /// usual order, with the worktrees that wait on the user and the selected one if it was just opened.
+    func needsMeGroups() -> [NeedsMeIsland] {
+        var wanted = worktreesNeedingAttention(in: workspace, activities: activities)
+        if let pin = needsMePin, pin == selectedWorktree?.id { wanted.insert(pin) }
+        return workspace.islands.compactMap { island in
+            let projects = island.projects.compactMap { project -> NeedsMeProject? in
+                let worktrees = project.worktrees.filter { wanted.contains($0.id) }
+                return worktrees.isEmpty ? nil : NeedsMeProject(project: project, worktrees: worktrees)
+            }
+            return projects.isEmpty ? nil : NeedsMeIsland(island: island, projects: projects)
+        }
     }
 
     func islandSummaries() -> [Island.ID: AttentionSummary] {
@@ -85,4 +104,16 @@ extension AppModel {
             }
         }
     }
+}
+
+struct NeedsMeIsland: Identifiable {
+    let island: Island
+    let projects: [NeedsMeProject]
+    var id: Island.ID { island.id }
+}
+
+struct NeedsMeProject: Identifiable {
+    let project: Project
+    let worktrees: [Worktree]
+    var id: Project.ID { project.id }
 }

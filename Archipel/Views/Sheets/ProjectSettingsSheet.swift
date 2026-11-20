@@ -78,6 +78,7 @@ struct ProjectSettingsSheet: View {
                 Button("Cancel") {
                     if hasChanges { confirmsDiscard = true } else { dismiss() }
                 }
+                .untinted()
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }

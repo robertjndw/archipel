@@ -98,6 +98,50 @@ public struct TerminalProgress: Sendable, Equatable {
     }
 }
 
+/// The colors from the user's Ghostty config that the host needs to draw around a terminal.
+public struct TerminalColors: Sendable, Equatable {
+    /// An sRGB color with components from 0 to 1.
+    public struct RGB: Sendable, Equatable {
+        public var red: Double
+        public var green: Double
+        public var blue: Double
+
+        public init(red: Double, green: Double, blue: Double) {
+            self.red = red
+            self.green = green
+            self.blue = blue
+        }
+
+        /// WCAG relative luminance, to tell whether text on this color should be light or dark.
+        public var luminance: Double {
+            func linear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+            return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        }
+    }
+
+    /// Ghostty's `background`.
+    public var background: RGB
+    /// Ghostty's `unfocused-split-fill`, which defaults to the background. A split without focus is
+    /// covered with it at `1 - unfocusedSplitOpacity`.
+    public var unfocusedSplitFill: RGB
+    /// Ghostty's `unfocused-split-opacity`: how much of the split stays visible, from 0.15 to 1.
+    public var unfocusedSplitOpacity: Double
+    /// Ghostty's `foreground`, for text the host draws on the terminal's background.
+    public var foreground: RGB
+
+    public init(
+        background: RGB,
+        unfocusedSplitFill: RGB,
+        unfocusedSplitOpacity: Double,
+        foreground: RGB = RGB(red: 1, green: 1, blue: 1)
+    ) {
+        self.background = background
+        self.foreground = foreground
+        self.unfocusedSplitFill = unfocusedSplitFill
+        self.unfocusedSplitOpacity = unfocusedSplitOpacity
+    }
+}
+
 public enum TerminalError: Error, Sendable {
     case alreadyInitialized
     case initializationFailed

@@ -69,12 +69,23 @@ extension AppModel {
 /// other icon; a status bar item only keeps its colors when its image is not a template.
 struct MenuBarExtraLabel: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let summary = model.workspaceAttention
         let description = summary.accessibilityDescription
-        Image(nsImage: Self.image(for: Self.color(for: summary)))
-            .accessibilityLabel(description.isEmpty ? "Archipel" : "Archipel, \(description)")
+        let isWorking = summary.working > 0 && summary.needsAttention == 0
+        HStack(spacing: 3) {
+            Image(nsImage: Self.image(for: Self.color(for: summary)))
+            if summary.needsAttention > 0 {
+                Text(summary.needsAttention, format: .number)
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+            }
+        }
+        .accessibilityLabel(description.isEmpty ? "Archipel" : "Archipel, \(description)")
+        .task(id: isWorking && !reduceMotion) {
+            await StatusItemBreathing.update(isWorking: isWorking && !reduceMotion)
+        }
     }
 
     /// Same colors as the sidebar's status glow.
@@ -107,6 +118,54 @@ struct MenuBarExtraLabel: View {
         image.accessibilityDescription = "Archipel"
         images[color] = image
         return image
+    }
+}
+
+/// Fades the status item's button in and out while an agent works. This is a layer animation
+/// because the glyph is a plain image, so `symbolEffect` can't drive it, and a SwiftUI animation or
+/// a timer would redraw the status item on every frame. SwiftUI gives us no handle on the button,
+/// so it is looked up in the app's status bar window.
+@MainActor
+enum StatusItemBreathing {
+    private static let key = "archipel.breathing"
+
+    static func update(isWorking: Bool) async {
+        // The button may not exist yet when the label first appears.
+        for _ in 0..<10 {
+            if let layer = button()?.layer {
+                apply(isWorking, to: layer)
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+            if Task.isCancelled { return }
+        }
+    }
+
+    private static func apply(_ isWorking: Bool, to layer: CALayer) {
+        guard isWorking else {
+            layer.removeAnimation(forKey: key)
+            return
+        }
+        guard layer.animation(forKey: key) == nil else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1.0
+        fade.toValue = 0.45
+        fade.duration = 1.4
+        fade.autoreverses = true
+        fade.repeatCount = .infinity
+        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(fade, forKey: key)
+    }
+
+    private static func button() -> NSView? {
+        let window = NSApp.windows.first { $0.className == "NSStatusBarWindow" }
+        return window?.contentView.flatMap(findButton)
+    }
+
+    private static func findButton(in view: NSView) -> NSView? {
+        if view is NSStatusBarButton { return view }
+        for sub in view.subviews { if let found = findButton(in: sub) { return found } }
+        return nil
     }
 }
 
@@ -194,7 +253,7 @@ private struct MenuBarRowStyle: ButtonStyle {
             .padding(.vertical, 6)
             .background(
                 isHovering || configuration.isPressed ? Color.primary.opacity(0.1) : .clear,
-                in: .rect(cornerRadius: 6, style: .continuous)
+                in: .rect(cornerRadius: Chrome.controlRadius, style: .continuous)
             )
             .onHover { hovering in withAnimation(reduceMotion ? nil : Motion.hover) { isHovering = hovering } }
     }

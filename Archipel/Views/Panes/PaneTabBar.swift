@@ -7,6 +7,12 @@ import SwiftUI
 /// The tab row of one pane. With the window's own title bar gone this is the
 /// top edge of the content area, so the first and last pane also carry the
 /// controls that would otherwise sit in a toolbar.
+///
+/// The row is part of the pane, not of the window: it takes the color of what
+/// the pane shows and has no line under it, so row and content read as one
+/// surface. Only the focused pane's selected tab gets glass.
+private typealias TabSlot = ReorderDifference<ArchipelCore.Tab.ID, ReorderableSingleCollectionIdentifier>.Destination.Position
+
 struct PaneTabBar: View {
     @Environment(AppModel.self) private var model
     @AppStorage(LayoutDefaults.showsInspector) private var showInspector = true
@@ -17,55 +23,138 @@ struct PaneTabBar: View {
     /// buttons then sit over this bar and need room.
     let showsSidebarToggle: Bool
     let toggleSidebar: () -> Void
+    /// The color of what the pane shows, which the row is filled with.
+    let background: Color
     @State private var renaming: RenameTarget?
-    @State private var dropSlot: Int?
+    /// Width of the scrolling part of the row, which the tabs share.
+    @State private var rowWidth: CGFloat = 0
+    /// Pinned while you close tabs with the pointer in the bar, so the next close button lands
+    /// under the pointer (Safari does the same). Cleared when the pointer leaves.
+    @State private var frozenTabWidth: CGFloat?
+    @State private var isPointerInRow = false
+    @State private var dragSlot: TabSlot?
+    @State private var scrollPosition = ScrollPosition()
+    @State private var scroll = HorizontalScroll()
 
     static let height: CGFloat = 36
+    /// Below this a tab stops shrinking and the row scrolls instead. It leaves the icon, the
+    /// status glyph and a few characters of title, and three tabs still fit in a pane of half a
+    /// default window (about 370pt).
+    static let minimumTabWidth: CGFloat = 100
+    /// Fits a long title plus the badges and a dev server link.
+    static let maximumTabWidth: CGFloat = 240
+    private static let tabSpacing: CGFloat = 2
+    /// Inside the scroll view, so the selected tab's glass shadow is not clipped.
+    private static let rowInset = EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.showsWindowButtons) private var showsWindowButtons
 
     /// With one pane there is nothing to tell apart, so it always reads as active.
     private var isActive: Bool { isFocused || worktree.panes.count == 1 }
 
+    private var leadingRoomForWindowButtons: CGFloat {
+        let style = model.settings.paneStyle
+        return WindowButtons.trailingEdge(for: style) - WindowButtons.topInset(for: style)
+    }
+
+    /// Tabs share the row evenly, clamped to the min and max width. Leftover space stays empty.
+    /// Without the cap a single tab stretches across the pane and looks like a title bar.
+    private var tabWidth: CGFloat {
+        frozenTabWidth ?? tabWidth(forCount: pane.tabs.count)
+    }
+
+    private func tabWidth(forCount tabCount: Int) -> CGFloat {
+        let count = CGFloat(max(tabCount, 1))
+        let available = rowWidth - Self.rowInset.leading - Self.rowInset.trailing - Self.tabSpacing * (count - 1)
+        return min(Self.maximumTabWidth, max(Self.minimumTabWidth, (available / count).rounded(.down)))
+    }
+
+    /// Parent folder for file and diff tabs whose names clash, like Xcode and VS Code show it.
+    /// Tabs with a unique name aren't in the result.
+    private var subtitles: [ArchipelCore.Tab.ID: String] {
+        let paths: [(id: ArchipelCore.Tab.ID, path: String, staged: Bool?)] = pane.tabs.compactMap { tab in
+            switch tab.content {
+            case .file(let url): (tab.id, url.path, nil)
+            case .diff(let path, let staged): (tab.id, path, staged)
+            case .session, .web: nil
+            }
+        }
+        let byName = Dictionary(grouping: paths) { ($0.path as NSString).lastPathComponent }
+        var result: [ArchipelCore.Tab.ID: String] = [:]
+        for group in byName.values where group.count > 1 {
+            for entry in group {
+                // Staged and working tree diffs of the same file have the same folder, so show
+                // the side instead.
+                let sameDiffTwice = entry.staged != nil
+                    && group.contains { $0.id != entry.id && $0.staged != nil && $0.path == entry.path }
+                if sameDiffTwice, let staged = entry.staged {
+                    result[entry.id] = staged ? "Staged" : "Working Tree"
+                } else {
+                    let folder = ((entry.path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+                    if !folder.isEmpty { result[entry.id] = folder }
+                }
+            }
+        }
+        return result
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             if showsSidebarToggle {
-                GlassToolbarGroup {
+                TabRowControls {
                     Button("Show Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
                         .help("Show Sidebar")
                 }
-                // Leaves the window buttons their corner.
-                .padding(.leading, 78)
+                // Leaves the window buttons their corner. The bar starts at the card's edge, which
+                // the top gap also keeps from the window's edge.
+                .padding(.leading, showsWindowButtons ? leadingRoomForWindowButtons : 4)
             }
 
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    HStack(spacing: 2) {
-                        ForEach(Array(pane.tabs.enumerated()), id: \.element.id) { index, tab in
+                    let subtitles = subtitles
+                    HStack(spacing: Self.tabSpacing) {
+                        ForEach(pane.tabs) { tab in
                             TabButton(
                                 tab: tab,
                                 session: session(of: tab),
+                                subtitle: subtitles[tab.id],
                                 isSelected: tab.id == pane.selectedTab?.id,
-                                isActive: isActive
+                                isActive: isActive,
+                                width: tabWidth
                             )
                             .anchorPreference(key: TabFrames.self, value: .bounds) { [tab.id: $0] }
                             .transition(reduceMotion ? .opacity : .tab)
                             .contextMenu { tabMenu(tab) }
-                            .draggable(tab.id.uuidString)
-                            .modifier(TabDropTarget(tab: tab) { targeted in
-                                // One tick per slot the drag moves into, not one per drag event.
-                                if targeted, dropSlot != index {
-                                    dropSlot = index
-                                    Haptics.levelChange()
-                                } else if !targeted, dropSlot == index {
-                                    dropSlot = nil
-                                }
-                            } moveTab: {
-                                dropSlot = nil
-                                _ = drop([$0.uuidString], at: index)
-                            })
+                            .modifier(TabDropTarget(tab: tab))
                         }
+                        .reorderable()
                     }
+                    // The drag and reorder containers below give the row accessibility of its own. With
+                    // no element to hold it, SwiftUI folds it into the first tab, which then reports
+                    // the whole row's frame, and a click on its center lands on another tab.
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Tabs")
+                    .reorderContainer(for: ArchipelCore.Tab.self) { difference in
+                        move(difference.sources, to: difference.destination.position)
+                    }
+                    .dragContainer(for: TabDragItem.self) { ids in ids.map(TabDragItem.init) }
+                    // reorderContainer only handles this pane's tabs. This picks up tabs
+                    // dragged in from other panes.
+                    .dropDestination(for: TabDragItem.self) { items, session in
+                        let foreign = items.map(\.id).filter { id in !pane.tabs.contains { $0.id == id } }
+                        move(foreign, to: session.reorderDestination(for: ArchipelCore.Tab.self)?.position ?? .end)
+                    }
+                    // One tick per slot the insertion point passes through, never while it stays put.
+                    .onDropSessionUpdated { session in
+                        let slot = session.reorderDestination(for: ArchipelCore.Tab.self)?.position
+                        guard slot != dragSlot else { return }
+                        if case .active = session.phase, dragSlot != nil, slot != nil { Haptics.alignment() }
+                        dragSlot = slot
+                    }
+                    // Left-aligns the tabs and makes the empty area a drop target for appending.
+                    .frame(minWidth: max(0, rowWidth - Self.rowInset.leading - Self.rowInset.trailing), alignment: .leading)
                     .backgroundPreferenceValue(TabFrames.self) { frames in
                         GeometryReader { geometry in
                             if let id = pane.selectedTab?.id, let anchor = frames[id] {
@@ -80,13 +169,19 @@ struct PaneTabBar: View {
                     .animation(reduceMotion ? nil : Motion.selection, value: pane.tabs.map(\.id))
                     .animation(reduceMotion ? nil : Motion.selection, value: pane.selectedTab?.id)
                     .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isActive)
-                    // The scroll view clips, so the glass shadow needs room inside it.
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 6)
+                    .padding(Self.rowInset)
                 }
                 // .hidden still shows a scroller when the system is set to always show them.
                 .scrollIndicators(.never)
-                .tabRowEdgeFade()
+                .scrollPosition($scrollPosition)
+                .onScrollGeometryChange(for: HorizontalScroll.self) { geometry in
+                    HorizontalScroll(
+                        offset: geometry.contentOffset.x,
+                        maxOffset: max(0, geometry.contentSize.width - geometry.containerSize.width)
+                    )
+                } action: { _, new in scroll = new }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
+                .tabRowEdgeFade(background)
                 // Selecting a tab from elsewhere (Ctrl-Tab, the palette, a notification) can pick one
                 // scrolled out of view; without this the bar shows no selection at all.
                 .onChange(of: pane.selectedTab?.id) { _, id in
@@ -100,18 +195,17 @@ struct PaneTabBar: View {
                     }
                 }
             }
-            // Dropping on the empty part of the bar appends.
-            .dropDestination(for: String.self) { items, _ in
-                return drop(items, at: nil)
-            }
 
-            GlassToolbarGroup {
+            TabRowControls {
                 Menu {
                     NewSessionButtons(worktree: worktree.id, pane: pane.id)
                 } label: {
                     Image(systemName: "plus")
                 }
                 .toolbarGroupMenu()
+                // A borderless menu draws its label in the tint, which would make it the loudest
+                // thing in the row.
+                .tint(.secondary)
                 .help("New Session")
                 .accessibilityLabel("New Session")
                 .accessibilityIdentifier("pane.newSession")
@@ -132,14 +226,55 @@ struct PaneTabBar: View {
             .padding(.trailing, 8)
         }
         .frame(height: Self.height)
-        .background(.windowBackground)
-        .overlay(alignment: .bottom) { Divider() }
+        .background(background)
+        .onHover { inside in
+            isPointerInRow = inside
+            if !inside, frozenTabWidth != nil {
+                withAnimation(reduceMotion ? nil : Motion.selection) { frozenTabWidth = nil }
+            }
+        }
+        .localEventMonitor(.scrollWheel, while: isPointerInRow, handle: scrollSideways)
+        .onChange(of: pane.tabs.count) { old, new in
+            if new < old, isPointerInRow {
+                frozenTabWidth = frozenTabWidth ?? tabWidth(forCount: old)
+            } else if new > old {
+                frozenTabWidth = nil
+            }
+        }
         .renameAlert($renaming)
     }
 
-    private func drop(_ items: [String], at index: Int?) -> Bool {
-        guard let id = items.first.flatMap(UUID.init(uuidString:)), model.workspace.tab(id: id) != nil else { return false }
-        model.move(tab: id, toPane: pane.id, at: index)
+    /// `position` refers to the order before the move, so the index is looked up with the moved
+    /// tab already taken out.
+    private func move(_ ids: [ArchipelCore.Tab.ID], to position: TabSlot) {
+        dragSlot = nil
+        var landed = false
+        for id in ids {
+            switch position {
+            case .before(let anchor):
+                // Dropped on itself.
+                guard anchor != id else { continue }
+                let current = model.workspace.worktree(containingPane: pane.id)?.panes.first { $0.id == pane.id }?.tabs ?? pane.tabs
+                let index = current.filter { $0.id != id }.firstIndex { $0.id == anchor }
+                model.move(tab: id, toPane: pane.id, at: index)
+                landed = true
+            case .end:
+                model.move(tab: id, toPane: pane.id, at: nil)
+                landed = true
+            }
+        }
+        if landed { Haptics.alignment() }
+    }
+
+    /// SwiftUI doesn't turn a vertical mouse wheel into horizontal scrolling, so do it by hand
+    /// while the pointer is over the bar. Trackpads and the Magic Mouse send precise deltas and
+    /// can already scroll sideways, so they're skipped.
+    private func scrollSideways(_ event: NSEvent) -> Bool {
+        guard !event.hasPreciseScrollingDeltas, event.scrollingDeltaX == 0, event.scrollingDeltaY != 0,
+              scroll.maxOffset > 0 else { return false }
+        // Non-precise deltas are in lines. 24pt per line is roughly what a list scrolls.
+        let x = min(max(scroll.offset - event.scrollingDeltaY * 24, 0), scroll.maxOffset)
+        scrollPosition.scrollTo(x: x)
         return true
     }
 
@@ -187,8 +322,15 @@ struct PaneTabBar: View {
     }
 }
 
+private struct HorizontalScroll: Equatable {
+    var offset: CGFloat = 0
+    var maxOffset: CGFloat = 0
+}
+
 struct TabLabel: Equatable {
     var title: String
+    /// Shown dimmed after the title when another tab has the same name.
+    var subtitle: String?
     var symbol: String
     /// Shown as the tooltip.
     var detail: String?
@@ -205,22 +347,34 @@ private struct TabButton: View {
     let tab: ArchipelCore.Tab
     /// The session a session tab shows; nil for every other kind of tab.
     let session: Session?
+    /// Non-nil when another tab in this pane has the same name.
+    let subtitle: String?
     let isSelected: Bool
     /// Whether this tab's pane has focus; only then does the selection get glass.
     let isActive: Bool
+    let width: CGFloat
 
     var body: some View {
-        TabButtonContent(tab: tab, label: label, isSelected: isSelected, isActive: isActive)
+        TabButtonContent(tab: tab, label: label, isSelected: isSelected, isActive: isActive, width: width)
             .equatable()
     }
 
     private var label: TabLabel {
+        var label = baseLabel
+        label.subtitle = subtitle
+        return label
+    }
+
+    private var baseLabel: TabLabel {
         switch tab.content {
         case .session(let id):
+            let title = session?.displayTitle ?? "Session"
             return TabLabel(
-                title: session?.displayTitle ?? "Session",
+                title: title,
                 symbol: (session?.agent.definition ?? .shell).symbolName,
-                detail: nil,
+                detail: model.sessionContexts[id].map {
+                    title + "\n" + ContextFormat.summary(of: $0, cache: model.promptCaches[id], at: .now)
+                },
                 activity: model.activity(for: id),
                 devServers: model.devServers.links[id] ?? []
             )
@@ -233,11 +387,12 @@ private struct TabButton: View {
                 hasUnsavedChanges: model.documents.isDirty(url)
             )
         case .diff(let path, let staged):
-            let name = (path as NSString).lastPathComponent
+            // No "(Working Tree)" suffix: the icon marks it as a diff and the diff header shows
+            // the side. It just ate into the file name.
             return TabLabel(
-                title: "\(name) (\(staged ? "Staged" : "Working Tree"))",
+                title: (path as NSString).lastPathComponent,
                 symbol: "plus.forwardslash.minus",
-                detail: path,
+                detail: path + "\n" + (staged ? "Staged changes" : "Working tree changes"),
                 activity: nil
             )
         case .web(let url):
@@ -261,62 +416,36 @@ private struct TabButtonContent: View, Equatable {
     let label: TabLabel
     let isSelected: Bool
     let isActive: Bool
+    let width: CGFloat
     @State private var isHovered = false
     @State private var isOverClose = false
+    /// Incremented when the session finishes, to trigger one bounce.
+    @State private var finishBounce = 0
+
+    private static let iconSlot: CGFloat = 18
+    /// The narrowest tab that still shows its badges and dev server link next to a readable title.
+    private static let badgeWidth: CGFloat = 170
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.tab == rhs.tab && lhs.label == rhs.label && lhs.isSelected == rhs.isSelected && lhs.isActive == rhs.isActive
+        lhs.tab == rhs.tab && lhs.label == rhs.label && lhs.isSelected == rhs.isSelected
+            && lhs.isActive == rhs.isActive && lhs.width == rhs.width
     }
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(symbol: label.symbol)
-                .foregroundStyle(isSelected && isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-            Text(label.title)
-                .lineLimit(1)
-                .italic(tab.isPreview)
-                .fontWeight(label.activity?.unread == true ? .semibold : .regular)
-                .foregroundStyle(isSelected && isActive ? .primary : .secondary)
-            if !label.devServers.isEmpty {
-                DevServerPill(links: label.devServers)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-            }
-            BackgroundTaskBadge(count: label.activity?.backgroundTasks ?? 0)
-            SubagentBadge(count: label.activity?.subagents.count ?? 0)
-            // The close button takes the status glyph's place on hover, so
-            // tabs do not change width under the pointer.
-            ZStack {
-                Group {
-                    if let activity = label.activity {
-                        StatusGlyph(activity: activity)
-                    } else if label.hasUnsavedChanges {
-                        Image(systemName: "circle.fill")
-                            .imageScale(.small)
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel("Unsaved changes")
-                    }
-                }
-                .opacity(isHovered ? 0 : 1)
-                Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .imageScale(.small)
-                    .opacity(isHovered ? 1 : 0)
-                    .onHover { isOverClose = $0 }
-            }
-            .frame(width: 18)
+            leading
+            title
+            Spacer(minLength: 0)
+            trailing
         }
+        .padding(.horizontal, 8)
+        .frame(width: width, height: Chrome.controlHeight)
         .animation(.snappy(duration: 0.25), value: label.devServers)
         .animation(.snappy(duration: 0.25), value: label.activity?.subagents.count)
         .animation(.snappy(duration: 0.25), value: label.activity?.backgroundTasks)
         // The same curve the sidebar row uses for this change, so a session's two glyphs move together.
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.status)
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: label.activity?.unread)
-        .padding(.leading, 12)
-        .padding(.trailing, 6)
-        .frame(minWidth: 96, maxWidth: 220, minHeight: Chrome.controlHeight)
         .background {
             if isHovered && !isSelected {
                 Capsule().fill(.quinary)
@@ -329,15 +458,99 @@ private struct TabButtonContent: View, Equatable {
         // work instead: the title and icon sit on top of it and swallow the click.
         .gesture(TapGesture(count: 2).onEnded { if !isOverClose { model.pin(tab: tab.id) } })
         .simultaneousGesture(TapGesture().onEnded { if !isOverClose { model.select(tab: tab.id) } })
-        .onHover { isHovered = $0 }
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        // SwiftUI has no middle-click gesture.
+        .localEventMonitor(.otherMouseUp, while: isHovered) { event in
+            guard event.buttonNumber == 2 else { return false }
+            model.close(tab: tab.id)
+            return true
+        }
         .help(label.detail ?? label.title)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(label.title)
+        .accessibilityLabel(label.subtitle.map { "\(label.title), \($0)" } ?? label.title)
         // The label above replaces what the children would say, the dot's and the badges' included.
         .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("pane.tab")
         .accessibilityAction(.default) { model.select(tab: tab.id) }
+    }
+
+    private var title: some View {
+        HStack(spacing: 5) {
+            Text(label.title)
+                .italic(tab.isPreview)
+                // Not semibold for unread: bold text is wider, so the title would shift every time
+                // unread toggles.
+                .foregroundStyle(isSelected || label.activity?.unread == true ? .primary : .secondary)
+                // Truncate the folder before the file name.
+                .layoutPriority(1)
+            if let subtitle = label.subtitle {
+                Text(subtitle)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .lineLimit(1)
+        .truncationMode(.tail)
+    }
+
+    private var leading: some View {
+        Image(symbol: label.symbol)
+            .foregroundStyle(isSelected && isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            .symbolEffect(.bounce, options: .nonRepeating, value: finishBounce)
+            .frame(width: Self.iconSlot)
+            // Only on the switch to finished. Bouncing on every status change gets noisy with a
+            // few agents running.
+            .onChange(of: label.activity?.status == .finished) { _, finished in
+                if finished, !reduceMotion { finishBounce += 1 }
+            }
+    }
+
+    /// Badges and status, pinned to the trailing edge so new badges cut into the end of the
+    /// title instead of shifting it.
+    private var trailing: some View {
+        HStack(spacing: 4) {
+            // A narrow tab keeps only the status glyph. The counts and the dev server link would
+            // take all of its room; the sidebar row and VoiceOver still report them.
+            if width >= Self.badgeWidth {
+                if !label.devServers.isEmpty {
+                    DevServerPill(links: label.devServers)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+                BackgroundTaskBadge(count: label.activity?.backgroundTasks ?? 0)
+                SubagentBadge(count: label.activity?.subagents.count ?? 0)
+            }
+            closeSlot
+        }
+        .fixedSize()
+    }
+
+    /// The close button replaces the status glyph on hover, like Chrome and Xcode. The slot is
+    /// reserved even when it's empty so the title doesn't get shorter on hover.
+    private var closeSlot: some View {
+        ZStack {
+            Group {
+                if let activity = label.activity {
+                    StatusGlyph(activity: activity)
+                } else if label.hasUnsavedChanges {
+                    Image(systemName: "circle.fill")
+                        .imageScale(.small)
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Unsaved changes")
+                }
+            }
+            .modifier(SwapEffect(isShown: !isHovered, reduceMotion: reduceMotion))
+            Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .imageScale(.small)
+                .modifier(SwapEffect(isShown: isHovered, reduceMotion: reduceMotion))
+                .onHover { isOverClose = $0 }
+        }
+        .frame(width: Self.iconSlot)
     }
 
     private var accessibilityValue: String {
@@ -351,10 +564,26 @@ private struct TabButtonContent: View, Equatable {
     }
 }
 
+/// Approximates `.contentTransition(.symbolEffect(.replace))` with scale, blur and opacity. The real
+/// thing only works between two SF Symbols, and the status can be a spinner or a dot.
+private struct SwapEffect: ViewModifier {
+    let isShown: Bool
+    let reduceMotion: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isShown ? 1 : 0)
+            .scaleEffect(isShown || reduceMotion ? 1 : 0.5)
+            .blur(radius: isShown || reduceMotion ? 0 : 2)
+    }
+}
+
 /// Fades the leading or trailing edge of the tab row while tabs are cut off there, the way the
 /// inspector's lists fade (`scrollEdgeFade` in InspectorUI, which is vertical only and uses the
 /// inspector's background).
 private struct TabRowEdgeFade: ViewModifier {
+    /// What the row is filled with, so the fade lands on the same color.
+    let background: Color
     @State private var clipped = ClippedEdges()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -381,9 +610,7 @@ private struct TabRowEdgeFade: ViewModifier {
     }
 
     private func fade(from edge: HorizontalEdge) -> some View {
-        // What the bar itself is filled with (`.windowBackground`), as a color a gradient can fade.
-        let background = Color(nsColor: .windowBackgroundColor)
-        return LinearGradient(
+        LinearGradient(
             stops: [
                 .init(color: background, location: 0),
                 .init(color: background, location: 0.3),
@@ -398,14 +625,61 @@ private struct TabRowEdgeFade: ViewModifier {
 }
 
 private extension View {
-    func tabRowEdgeFade() -> some View {
-        modifier(TabRowEdgeFade())
+    func tabRowEdgeFade(_ background: Color) -> some View {
+        modifier(TabRowEdgeFade(background: background))
     }
 }
 
-/// The focused pane's selected tab is the one piece of glass in the row,
-/// like Safari's compact tabs. An unfocused pane falls back to a flat fill,
-/// which is what tells the panes apart at a glance.
+/// Icon buttons at the ends of the tab row, drawn straight onto the pane's color. Glass here would
+/// compete with the selected tab's glass. The squares match
+/// `GlassToolbarGroup`, so the buttons sit where they did.
+private struct TabRowControls<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            content
+                .labelStyle(.iconOnly)
+                .buttonStyle(GlyphButtonStyle())
+                .foregroundStyle(.secondary)
+                // For the menu, which the button style does not reach.
+                .frame(width: Chrome.controlHeight + 4, height: Chrome.controlHeight)
+        }
+    }
+}
+
+/// A plain glyph with a faint round highlight under the pointer, like a borderless toolbar item.
+/// For icon buttons that sit straight on a surface: the ends of the tab rows, the new island button.
+struct GlyphButtonStyle: ButtonStyle {
+    /// The height of the controls around it, so the hover highlight matches them.
+    var height = Chrome.controlHeight
+
+    func makeBody(configuration: Configuration) -> some View {
+        GlyphButton(configuration: configuration, height: height)
+    }
+
+    private struct GlyphButton: View {
+        let configuration: ButtonStyleConfiguration
+        let height: CGFloat
+        @State private var isHovered = false
+
+        var body: some View {
+            configuration.label
+                .frame(width: height + 4, height: height)
+                .background {
+                    Capsule()
+                        .fill(.quinary)
+                        .opacity(configuration.isPressed ? 1 : isHovered ? 0.7 : 0)
+                }
+                .contentShape(.capsule)
+                .onHover { isHovered = $0 }
+                .animation(Motion.hover, value: isHovered)
+        }
+    }
+}
+
+/// Only the focused pane's selected tab gets glass, like Safari's compact tabs.
+/// Unfocused panes get the faint hover fill so their selection is still visible.
 ///
 /// One view that slides under the selected tab instead of glass on every tab.
 /// Per-tab glass merges with its neighbours when a tab opens or closes and
@@ -415,9 +689,16 @@ private struct SelectionCapsule: View {
 
     var body: some View {
         Capsule()
-            .fill(.quaternary)
+            .fill(.quinary)
             .opacity(isActive ? 0 : 1)
             .glassEffect(isActive ? .regular : .identity, in: .capsule)
+            // Over a black terminal the glass looks like a flat gray block. The hairline
+            // border helps.
+            .overlay {
+                Capsule()
+                    .strokeBorder(.separator, lineWidth: 0.5)
+                    .opacity(isActive ? 1 : 0)
+            }
     }
 }
 
@@ -450,7 +731,7 @@ enum PanePreviews {
     static let serverSessionID = UUID(uuidString: "00000000-0000-0000-0000-0000000005E7")!
 
     /// The feature worktree with every kind of tab: sessions in several states, a file, a diff,
-    /// a preview tab and a session running a dev server.
+    /// a preview tab, a session running a dev server and two tabs with the same file name.
     static func mixedTabs() -> Worktree {
         var worktree = PreviewFixtures.featureWorktree
         worktree.sessions.append(Session(id: serverSessionID, title: "Dev Server", hasCustomTitle: true, agent: .shell))
@@ -459,6 +740,7 @@ enum PanePreviews {
             ArchipelCore.Tab(content: .session(PreviewFixtures.reviewSessionID)),
             ArchipelCore.Tab(content: .file(worktree.path.appending(path: "Sources/Sync/SyncEngine.swift"))),
             ArchipelCore.Tab(content: .diff(path: "Sources/Cache/ResponseCache.swift", staged: false)),
+            ArchipelCore.Tab(content: .diff(path: "Sources/Sync/SyncEngine.swift", staged: true)),
             ArchipelCore.Tab(content: .session(serverSessionID)),
             ArchipelCore.Tab(content: .file(worktree.path.appending(path: "README.md")), isPreview: true),
         ]
@@ -503,6 +785,7 @@ private struct PaneTabBarPreview: View {
     let model: AppModel
     var paneIndex = 0
     var showsSidebarToggle = false
+    var background = Color(nsColor: .textBackgroundColor)
 
     var body: some View {
         if let worktree = model.selectedWorktree {
@@ -512,7 +795,8 @@ private struct PaneTabBarPreview: View {
                 pane: pane,
                 isFocused: pane.id == worktree.focusedPane?.id,
                 showsSidebarToggle: showsSidebarToggle,
-                toggleSidebar: {}
+                toggleSidebar: {},
+                background: background
             )
             .environment(model)
         }
@@ -539,6 +823,12 @@ private func previewTabBars() -> some View {
         .preferredColorScheme(.dark)
 }
 
+#Preview("On a Black Terminal") {
+    PaneTabBarPreview(model: PanePreviews.model(selecting: PanePreviews.mixedTabs()), background: .black)
+        .environment(\.colorScheme, .dark)
+        .frame(width: 1100)
+}
+
 #Preview("Overflowing") {
     PaneTabBarPreview(model: PanePreviews.model(selecting: PanePreviews.mixedTabs()))
         .frame(width: 520)
@@ -560,8 +850,8 @@ private func previewTabBars() -> some View {
     var unsaved = label
     unsaved.hasUnsavedChanges = true
     return HStack(spacing: 4) {
-        TabButtonContent(tab: tab, label: label, isSelected: false, isActive: true)
-        TabButtonContent(tab: tab, label: unsaved, isSelected: false, isActive: true)
+        TabButtonContent(tab: tab, label: label, isSelected: false, isActive: true, width: 180)
+        TabButtonContent(tab: tab, label: unsaved, isSelected: false, isActive: true, width: 180)
     }
     .padding()
     .environment(AppModel.preview())

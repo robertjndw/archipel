@@ -19,7 +19,27 @@ final class AppModel {
     /// and `workspace` change, so the status bar, the menu bar icon, the Dock badge and the island
     /// switcher read a stored value instead of each walking every session in their view bodies.
     private(set) var workspaceAttention = AttentionSummary.zero
+    @ObservationIgnored private var dockAttentionRequest: Int?
     private(set) var islandAttention: [Island.ID: AttentionSummary] = [:]
+    /// The sidebar lists only the worktrees that need the user, from every island. Not persisted: a
+    /// filter that hides every project would greet the next launch as a broken sidebar.
+    var showsOnlyNeedsMe = false {
+        didSet {
+            guard showsOnlyNeedsMe != oldValue else { return }
+            if showsOnlyNeedsMe { SidebarTips.needsMeFilterUsed() }
+            needsMePin = nil
+            // Pin the worktree that's already open, or answering its request would pull the row
+            // out from under the user.
+            guard showsOnlyNeedsMe, let selected = selectedWorktree?.id,
+                  worktreesNeedingAttention(in: workspace, activities: activities).contains(selected)
+            else { return }
+            needsMePin = selected
+        }
+    }
+    /// The worktree last selected while the filter was on. It stays listed for as long as it is the
+    /// selection, since opening it is what clears its request and the row would vanish under the
+    /// pointer otherwise.
+    private(set) var needsMePin: Worktree.ID?
     private(set) var terminals: [Session.ID: TerminalSession] = [:]
     private(set) var launchFailures: [Session.ID: String] = [:]
     /// Counts the launches asked for per session. A launch waits for the login PATH, and a restart
@@ -27,9 +47,14 @@ final class AppModel {
     @ObservationIgnored private var launchGenerations: [Session.ID: Int] = [:]
     /// The glow each worktree row last played. Not persisted, so nothing glows after a launch.
     private(set) var statusPulses: [Worktree.ID: StatusPulseCount] = [:]
+    /// Glows of worktrees whose row is not in the sidebar. A collapsed project plays them on its
+    /// header, an island other than the selected one on its button in the switcher.
+    private(set) var projectPulses: [Project.ID: StatusPulseCount] = [:]
+    private(set) var islandPulses: [Island.ID: StatusPulseCount] = [:]
     /// Glows of changes that happened while Archipel was in the background. They would play behind
     /// another app where nobody sees them, so they wait for the app to come back.
     @ObservationIgnored private var pulsesAwaitingActivation: [Worktree.ID: StatusPulse] = [:]
+    @ObservationIgnored private var awaitedPulsesTask: Task<Void, Never>?
     @ObservationIgnored private var subagentExpiry: (date: Date, task: Task<Void, Never>)?
     /// Shown as an alert, one message at a time. Assigning while another message is still up puts
     /// the new one in line instead of replacing what the user has not read yet (a failed save
@@ -94,6 +119,12 @@ final class AppModel {
     let stayAwake = StayAwake()
     /// The latest subscription limits per provider, for the status bar. See AppModel+Usage.
     var usage: [UsageProvider: ProviderUsage] = UsageArchive.load()
+    /// How full each Claude session's context window is, and when its prompt cache goes cold. Only
+    /// in memory: Claude sends the context again as soon as a resumed session draws its status line.
+    /// See AppModel+Context.
+    var sessionContexts: [Session.ID: SessionContext] = [:]
+    var promptCaches: [Session.ID: PromptCacheState] = [:]
+    @ObservationIgnored var promptCacheReads: [Session.ID: Task<Void, Never>] = [:]
     /// Images for projects whose icon is a file or was found in the repository. See `loadIcon(of:)`.
     var projectIcons: [Project.ID: NSImage] = [:]
     /// The known editors found on this Mac, in `ExternalEditor.known` order. Looked up at launch and
@@ -137,6 +168,8 @@ final class AppModel {
     @ObservationIgnored var gitRefresh = GitRefreshState()
     private let store: WorkspaceStore
     private let terminalApp: TerminalApp?
+    /// The Ghostty colors the panes draw around terminals; nil without a terminal engine.
+    private(set) var terminalColors: TerminalColors?
     private let hookServer: HookServer
     let notifier = AttentionNotifier()
     /// Most recently focused tabs first, for Ctrl-Tab. Not observed: nothing on screen draws from it
@@ -162,7 +195,8 @@ final class AppModel {
     /// backup should bring them back.
     @ObservationIgnored private var isStandInWorkspace = false
 
-    init() {
+    /// Where this build keeps its workspace, socket and tips.
+    static var supportDirectory: URL {
         // Debug builds use their own folder so they can run next to the installed
         // app. Sharing it would mean sharing the workspace file, and the hook server
         // unlinks any socket already at its path, so the installed app would stop
@@ -176,9 +210,13 @@ final class AppModel {
         #else
         let supportFolder = "Archipel"
         #endif
-        let support = ProcessInfo.processInfo.environment["ARCHIPEL_SUPPORT_DIR"]
+        return ProcessInfo.processInfo.environment["ARCHIPEL_SUPPORT_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? URL.applicationSupportDirectory.appending(path: supportFolder, directoryHint: .isDirectory)
+    }
+
+    init() {
+        let support = Self.supportDirectory
         settings = AppSettings()
         store = WorkspaceStore(fileURL: support.appending(path: "workspace.json"))
         // A file of its own next to the workspace: comments are no part of its schema, and a damaged
@@ -257,6 +295,8 @@ final class AppModel {
         devServers.start { [weak self] in self?.terminals ?? [:] }
         resources.start { [weak self] in self?.resourceSources() ?? [:] }
         terminalApp?.acceptsDroppedText = { [weak self] in !(self?.isInternalDragPayload($0) ?? false) }
+        terminalColors = terminalApp?.colors
+        terminalApp?.onColorsChange = { [weak self] in self?.terminalColors = $0 }
     }
 
     #if DEBUG
@@ -349,6 +389,7 @@ final class AppModel {
     }
 
     func select(island id: Island.ID) {
+        if id != workspace.selectedIslandID { SidebarTips.islandSwitched() }
         changingSelection { $0.selectIsland(id) }
     }
 
@@ -408,12 +449,13 @@ final class AppModel {
 
     func appDidBecomeActive() {
         guard !isAppActive else { return }
+        if let request = dockAttentionRequest {
+            NSApp.cancelUserAttentionRequest(request)
+            dockAttentionRequest = nil
+        }
         isAppActive = true
         terminalApp?.setAppFocused(true)
-        for (id, kind) in pulsesAwaitingActivation where workspace.worktree(id: id) != nil {
-            statusPulses[id, default: StatusPulseCount()].play(kind)
-        }
-        pulsesAwaitingActivation.removeAll()
+        playAwaitedPulses()
         // Coming back to the app does not mark anything as seen: the window may have been in front
         // all along with nobody at the desk. Clicking or typing into a session does; see
         // watchSessionInteraction().
@@ -426,6 +468,61 @@ final class AppModel {
         refreshGitStatus(lookingUpPullRequests: true, minimumPullRequestAge: .seconds(30))
         fetchRemotesIfDue()
         startGitStatusTimer()
+    }
+
+    /// Plays the glows that waited for the app to come back, one after the other from the top of
+    /// the sidebar down. Started together they would all run in step.
+    private func playAwaitedPulses() {
+        awaitedPulsesTask?.cancel()
+        awaitedPulsesTask = Task { @MainActor [weak self] in
+            // The window is still coming to the front, and the start of the glow would be missed.
+            try? await Task.sleep(for: .milliseconds(300))
+            // The user may have switched away again by now. Then they keep waiting.
+            guard let self, isAppActive, !Task.isCancelled else { return }
+            // Several worktrees can share a project header or an island button, which then plays
+            // once, for whatever needs the user most.
+            var order: [PulseTarget] = []
+            var pulses: [PulseTarget: StatusPulse] = [:]
+            for id in workspace.allWorktrees.lazy.map(\.id) {
+                guard let pulse = pulsesAwaitingActivation[id] else { continue }
+                let target = pulseTarget(for: id)
+                if pulses[target] == nil { order.append(target) }
+                pulses[target] = max(pulses[target] ?? pulse, pulse)
+            }
+            pulsesAwaitingActivation.removeAll()
+            for target in order {
+                guard let pulse = pulses[target] else { continue }
+                play(pulse, on: target)
+                try? await Task.sleep(for: .milliseconds(80))
+            }
+        }
+    }
+
+    /// Where a worktree's glow can be seen right now.
+    private enum PulseTarget: Hashable {
+        case worktree(Worktree.ID)
+        case project(Project.ID)
+        case island(Island.ID)
+    }
+
+    private func pulseTarget(for id: Worktree.ID) -> PulseTarget {
+        // The "Needs Me" list has rows from every island and ignores what is collapsed.
+        guard !showsOnlyNeedsMe else { return .worktree(id) }
+        if let island = workspace.island(containingWorktree: id), island.id != selectedIsland?.id {
+            return .island(island.id)
+        }
+        if let project = workspace.project(containingWorktree: id), !project.isExpanded {
+            return .project(project.id)
+        }
+        return .worktree(id)
+    }
+
+    private func play(_ pulse: StatusPulse, on target: PulseTarget) {
+        switch target {
+        case .worktree(let id): statusPulses[id, default: StatusPulseCount()].play(pulse)
+        case .project(let id): projectPulses[id, default: StatusPulseCount()].play(pulse)
+        case .island(let id): islandPulses[id, default: StatusPulseCount()].play(pulse)
+        }
     }
 
     func appDidResignActive() {
@@ -478,13 +575,27 @@ final class AppModel {
         }
     }
 
+    /// Called right before another island is selected, while the workspace is still unchanged.
+    /// Putting the new island's content on screen keeps the main thread busy for several frames.
+    /// The sidebar sends its slide to the screen from here, which only works ahead of the change:
+    /// once views are waiting to update, nothing reaches the screen before they all have.
+    @ObservationIgnored var islandWillSwitch: ((_ old: Island.ID?, _ new: Island.ID?) -> Void)?
+
     /// Every mutation that can change which session is on screen goes through
     /// here, so the terminal that left the screen stops rendering and the one
     /// that entered it is started and marked as seen.
     func changingSelection(_ change: (inout Workspace) -> Void) {
         let previous = Set(visibleSessionIDs)
         let previousPlace = (selectedIsland?.id, selectedWorktree?.id)
+        if let islandWillSwitch {
+            // Tried on a copy first, to know where the change leads before it is made.
+            var next = workspace
+            change(&next)
+            if next.selectedIslandID != previousPlace.0 { islandWillSwitch(previousPlace.0, next.selectedIslandID) }
+        }
         mutate(change)
+        if showsOnlyNeedsMe { needsMePin = selectedWorktree?.id }
+        if previousPlace.1 != selectedWorktree?.id { SidebarTips.worktreeSwitched() }
         if previousPlace != (selectedIsland?.id, selectedWorktree?.id) {
             refreshGitStatus(lookingUpPullRequests: true)
         }
@@ -545,16 +656,6 @@ final class AppModel {
 
     func addIsland(name: String, symbol: String, tint: Tint) {
         changingSelection { _ = $0.addIsland(name: name, symbol: symbol, tint: tint) }
-    }
-
-    func updateIsland(_ id: Island.ID, name: String, symbol: String, tint: Tint) {
-        mutate {
-            $0.updateIsland(id: id) { island in
-                island.name = name
-                island.symbol = symbol
-                island.tint = tint
-            }
-        }
     }
 
     func removeIsland(_ id: Island.ID) {
@@ -635,10 +736,6 @@ final class AppModel {
         return main.path
     }
 
-    func renameProject(_ id: Project.ID, to name: String) {
-        mutate { $0.renameProject(id: id, to: name) }
-    }
-
     func setProject(_ id: Project.ID, expanded: Bool) {
         mutate { $0.updateProject(id: id) { $0.isExpanded = expanded } }
         // Collapsed projects are left out of the status poll, so the rows coming into view are stale.
@@ -651,8 +748,23 @@ final class AppModel {
         changingSelection { $0.removeProject(id: project.id) }
     }
 
+    /// Switches to the destination island too, so the project doesn't just vanish from the
+    /// sidebar. Keeps the selected worktree if it was in this project, otherwise picks its main
+    /// checkout.
     func moveProject(_ id: Project.ID, to island: Island.ID) {
-        changingSelection { $0.moveProject(id: id, to: island) }
+        let selected = selectedWorktree?.id
+        changingSelection { workspace in
+            workspace.moveProject(id: id, to: island)
+            guard let project = workspace.project(id: id) else { return }
+            let landing = project.worktrees.first { $0.id == selected }
+                ?? project.worktrees.first(where: \.isMain)
+                ?? project.worktrees.first
+            if let landing {
+                workspace.selectWorktree(landing.id)
+            } else {
+                workspace.selectIsland(island)
+            }
+        }
     }
 
     // MARK: Worktrees
@@ -894,10 +1006,12 @@ final class AppModel {
         if isGone || (deleteFolder && folderExists) {
             for url in unsavedInside.union(unsavedDocuments(under: worktree.path)) { documents.forget(url) }
         }
+        let removal = workspace.removal(ofWorktree: id)
         // A folder that stays on disk would be suggested again right away.
         changingSelection { $0.removeWorktree(id: id, dismiss: !deleteFolder) }
         missingWorktrees.remove(id)
         refreshWorktreeDiscovery()
+        if !deleteFolder, !isGone, let removal { registerRestore(removal) }
 
         guard deleteFolder, let branch = deleteBranch else { return .notRequested }
         // The user confirmed the name shown in the sheet. If the worktree switched branches since,
@@ -977,6 +1091,12 @@ final class AppModel {
         branchGenerations = branchGenerations.filter { worktrees.contains($0.key) }
         gitRefresh.diffStatCheckedAt = gitRefresh.diffStatCheckedAt.filter { worktrees.contains($0.key) }
         let projects = Set(workspace.islands.lazy.flatMap(\.projects).map(\.id))
+        if !projectPulses.keys.allSatisfy(projects.contains) {
+            projectPulses = projectPulses.filter { projects.contains($0.key) }
+        }
+        if !islandPulses.keys.allSatisfy({ workspace.island(id: $0) != nil }) {
+            islandPulses = islandPulses.filter { workspace.island(id: $0.key) != nil }
+        }
         if !projectIcons.keys.allSatisfy(projects.contains) {
             projectIcons = projectIcons.filter { projects.contains($0.key) }
         }
@@ -1004,18 +1124,13 @@ final class AppModel {
     }
 
     func renameSession(_ id: Session.ID, to title: String) {
-        mutate {
-            $0.updateSession(id: id) {
-                $0.title = title
-                $0.hasCustomTitle = true
-            }
-        }
+        setTitle(ofSession: id, to: title, custom: true)
     }
 
     // MARK: Tabs
 
-    func openFile(_ url: URL, preview: Bool) {
-        open(.file(url), preview: preview)
+    func openFile(_ url: URL, in worktreeID: Worktree.ID? = nil, preview: Bool) {
+        open(.file(url), in: worktreeID, preview: preview)
     }
 
     func openDiff(path: String, staged: Bool, preview: Bool) {
@@ -1132,15 +1247,21 @@ final class AppModel {
 
     /// The file's buffer is released by `mutate` once no tab shows the file any more.
     private func closeNow(_ tab: Tab) {
+        let closed = workspace.closedTab(id: tab.id)
         changingSelection { $0.closeTab(id: tab.id) }
+        if let closed { registerReopen(closed) }
     }
 
     func split(tab id: Tab.ID) {
+        let before = workspace.placement(ofTab: id)
         changingSelection { _ = $0.splitTab(id: id) }
+        registerMove(of: id, from: before, actionName: "Split Pane")
     }
 
     func move(tab id: Tab.ID, toPane pane: Pane.ID, at index: Int? = nil) {
+        let before = workspace.placement(ofTab: id)
         changingSelection { $0.moveTab(id: id, toPane: pane, at: index) }
+        registerMove(of: id, from: before, actionName: "Move Tab")
     }
 
     struct SessionInterruption: Identifiable {
@@ -1435,6 +1556,7 @@ final class AppModel {
             launchGenerations[id] = nil
             scriptSessions[id] = nil
             pendingReviews[id] = nil
+            forgetContext(of: id)
         }
         notifier.clear(sessionID: id)
         refreshDockBadge()
@@ -1444,6 +1566,12 @@ final class AppModel {
         // Limits belong to the account, so a reading counts even if its session was closed meanwhile.
         if let reading = message.usage { recordUsage(reading) }
         guard let session = workspace.session(id: message.sessionID) else { return }
+        if let context = message.context {
+            recordContext(context, for: session.id)
+        } else if message.usage != nil {
+            // A status line without a context is one drawn before the first reply, as after /clear.
+            forgetContext(of: session.id)
+        }
         // An agent that has only started has no conversation on disk yet, and
         // resuming that id would fail. Wait for proof of a first turn.
         let hasConversation = switch message.event {
@@ -1456,6 +1584,8 @@ final class AppModel {
         if let event = message.event { apply(event, to: session.id) }
         // Codex has just written the turn's token counts, and its limits with them, to its log.
         if session.agent == .codex, case .turnFinished? = message.event { refreshCodexUsage() }
+        // The turn's last request has made it into the transcript by now.
+        if case .turnFinished? = message.event { refreshPromptCache(for: session.id) }
     }
 
     private func apply(_ event: AgentEvent, to id: Session.ID) {
@@ -1479,7 +1609,7 @@ final class AppModel {
         let pulse = StatusPulse.kind(from: before, to: activity, siblings: siblings)
         if let pulse, let worktreeID = worktree?.id {
             if NSApp.isActive {
-                statusPulses[worktreeID, default: StatusPulseCount()].play(pulse)
+                play(pulse, on: pulseTarget(for: worktreeID))
             } else {
                 pulsesAwaitingActivation[worktreeID] = max(pulsesAwaitingActivation[worktreeID] ?? pulse, pulse)
             }
@@ -1531,6 +1661,7 @@ final class AppModel {
     }
 
     private func notify(session: Session, activity: SessionActivity) {
+        if case .needsAttention = activity.status { bounceDock() }
         let enabled = switch activity.status {
         case .needsAttention: settings.notifiesWhenAttentionNeeded
         case .finished: settings.notifiesWhenFinished
@@ -1565,6 +1696,14 @@ final class AppModel {
         if status != before { sessionStatusChanged(id, from: before, to: status) }
     }
 
+    /// Independent of the banner settings: it is its own opt-in. Held back while sharing the screen
+    /// for the same reason banners are.
+    private func bounceDock() {
+        guard settings.bouncesDockForAttention, !NSApp.isActive else { return }
+        if settings.holdsNotificationsWhileSharingScreen, ScreenSharingDetector.isSharing() { return }
+        dockAttentionRequest = NSApp.requestUserAttention(.informationalRequest)
+    }
+
     func refreshDockBadge() {
         notifier.setDockBadge(settings.showsDockBadge ? workspaceAttention.needsAttention : 0)
     }
@@ -1579,7 +1718,10 @@ final class AppModel {
         }
         // Runs on every activity write and every mutation, nearly all of which change no count.
         if islands != islandAttention { islandAttention = islands }
-        if total != workspaceAttention { workspaceAttention = total }
+        if total != workspaceAttention {
+            if total.needsAttention > workspaceAttention.needsAttention { SidebarTips.agentWaited() }
+            workspaceAttention = total
+        }
     }
 
     // MARK: Pane focus
@@ -1673,6 +1815,7 @@ final class AppModel {
         for url in filesBefore.subtracting(openFileURLs) where !documents.isDirty(url) { documents.close(url) }
         webPages.retain(only: webTabIDs)
         refreshAttention()
+        SidebarTips.workspaceChanged(workspace)
         // Here rather than in changingSelection so clicking into another pane counts too.
         if let id = focusedTab?.id { recentTabs.visit(id) }
         // Saved once things have been quiet for a moment, but never later than `longestSaveDelay`

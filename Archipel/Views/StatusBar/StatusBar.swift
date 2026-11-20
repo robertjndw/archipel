@@ -2,33 +2,75 @@ import AgentKit
 import ArchipelCore
 import SwiftUI
 
-/// The strip under the content area: subscription usage on the leading end, the agents across every
-/// island and the stay awake cup on the trailing end. It spans the content column only, so the glass
-/// sidebar and the inspector keep running to the bottom of the window.
+/// The strip under the content area: subscription usage and the focused session's context on the
+/// leading end, the agents across every island and the stay awake cup on the trailing end. It spans
+/// the content column only, so the glass sidebar and the inspector keep running to the bottom of the
+/// window.
 struct StatusBar: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let settings = model.settings
+        // The strip stays when every item is off: its height lines up with the island switcher.
+        StatusBarStrip(items: AppSettings.StatusBarItem.allCases.filter(settings.shows)) { item in
+            switch item {
+            case .usage:
+                // Once a minute is enough for "resets in" and for a window that has just reset.
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    UsageItems(now: context.date)
+                }
+            case .context: ContextItem()
+            case .agents: AgentsItem()
+            case .resources: ResourcesItem()
+            case .stayAwake: StayAwakeButton()
+            }
+        }
+        .frame(height: 2 * Chrome.bottomLineInset)
+        .background(Chrome.windowSurface)
+        // Over the whole strip, so a right-click between the items gets the menu too, as it does on
+        // the menu bar or a toolbar.
+        .accessibilityElement(children: .contain)
+        .statusBarMenu(settings) {
+            SettingsView.select(.appearance)
+            openSettings()
+        }
+        .animation(reduceMotion ? nil : Motion.disclosure, value: settings.hiddenStatusBarItems)
+        // Reaches up into the cards' bottom gap, so the items sit on the bottom line. The gap is
+        // window surface like the bar, so nothing shows the overlap.
+        .padding(.top, -Chrome.paneGap(for: model.settings.paneStyle))
+    }
+}
+
+/// The status bar's layout without its data, shared with the live preview in Settings so the two
+/// cannot drift apart.
+struct StatusBarStrip<Item: View>: View {
+    let items: [AppSettings.StatusBarItem]
+    @ViewBuilder let item: (AppSettings.StatusBarItem) -> Item
 
     var body: some View {
         HStack(spacing: 12) {
-            // Once a minute is enough for "resets in" and for a window that has just reset.
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                UsageItems(now: context.date)
+            HStack(spacing: 14) {
+                ForEach(items.filter(\.isLeading)) { entry in
+                    item(entry).transition(Self.transition)
+                }
             }
             Spacer(minLength: 8)
-            AgentsItem()
-            Divider()
-                .frame(height: 12)
-            ResourcesItem()
-            StayAwakeButton()
+            ForEach(items.filter { !$0.isLeading }) { entry in
+                item(entry)
+                    // Room rather than a hairline between the agents and the machine's items.
+                    .padding(.trailing, entry == .agents ? 6 : 0)
+                    .transition(Self.transition)
+            }
         }
         .font(.system(size: 11))
         .monospacedDigit()
         // Extra room at the edges because the window's bottom corners are rounded.
         .padding(.horizontal, 14)
-        .frame(height: 28)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
     }
+
+    private static var transition: AnyTransition { .opacity.combined(with: .scale(scale: 0.8)) }
 }
 
 private struct UsageItems: View {
@@ -62,13 +104,14 @@ private struct UsageItems: View {
         }
         .buttonStyle(.plain)
         .help("Show Usage Details")
+        .accessibilityIdentifier("statusBar.usage")
         .popover(isPresented: $showsDetails, arrowEdge: .top) {
             UsageDetails(readings: readings)
         }
     }
 }
 
-private struct UsageItem: View {
+struct UsageItem: View {
     let reading: ProviderUsage
     let now: Date
     let display: AppSettings.UsageDisplay
@@ -127,6 +170,8 @@ struct UsageBar: View {
     let usedPercent: Double
     let fill: AppSettings.UsageBarFill
     let height: CGFloat
+    /// The fill below 75%. Subscription limits use the tint; the context stays neutral.
+    var calm: AnyShapeStyle = AnyShapeStyle(.tint)
 
     var body: some View {
         let used = min(max(usedPercent, 0), 100)
@@ -136,7 +181,7 @@ struct UsageBar: View {
             .overlay(alignment: .leading) {
                 GeometryReader { proxy in
                     Capsule()
-                        .fill(UsageColor.style(for: used, calm: .tint))
+                        .fill(UsageColor.style(for: used, calm: calm))
                         // A sliver at 0% would read as something being there, so an empty bar stays empty.
                         .frame(width: filled > 0 ? max(height, proxy.size.width * filled / 100) : 0)
                 }
@@ -147,7 +192,7 @@ struct UsageBar: View {
 }
 
 /// Orange from 75% and red from 90%, so a limit only stands out once it is worth watching.
-private enum UsageColor {
+enum UsageColor {
     static func style(for percent: Double, calm: some ShapeStyle) -> AnyShapeStyle {
         switch percent {
         case 90...: AnyShapeStyle(.red)
@@ -294,52 +339,61 @@ private struct WindowDetails: View {
 /// What every agent is doing, across all islands, not only the one on screen.
 private struct AgentsItem: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.appearsActive) private var appearsActive
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let summary = model.workspaceAttention
         Button {
             model.selectNextNeedingAttention()
         } label: {
-            HStack(spacing: 10) {
-                if summary.working == 0, summary.needsAttention == 0 {
-                    Text("No agents working")
-                        .foregroundStyle(.tertiary)
-                }
-                if summary.working > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 6))
-                            .foregroundStyle(.tint)
-                            .symbolEffect(.pulse, options: .repeating, isActive: appearsActive)
-                        Text("\(summary.working) working")
-                            .contentTransition(.numericText(value: Double(summary.working)))
-                            .animation(reduceMotion ? nil : Motion.disclosure, value: summary.working)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-                if summary.needsAttention > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "exclamationmark.circle.fill")
-                            .foregroundStyle(.orange)
-                        Text("\(summary.needsAttention) waiting")
-                            .foregroundStyle(.primary)
-                            .contentTransition(.numericText(value: Double(summary.needsAttention)))
-                            .animation(reduceMotion ? nil : Motion.disclosure, value: summary.needsAttention)
-                    }
-                }
-            }
-            .lineLimit(1)
-            .fixedSize()
-            .frame(maxHeight: .infinity)
-            .contentShape(.rect)
+            AgentsLabel(summary: summary)
+                .frame(maxHeight: .infinity)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         // Not disabled when nothing is waiting: that would dim the working count as well.
         .help(summary.needsAttention > 0 ? "Go to the next session waiting for you (⇧⌘U)" : "Agents in all islands")
         .accessibilityLabel("Agents")
         .accessibilityValue(summary.accessibilityDescription.isEmpty ? "None working" : summary.accessibilityDescription)
+        .accessibilityIdentifier("statusBar.agents")
+    }
+}
+
+struct AgentsLabel: View {
+    let summary: AttentionSummary
+    @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if summary.working == 0, summary.needsAttention == 0 {
+                Text("No agents working")
+                    .foregroundStyle(.tertiary)
+            }
+            if summary.working > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 6))
+                        .foregroundStyle(.tint)
+                        .symbolEffect(.pulse, options: .repeating, isActive: appearsActive)
+                    Text("\(summary.working) working")
+                        .contentTransition(.numericText(value: Double(summary.working)))
+                        .animation(reduceMotion ? nil : Motion.disclosure, value: summary.working)
+                }
+                .foregroundStyle(.secondary)
+            }
+            if summary.needsAttention > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.orange)
+                    Text("\(summary.needsAttention) waiting")
+                        .foregroundStyle(.primary)
+                        .contentTransition(.numericText(value: Double(summary.needsAttention)))
+                        .animation(reduceMotion ? nil : Motion.disclosure, value: summary.needsAttention)
+                }
+            }
+        }
+        .lineLimit(1)
+        .fixedSize()
     }
 }
 
@@ -367,8 +421,16 @@ private extension AppModel {
 }
 
 private func previewStatusBars() -> some View {
-    VStack(spacing: 16) {
+    // The fixture's focused Claude session is working, so its cache hides; this one has finished.
+    let idle = AppModel.preview()
+    idle.select(session: PreviewFixtures.reviewSessionID)
+    let barsOnly = AppModel.preview()
+    barsOnly.select(session: PreviewFixtures.reviewSessionID)
+    barsOnly.settings.usageDisplay = .bars
+    return VStack(spacing: 16) {
         StatusBar().environment(AppModel.preview())
+        StatusBar().environment(idle)
+        StatusBar().environment(barsOnly)
         StatusBar().environment(AppModel.previewNearLimit())
         StatusBar().environment(AppModel.emptyPreview())
     }

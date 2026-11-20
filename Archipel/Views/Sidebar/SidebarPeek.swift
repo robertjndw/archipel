@@ -2,6 +2,7 @@ import AgentKit
 import AppKit
 import ArchipelCore
 import SwiftUI
+import TerminalKit
 
 /// Quick Look for sessions: with the sidebar focused, Space shows the end of
 /// the terminal under the pointer without switching to it.
@@ -21,13 +22,31 @@ final class SidebarPeekModel {
 
     var isOpen: Bool { target != nil }
 
-    /// True between the popover appearing and disappearing. `target` alone says a peek was
-    /// requested, not that anything is on screen to take keys for.
-    @ObservationIgnored private(set) var isPresented = false
+    /// Which popovers are on screen. `target` alone says a peek was requested, not that anything
+    /// is on screen to take keys for.
+    @ObservationIgnored private var presentation = SessionPeek.Presentation()
 
-    func popoverAppeared() { isPresented = true }
+    var isPresented: Bool { presentation.isShowing() }
 
-    func popoverDisappeared() { isPresented = false }
+    func popoverAppeared(for worktree: Worktree.ID) { presentation.appeared(worktree) }
+
+    func popoverDisappeared(for worktree: Worktree.ID) {
+        presentation.disappeared(worktree)
+        snapshotSources[worktree] = nil
+    }
+
+    func setSnapshotSource(_ view: NSView, for worktree: Worktree.ID) {
+        snapshotSources[worktree] = WeakView(view: view)
+    }
+
+    struct WeakView {
+        weak var view: NSView?
+    }
+
+    /// The views behind each popover's content, which Return photographs for the zoom. Per row,
+    /// since the popover being stepped away from can still update after the new one has appeared.
+    @ObservationIgnored private var snapshotSources: [Worktree.ID: WeakView] = [:]
+    @ObservationIgnored private let zoom = PeekZoom()
 
     /// The popover disappears without calling its binding setter when its anchor row goes away
     /// (island switch, removed worktree), so the target is checked against the live rows instead.
@@ -67,23 +86,43 @@ final class SidebarPeekModel {
         } else {
             return false
         }
+        SidebarTips.peeked()
         return true
     }
 
     func step(by offset: Int, in model: AppModel) {
         guard let target, let island = model.selectedIsland else { return }
         let targets = SessionPeek.targets(in: island) { model.peekSession(in: $0) }
-        self.target = SessionPeek.step(from: target, by: offset, in: targets) ?? target
+        let next = SessionPeek.step(from: target, by: offset, in: targets) ?? target
+        if next.worktreeID != target.worktreeID { presentation.moving(to: next.worktreeID) }
+        self.target = next
     }
 
-    func openTarget(in model: AppModel) {
+    /// Opens the peeked session, growing the peek into the pane that shows it when there is a
+    /// popover to start from.
+    func openTarget(in model: AppModel, window: NSWindow?) {
         guard let target else { return }
+        // Taken before closing: once the popover starts to go away there is nothing left to draw.
+        let snapshot = snapshotSources[target.worktreeID]?.view?.peekSnapshot()
         close()
-        if let session = target.sessionID {
-            model.select(session: session)
-        } else {
-            model.select(worktree: target.worktreeID)
+        let select = {
+            if let session = target.sessionID {
+                model.select(session: session)
+            } else {
+                model.select(worktree: target.worktreeID)
+            }
         }
+        guard let snapshot, let window else { return select() }
+        zoom.run(
+            from: snapshot,
+            over: window,
+            background: PaneSurface(target: target, in: model).color,
+            select: select,
+            destination: { [weak model, weak window] in
+                guard let model, let window else { return nil }
+                return model.peekZoomDestination(for: target, in: window)
+            }
+        )
     }
 
     func close() {
@@ -104,6 +143,22 @@ final class SidebarPeekModel {
 }
 
 extension AppModel {
+    /// The pane that shows the peeked session once it has been selected. Nil until the selection has
+    /// landed there and SwiftUI has laid the pane out, or if it never does.
+    fileprivate func peekZoomDestination(for target: SessionPeek.Target, in window: NSWindow) -> PeekZoomDestination? {
+        guard let worktree = selectedWorktree, worktree.id == target.worktreeID else { return nil }
+        let pane: Pane?
+        if let session = target.sessionID {
+            pane = worktree.panes.first { $0.selectedTab?.content == .session(session) }
+        } else {
+            pane = worktree.focusedPane
+        }
+        guard let pane, let frame = paneFrames[pane.id], frame.width > 1, frame.height > 1 else { return nil }
+        let windowRadius = window.cornerRadius ?? WindowMetrics().cornerRadius
+        let radius = Chrome.paneRadius(for: settings.paneStyle, windowRadius: windowRadius)
+        return PeekZoomDestination(frame: frame, radius: radius)
+    }
+
     func peekSession(in worktree: Worktree) -> Session.ID? {
         SessionPeek.mostRelevantSession(
             in: worktree,
@@ -121,45 +176,62 @@ extension View {
             .popover(isPresented: peek.isPresented(for: worktree), arrowEdge: .trailing) {
                 if let target = peek.target {
                     SessionPeekView(target: target)
-                        .onAppear { peek.popoverAppeared() }
-                        .onDisappear { peek.popoverDisappeared() }
+                        .background { PeekSnapshotSource(peek: peek, worktree: worktree) }
+                        .onAppear { peek.popoverAppeared(for: worktree) }
+                        .onDisappear { peek.popoverDisappeared(for: worktree) }
                 }
             }
     }
 }
 
-/// The popover's content: who the session is, what it is doing, and the last
-/// lines of its terminal, refreshed while it is open.
+extension PaneSurface {
+    /// The surface the pane would show this target on: the terminal's for a session, the text
+    /// background for a worktree without sessions.
+    @MainActor
+    init(target: SessionPeek.Target, in model: AppModel) {
+        self.init(showsSession: target.sessionID != nil, colors: model.terminalColors)
+    }
+}
+
+/// The popover's content: who the session is, what it is doing, and the last lines of its terminal,
+/// refreshed while it is open. It uses the terminal's colors so it looks like the pane Return opens,
+/// which is what lets the zoom land without a jump in color.
 struct SessionPeekView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
     let target: SessionPeek.Target
 
-    static let lineCount = 25
+    static let lineCount = 30
 
     var body: some View {
         let session = target.sessionID.flatMap { model.workspace.session(id: $0) }
+        let surface = PaneSurface(target: target, in: model)
         VStack(alignment: .leading, spacing: 0) {
             header(session)
-            Divider()
-            output(session)
+            output(session, surface: surface)
+            hints
         }
-        .frame(width: 600)
+        .frame(width: 640)
+        .background(surface.color)
+        .presentationBackground(surface.color)
+        .environment(\.colorScheme, surface.colorScheme ?? colorScheme)
     }
 
     private func header(_ session: Session?) -> some View {
         let activity = session.map { model.activity(for: $0.id) }
+        let tint = model.project(ofWorktree: target.worktreeID).map { model.tint(of: $0).color }
         return HStack(spacing: 10) {
             Image(symbol: (session?.agent.definition ?? .shell).symbolName)
-                .font(.title3)
-                .foregroundStyle(.secondary)
+                .font(.title3.weight(.medium))
+                .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary))
                 .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(session?.displayTitle ?? model.workspace.worktree(id: target.worktreeID)?.displayName ?? "Session")
                     .font(.headline)
                     .lineLimit(1)
-                Text(subtitle(activity))
+                    .accessibilityIdentifier("sidebar.peek.title")
+                subtitle(activity)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -167,52 +239,106 @@ struct SessionPeekView: View {
                 StatusGlyph(activity: activity)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
     }
 
-    private func subtitle(_ activity: SessionActivity?) -> String {
-        let place = model.workspace.worktree(id: target.worktreeID)?.displayName
-        guard let activity else { return place ?? "" }
-        return [activity.status.label, place].compactMap(\.self).joined(separator: " · ")
+    /// Only a session waiting for the user gets a color, the same orange the sidebar uses.
+    private func subtitle(_ activity: SessionActivity?) -> Text {
+        let place = model.workspace.worktree(id: target.worktreeID)?.displayName ?? ""
+        guard let activity else { return Text(place).foregroundStyle(.secondary) }
+        let status = Text(activity.status.label)
+            .foregroundStyle(activity.needsUser ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+        guard !place.isEmpty else { return status }
+        let rest = Text(verbatim: " · \(place)").foregroundStyle(.secondary)
+        return Text("\(status)\(rest)")
     }
 
     @ViewBuilder
-    private func output(_ session: Session?) -> some View {
+    private func output(_ session: Session?, surface: PaneSurface) -> some View {
         if let session, let terminal = model.terminals[session.id] {
-            // Ghostty has no change notification, so the peek polls like the
-            // dev server monitor does; it only runs while the popover is up.
-            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                let lines = SessionPeek.tail(of: terminal.readVisibleText(), lines: Self.lineCount)
-                ScrollView([.vertical, .horizontal]) {
-                    Text(verbatim: lines.joined(separator: "\n"))
-                        .font(.system(size: 11, design: .monospaced))
-                        .fixedSize()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                }
-                .defaultScrollAnchor(.bottomLeading)
-                .frame(height: 360)
+            PeekTail(foreground: surface.foreground) {
+                SessionPeek.tail(of: terminal.readVisibleText(), lines: Self.lineCount).joined(separator: "\n")
             }
+            .id(session.id)
+            .frame(height: 380)
         } else {
             placeholder(session)
+                .frame(height: 220)
         }
     }
 
     private func placeholder(_ session: Session?) -> some View {
-        let message: String
-        if session == nil {
-            message = "This worktree has no sessions yet."
-        } else if let failure = session.flatMap({ model.launchFailures[$0.id] }) {
-            message = failure
-        } else {
-            message = "This session is not running. Open it to start it."
+        Group {
+            if session == nil {
+                ContentUnavailableView(
+                    "No Sessions",
+                    systemImage: "terminal",
+                    description: Text("This worktree has no sessions yet.")
+                )
+            } else if let failure = session.flatMap({ model.launchFailures[$0.id] }) {
+                ContentUnavailableView("Could Not Start", systemImage: "exclamationmark.triangle", description: Text(failure))
+            } else {
+                ContentUnavailableView(
+                    "Not Running",
+                    systemImage: "pause.circle",
+                    description: Text("Open this session to start it.")
+                )
+            }
         }
-        return Text(message)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity, minHeight: 80)
-            .padding(12)
+        .controlSize(.small)
+    }
+
+    private var hints: some View {
+        HStack(spacing: 14) {
+            Spacer(minLength: 0)
+            Text("↩ Open")
+            Text("↑↓ Browse")
+        }
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 9)
+        .padding(.top, 2)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The end of a terminal's text, pinned to the bottom like the prompt and faded at the top, because
+/// there is usually more output above it.
+struct PeekTail: View {
+    let foreground: Color
+    let read: () -> String
+    @State private var text = ""
+
+    var body: some View {
+        // No scroll view: a fixed-size text anchored to the bottom just overflows upward and is
+        // clipped, so a refresh never moves anything that did not change.
+        Text(verbatim: text)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(foreground)
+            .fixedSize()
+            .padding(.horizontal, 14)
+            .padding(.bottom, 6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .clipped()
+            .mask {
+                LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.22)], startPoint: .top, endPoint: .bottom)
+            }
+            // Ghostty has no change notification, so the peek polls like the dev server monitor does;
+            // it only runs while the popover is up, and only touches the view when the text changed.
+            // Not in init: init runs on every update of the peeked session, and each call would read
+            // the whole viewport only for State to throw it away. onAppear still runs before the
+            // first frame, so the zoom's snapshot has the text.
+            .onAppear { text = read() }
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    let latest = read()
+                    if latest != text { text = latest }
+                }
+            }
     }
 }
 
@@ -264,7 +390,7 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
                 case Key.space, Key.escape: peek.close()
                 case Key.up: peek.step(by: -1, in: model)
                 case Key.down: peek.step(by: 1, in: model)
-                case Key.returnKey, Key.enter: peek.openTarget(in: model)
+                case Key.returnKey, Key.enter: peek.openTarget(in: model, window: window)
                 default:
                     peek.close()
                     return false
@@ -298,6 +424,15 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
 
 #if DEBUG
 // Previews never have a live terminal, so the peek shows its placeholder instead of output.
+#Preview("Running") {
+    let lines = (1...40).map { "\($0)  compiling module \($0 % 7 == 0 ? "ArchipelCore" : "AgentKit") (\($0 * 3)ms)" }
+    return VStack(spacing: 0) {
+        PeekTail(foreground: .primary) { lines.suffix(SessionPeekView.lineCount).joined(separator: "\n") }
+            .frame(width: 640, height: 380)
+    }
+    .background(Color(nsColor: .textBackgroundColor))
+}
+
 #Preview("Session not running") {
     SessionPeekView(target: SessionPeek.Target(worktreeID: PreviewFixtures.featureWorktreeID, sessionID: PreviewFixtures.codexSessionID))
         .environment(AppModel.preview())

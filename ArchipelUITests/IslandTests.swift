@@ -26,6 +26,38 @@ final class IslandTests: ArchipelUITestCase {
         assertExists(mainWindow(titled: "fixture - main"), "The island remembers which worktree was selected in it.")
     }
 
+    func testEachIslandKeepsItsScrollPosition() throws {
+        // Enough projects that the list scrolls in the test window.
+        let long = try (1...24).map { try sandbox.makeRepository(named: String(format: "repo%02d", $0)) }
+        let other = try sandbox.makeRepository(named: "other")
+        let third = try sandbox.makeRepository(named: "third")
+        try launch(with: islandWorkspace([("Personal", long), ("Work", [other]), ("Play", [third])]))
+        assertExists(sidebarProject("repo01"), "The first island's projects should be listed.")
+
+        mainWindow.outlines["sidebar"].scroll(byDeltaX: 0, deltaY: -2000)
+        assertExists(sidebarProject("repo24"), "Scrolling should reach the last project.")
+        waitUntil("the first project is scrolled out of sight") { !sidebarProject("repo01").isHittable }
+
+        chooseMenu("Islands", "Work")
+        assertExists(sidebarProject("other"), "The second island's project should be listed.")
+        chooseMenu("Islands", "Personal")
+        assertExists(sidebarProject("repo24"), "The first island's projects should be back.")
+        waitUntil("the list is back where it was scrolled to") { sidebarProject("repo24").isHittable }
+        XCTAssertFalse(sidebarProject("repo01").isHittable, "The list should not jump back to the top.")
+
+        // The same once the first island's list is gone and has to be built again. Only the shown
+        // island, its neighbours and the one visited last keep their lists, and from the third
+        // island the first is none of these.
+        chooseMenu("Islands", "Work")
+        assertExists(sidebarProject("other"), "The second island's project should be listed.")
+        chooseMenu("Islands", "Play")
+        assertExists(sidebarProject("third"), "The third island's project should be listed.")
+        chooseMenu("Islands", "Personal")
+        assertExists(sidebarProject("repo24"), "The first island's projects should be back.")
+        waitUntil("a rebuilt list is back where it was scrolled to") { sidebarProject("repo24").isHittable }
+        XCTAssertFalse(sidebarProject("repo01").isHittable, "A rebuilt list should not start at the top.")
+    }
+
     func testSwitchingIslandsFromTheMenu() throws {
         let alpha = try sandbox.makeRepository(named: "alpha")
         let beta = try sandbox.makeRepository(named: "beta")
@@ -154,11 +186,10 @@ final class IslandTests: ArchipelUITestCase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
-    func testMovingAProjectToAnotherIsland() throws {
+    func testMovingAProjectToAnotherIslandFollowsIt() throws {
         let alpha = try sandbox.makeRepository(named: "alpha")
         let gamma = try sandbox.makeRepository(named: "gamma")
         let beta = try sandbox.makeRepository(named: "beta")
-        // The moved project is not the selected one, so the island keeps a worktree to show.
         let workspace = islandWorkspace([("Personal", [alpha, gamma]), ("Work", [beta])])
         try launch(with: workspace)
         assertExists(sidebarProject("gamma"), "Both seeded projects should be in the first island.")
@@ -167,15 +198,17 @@ final class IslandTests: ArchipelUITestCase {
         chooseContextMenu("Move to Island")
         chooseContextMenu("Work")
 
-        assertGone(sidebarProject("gamma"), "The project should leave the island it was moved from.")
-        XCTAssertTrue(sidebarProject("alpha").exists, "The other project stays.")
+        assertExists(sidebarProject("beta"), "The sidebar should follow the project to its new island.")
+        assertExists(sidebarProject("gamma"), "The project should be in the island it was moved to.")
+        XCTAssertFalse(sidebarProject("alpha").exists, "The sidebar should no longer show the island it left.")
+        assertExists(mainWindow(titled: "gamma - main"), "The moved project's checkout should be selected.")
         waitUntil("the move is saved") {
             try sandbox.savedWorkspace().islands.map { $0.projects.map(\.name) } == [["alpha"], ["beta", "gamma"]]
         }
 
-        chooseMenu("Islands", "Work")
-        assertExists(sidebarProject("gamma"), "The project should be in the island it was moved to.")
-        assertExists(sidebarProject("beta"), "The island's own project stays.")
+        chooseMenu("Islands", "Personal")
+        assertExists(sidebarProject("alpha"), "The other project stays where it was.")
+        XCTAssertFalse(sidebarProject("gamma").exists, "The moved project should be gone from its old island.")
     }
 
     func testMovingTheSelectedProjectAwayKeepsASelectionInTheIsland() throws {
@@ -191,10 +224,12 @@ final class IslandTests: ArchipelUITestCase {
         chooseContextMenu("Move to Island")
         chooseContextMenu("Work")
 
-        assertGone(sidebarProject("alpha"), "The project should leave the island it was moved from.")
-        XCTAssertTrue(sidebarProject("gamma").exists, "The other project stays.")
+        assertExists(sidebarProject("beta"), "The sidebar should follow the project to its new island.")
+        assertExists(mainWindow(titled: "alpha - main"), "The moved worktree should stay selected.")
+
         // Like removing a selected worktree, which falls back to the project's main checkout.
-        assertGone(mainWindow(titled: "alpha - main"), "The window title should not name a worktree that left the island.")
+        chooseMenu("Islands", "Personal")
+        assertExists(sidebarProject("gamma"), "The other project stays.")
         assertExists(mainWindow(titled: "gamma - main"), "A worktree of the island's remaining project should be selected.")
     }
 }

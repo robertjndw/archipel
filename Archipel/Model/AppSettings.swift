@@ -24,6 +24,20 @@ final class AppSettings {
         }
     }
 
+    /// How split panes sit next to each other: flush with a hairline between them, or as rounded
+    /// cards with a gap.
+    enum PaneStyle: String, CaseIterable, Identifiable {
+        case compact, comfortable
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .compact: "Compact"
+            case .comfortable: "Comfortable"
+            }
+        }
+    }
+
     /// How the status bar draws subscription usage.
     enum UsageDisplay: String, CaseIterable, Identifiable {
         case numbers, bars
@@ -48,6 +62,25 @@ final class AppSettings {
             case .remaining: "Remaining"
             }
         }
+    }
+
+    /// The items of the status bar, in the order they stand in it.
+    enum StatusBarItem: String, CaseIterable, Identifiable {
+        case usage, context, agents, resources, stayAwake
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .usage: "Usage limits"
+            case .context: "Context & cache"
+            case .agents: "Agents"
+            case .resources: "Resources"
+            case .stayAwake: "Stay awake"
+            }
+        }
+
+        /// Leading items report on your sessions, trailing ones on the app and the Mac.
+        var isLeading: Bool { self == .usage || self == .context }
     }
 
     /// Where a ⌘-clicked link opens. ⌘⌥-click picks the other one.
@@ -94,12 +127,30 @@ final class AppSettings {
 
     var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) } }
     var sidebarDensity: SidebarDensity { didSet { defaults.set(sidebarDensity.rawValue, forKey: Key.sidebarDensity) } }
+    var paneStyle: PaneStyle { didSet { defaults.set(paneStyle.rawValue, forKey: Key.paneStyle) } }
     var showsGitStatusInSidebar: Bool { didSet { defaults.set(showsGitStatusInSidebar, forKey: Key.showsGitStatusInSidebar) } }
     /// Also decides whether `gh` is asked at all.
     var showsPullRequests: Bool { didSet { defaults.set(showsPullRequests, forKey: Key.showsPullRequests) } }
     var showsAgentMessagesInSidebar: Bool { didSet { defaults.set(showsAgentMessagesInSidebar, forKey: Key.showsAgentMessagesInSidebar) } }
     var usageDisplay: UsageDisplay { didSet { defaults.set(usageDisplay.rawValue, forKey: Key.usageDisplay) } }
     var usageBarFill: UsageBarFill { didSet { defaults.set(usageBarFill.rawValue, forKey: Key.usageBarFill) } }
+    /// Hidden rather than shown, so an item added in a later version turns up without the user
+    /// having to find it in Settings.
+    var hiddenStatusBarItems: Set<StatusBarItem> {
+        didSet {
+            let stored = hiddenStatusBarItems.map(\.rawValue) + unknownHiddenStatusBarItems
+            defaults.set(stored.sorted(), forKey: Key.hiddenStatusBarItems)
+        }
+    }
+    /// Items a newer version hid that this one does not know. Written back as they were, so going
+    /// back and forth between versions does not bring them back.
+    @ObservationIgnored private var unknownHiddenStatusBarItems: [String] = []
+
+    func shows(_ item: StatusBarItem) -> Bool { !hiddenStatusBarItems.contains(item) }
+
+    func toggle(_ item: StatusBarItem) {
+        if shows(item) { hiddenStatusBarItems.insert(item) } else { hiddenStatusBarItems.remove(item) }
+    }
 
     // MARK: Notifications
 
@@ -108,6 +159,7 @@ final class AppSettings {
     var notifiesWhenExited: Bool { didSet { defaults.set(notifiesWhenExited, forKey: Key.notifiesWhenExited) } }
     var playsNotificationSound: Bool { didSet { defaults.set(playsNotificationSound, forKey: Key.playsNotificationSound) } }
     var showsDockBadge: Bool { didSet { defaults.set(showsDockBadge, forKey: Key.showsDockBadge) } }
+    var bouncesDockForAttention: Bool { didSet { defaults.set(bouncesDockForAttention, forKey: Key.bouncesDockForAttention) } }
     var showsMenuBarExtra: Bool { didSet { defaults.set(showsMenuBarExtra, forKey: Key.showsMenuBarExtra) } }
     /// Banners for a session you are not looking at are redundant while Archipel itself is frontmost.
     var suppressesNotificationsWhileActive: Bool {
@@ -149,16 +201,21 @@ final class AppSettings {
         webLinkDestination = defaults.string(forKey: Key.webLinkDestination).flatMap(LinkDestination.init) ?? .defaultApp
         appearance = defaults.string(forKey: Key.appearance).flatMap(Appearance.init) ?? .system
         sidebarDensity = defaults.string(forKey: Key.sidebarDensity).flatMap(SidebarDensity.init) ?? .comfortable
+        paneStyle = defaults.string(forKey: Key.paneStyle).flatMap(PaneStyle.init) ?? .comfortable
         showsGitStatusInSidebar = bool(Key.showsGitStatusInSidebar, true)
         showsPullRequests = bool(Key.showsPullRequests, true)
         showsAgentMessagesInSidebar = bool(Key.showsAgentMessagesInSidebar, true)
         usageDisplay = defaults.string(forKey: Key.usageDisplay).flatMap(UsageDisplay.init) ?? .numbers
         usageBarFill = defaults.string(forKey: Key.usageBarFill).flatMap(UsageBarFill.init) ?? .used
+        let hidden = defaults.stringArray(forKey: Key.hiddenStatusBarItems) ?? []
+        hiddenStatusBarItems = Set(hidden.compactMap(StatusBarItem.init))
+        unknownHiddenStatusBarItems = hidden.filter { StatusBarItem(rawValue: $0) == nil }
         notifiesWhenAttentionNeeded = bool(Key.notifiesWhenAttentionNeeded, true)
         notifiesWhenFinished = bool(Key.notifiesWhenFinished, true)
         notifiesWhenExited = bool(Key.notifiesWhenExited, true)
         playsNotificationSound = bool(Key.playsNotificationSound, true)
         showsDockBadge = bool(Key.showsDockBadge, true)
+        bouncesDockForAttention = bool(Key.bouncesDockForAttention, false)
         showsMenuBarExtra = bool(Key.showsMenuBarExtra, true)
         suppressesNotificationsWhileActive = bool(Key.suppressesNotificationsWhileActive, false)
         holdsNotificationsWhileSharingScreen = bool(Key.holdsNotificationsWhileSharingScreen, true)
@@ -176,15 +233,18 @@ final class AppSettings {
         static let webLinkDestination = "settings.webLinkDestination"
         static let appearance = "settings.appearance"
         static let sidebarDensity = "settings.sidebarDensity"
+        static let paneStyle = "settings.paneStyle"
         static let showsGitStatusInSidebar = "settings.showsGitStatusInSidebar"
         static let showsPullRequests = "settings.showsPullRequests"
         static let showsAgentMessagesInSidebar = "settings.showsAgentMessagesInSidebar"
         static let usageDisplay = "settings.usageDisplay"
         static let usageBarFill = "settings.usageBarFill"
+        static let hiddenStatusBarItems = "settings.hiddenStatusBarItems"
         static let notifiesWhenAttentionNeeded = "settings.notifiesWhenAttentionNeeded"
         static let notifiesWhenFinished = "settings.notifiesWhenFinished"
         static let notifiesWhenExited = "settings.notifiesWhenExited"
         static let playsNotificationSound = "settings.playsNotificationSound"
+        static let bouncesDockForAttention = "settings.bouncesDockForAttention"
         static let showsDockBadge = "settings.showsDockBadge"
         static let showsMenuBarExtra = "settings.showsMenuBarExtra"
         static let suppressesNotificationsWhileActive = "settings.suppressesNotificationsWhileActive"

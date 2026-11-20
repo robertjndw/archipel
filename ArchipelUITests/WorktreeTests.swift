@@ -120,6 +120,49 @@ final class WorktreeTests: ArchipelUITestCase {
         XCTAssertTrue(try repository.branches.contains("feature"))
     }
 
+    func testUndoingTheRemovalOfAWorktreeWhoseFolderWasKept() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let feature = try repository.addWorktree(branch: "feature", in: sandbox.worktreesRoot)
+        try launch(with: repository.workspace(linkedWorktrees: [feature]))
+
+        sidebarWorktree("feature").click()
+        chooseMenu("Project", "Remove Worktree…")
+        assertExists(sheet.buttons["Remove"], "Removing a worktree should ask first.")
+        sheet.buttons["Remove"].click()
+        assertGone(sidebarWorktree("feature"), "The worktree should leave the sidebar.")
+
+        undo()
+        assertExists(sidebarWorktree("feature"), "Undo should put the worktree back in the sidebar.")
+        waitUntil("the worktree is saved again") {
+            try sandbox.savedWorkspace().allWorktrees.map(\.path.path) == [repository.url.path, feature.path.path]
+        }
+        // It is in the sidebar again, so offering it as a folder on disk would list it twice.
+        XCTAssertFalse(mainWindow.buttons["1 more worktree on disk"].exists)
+
+        redo()
+        assertGone(sidebarWorktree("feature"), "Redo should remove it again.")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: feature.path.path), "Redo must keep the folder as well.")
+        XCTAssertEqual(try repository.worktreePaths, [repository.url.path, feature.path.path])
+    }
+
+    func testRemovingAWorktreeWithItsFolderCannotBeUndone() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let feature = try repository.addWorktree(branch: "feature", in: sandbox.worktreesRoot)
+        try launch(with: repository.workspace(linkedWorktrees: [feature]))
+
+        sidebarWorktree("feature").click()
+        chooseMenu("Project", "Remove Worktree…")
+        let deleteFolder = sheet.switches.element(boundBy: 0)
+        assertExists(deleteFolder, "The sheet should offer to delete the folder.")
+        deleteFolder.click()
+        sheet.buttons["Delete"].click()
+        assertGone(sidebarWorktree("feature"), "The worktree should leave the sidebar.")
+
+        app.menuBars.menuBarItems["Edit"].click()
+        XCTAssertFalse(menuItem("Edit", "Undo").isEnabled, "A deleted folder cannot be brought back by undo.")
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
     func testRemovingAWorktreeWithItsFolderAndBranch() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         let feature = try repository.addWorktree(branch: "feature", in: sandbox.worktreesRoot)

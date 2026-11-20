@@ -88,9 +88,15 @@ case "diff" where arguments.count == 3:
             print("END SEND")
             comments.removeAll(in: root)
             fflush(stdout)
+        } onOpenFile: { url in
+            print("OPEN", url.path(percentEncoded: false))
+            fflush(stdout)
         })
     } else {
-        content = AnyView(DiffViewer(root: root, path: arguments[2], staged: staged))
+        content = AnyView(DiffViewer(root: root, path: arguments[2], staged: staged) { url in
+            print("OPEN", url.path(percentEncoded: false))
+            fflush(stdout)
+        })
     }
 default:
     FileHandle.standardError.write(Data("usage: editor-demo file <path> | diff <repository> <path> [--staged] [--inline]\n".utf8))

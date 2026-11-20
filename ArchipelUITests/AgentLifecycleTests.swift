@@ -251,7 +251,7 @@ final class AgentLifecycleTests: ArchipelUITestCase {
         showChanges()
         assertExists(unstagedChange("notes.txt"), "The modified file should be listed.")
         unstagedChange("notes.txt").doubleClick()
-        assertExists(tab("notes.txt (Working Tree)"), "Opening a change should give its diff a tab.")
+        assertExists(tab("notes.txt"), "Opening a change should give its diff a tab.")
 
         // The gutter is drawn, not made of views; it offers each visible line as a button of its own.
         let addComment = gutterButton("Add Comment to line 2")
@@ -286,7 +286,7 @@ final class AgentLifecycleTests: ArchipelUITestCase {
         }
 
         // Sent comments are done with; the line takes a new one again.
-        tab("notes.txt (Working Tree)").click()
+        tab("notes.txt").click()
         assertExists(gutterButton("Add Comment to line 2"), "A sent comment should be cleared from its line.")
         XCTAssertFalse(mainWindow.buttons["1 review comment"].exists, "Nothing should be left to send.")
     }

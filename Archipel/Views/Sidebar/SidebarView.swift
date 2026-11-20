@@ -2,6 +2,7 @@ import AgentKit
 import ArchipelCore
 import GitKit
 import SwiftUI
+import TipKit
 
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
@@ -14,24 +15,61 @@ struct SidebarView: View {
     @State private var peek = SidebarPeekModel()
 
     var body: some View {
-        let island = model.selectedIsland
-        List(selection: selection) {
+        Group {
+            if model.showsOnlyNeedsMe {
+                needsMeList
+            } else {
+                IslandPager(state: swipe) { island in
+                    islandList(island)
+                }
+            }
+        }
+        .environment(\.sidebarDensity, model.settings.sidebarDensity)
+        .animation(.snappy, value: model.settings.sidebarDensity)
+        .background { SidebarPeekKeyMonitor(peek: peek, model: model) }
+        .environment(peek)
+        .onChange(of: model.selectedIsland?.id) { peek.close() }
+        .popoverTip(SidebarTips.group.currentTip as? PeekTip, arrowEdge: .trailing)
+        .tipViewStyle(CompactTipStyle())
+        // The model keeps the counts current, but it's created before TipKit is configured, so
+        // the initial values are set here.
+        .onAppear { SidebarTips.workspaceChanged(model.workspace) }
+        // Insets, not bars: as a bar the system draws a hairline across the sidebar next to the
+        // header or the switcher whenever the pointer is over it.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            SidebarHeader(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // Hidden rather than disabled: while the list spans every island there is no current one to move from.
+            if !model.showsOnlyNeedsMe {
+                IslandSwitcher(swipe: swipe)
+                    .popoverTip(SidebarTips.group.currentTip as? IslandSwipeTip, arrowEdge: .top)
+                    .tipViewStyle(CompactTipStyle())
+            }
+        }
+        .islandSwipe(swipe, isEnabled: !model.showsOnlyNeedsMe)
+        .folderDropsAddProjects(to: model)
+        .renameAlert($renaming)
+        .sheet(item: $islandEditor) { mode in
+            IslandEditor(mode: mode)
+        }
+        .sheet(item: $removing) { worktree in
+            RemoveWorktreeSheet(worktree: worktree)
+        }
+    }
+
+    /// One island's page of the pager. Its neighbours are drawn with it while the sidebar moves
+    /// between them, each showing the worktree that island has selected.
+    private func islandList(_ island: Island?) -> some View {
+        let selected = island.flatMap { model.workspace.selectedWorktreeIDByIsland[$0.id] }
+        return List(selection: selection(showing: selected)) {
             ForEach(island?.projects ?? []) { project in
                 Section(isExpanded: expansion(of: project)) {
                     let tint = model.tint(of: project).color
                     ForEach(project.worktrees) { worktree in
-                        SidebarWorktreeRow(
-                            worktree: worktree,
-                            content: model.rowContent(for: worktree),
-                            sessions: model.sessionRows(for: worktree),
-                            isSelected: worktree.id == model.selectedWorktree?.id,
-                            tint: tint,
-                            removing: $removing,
-                            renaming: $renaming
-                        )
-                        .tag(worktree.id)
-                        .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
-                        .sidebarPeek(peek, worktree: worktree.id)
+                        worktreeRow(worktree, tint: tint, isSelected: worktree.id == selected)
+                            .tag(worktree.id)
+                            .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
                     }
                     let suggested = model.suggestedWorktrees(for: project)
                     if !suggested.isEmpty {
@@ -42,13 +80,10 @@ struct SidebarView: View {
                 }
             }
         }
-        .accessibilityIdentifier("sidebar")
-        .environment(\.sidebarDensity, model.settings.sidebarDensity)
+        // Here as well as on the sidebar: each page of the pager is a hosting view of its own,
+        // which animations from outside do not reach.
         .animation(.snappy, value: model.settings.sidebarDensity)
-        .background { SidebarPeekKeyMonitor(peek: peek, model: model) }
-        .environment(peek)
-        .onChange(of: model.selectedIsland?.id) { peek.close() }
-        // Before the swipe content, so an empty island's placeholder moves with the list.
+        .accessibilityIdentifier("sidebar")
         .overlay {
             if let island, island.projects.isEmpty {
                 ContentUnavailableView {
@@ -60,37 +95,69 @@ struct SidebarView: View {
                 }
             }
         }
-        .islandSwipeContent(swipe)
-        // For the empty part of the list. Rows and project headers bring their own menus, which a
-        // list-wide selection menu would replace on the headers.
-        .contextMenu {
-            Button("Add Project…", systemImage: "folder.badge.plus") { isAddingProject = true }
-            Button("New Island…", systemImage: "plus.square.on.square") { islandEditor = .create }
-            Divider()
-            ProjectsDisclosureButton()
+        .listContextMenu(isAddingProject: $isAddingProject, islandEditor: $islandEditor)
+    }
+
+    /// What needs the user across every island, grouped by island. It has no strip to swipe:
+    /// it is one list for all of them.
+    private var needsMeList: some View {
+        let needsMe = model.needsMeGroups()
+        let selected = model.selectedWorktree?.id
+        return List(selection: selection(showing: selected)) {
+            ForEach(needsMe) { group in
+                Section {
+                    ForEach(group.projects) { entry in
+                        let tint = model.tint(of: entry.project).color
+                        SidebarProjectHeader(project: entry.project, renaming: $renaming)
+                            .selectionDisabled()
+                            .listRowSeparator(.hidden)
+                        ForEach(entry.worktrees) { worktree in
+                            worktreeRow(worktree, tint: tint, isSelected: worktree.id == selected)
+                                .tag(worktree.id)
+                                .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
+                        }
+                    }
+                } header: {
+                    NeedsMeIslandHeader(island: group.island)
+                }
+            }
         }
-        // Insets, not bars: as a bar the system draws a hairline across the sidebar next to the
-        // header or the switcher whenever the pointer is over it.
-        .safeAreaInset(edge: .top, spacing: 0) {
-            SidebarHeader(isAddingProject: $isAddingProject, toggleSidebar: toggleSidebar)
+        .accessibilityIdentifier("sidebar")
+        .overlay {
+            if needsMe.isEmpty {
+                ContentUnavailableView {
+                    Label("Nothing Needs You", systemImage: "bell.slash")
+                } description: {
+                    Text("Sessions that wait for an answer or have a result you have not read show up here, from every island.")
+                }
+                .accessibilityIdentifier("sidebar.needsMe.empty")
+            }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            IslandSwitcher()
-        }
-        .islandSwipe(swipe)
-        .folderDropsAddProjects(to: model)
-        .renameAlert($renaming)
-        .sheet(item: $islandEditor) { mode in
-            IslandEditor(mode: mode)
-        }
-        .sheet(item: $removing) { worktree in
-            RemoveWorktreeSheet(worktree: worktree)
+        .listContextMenu(isAddingProject: $isAddingProject, islandEditor: $islandEditor)
+    }
+
+    /// The stack looks redundant and is not. Xcode's canvas crashes inside SwiftUI's outline list
+    /// (macOS 27.2) when a ForEach hands it a custom view or a helper's `some View` as the row.
+    /// With an HStack on the outside it does not, so the return type has to say HStack, and the
+    /// tag and the context menu are put on at the call sites.
+    private func worktreeRow(_ worktree: Worktree, tint: Color, isSelected: Bool) -> HStack<some View> {
+        HStack(spacing: 0) {
+            SidebarWorktreeRow(
+                worktree: worktree,
+                content: model.rowContent(for: worktree),
+                sessions: model.sessionRows(for: worktree),
+                isSelected: isSelected,
+                tint: tint,
+                removing: $removing,
+                renaming: $renaming
+            )
+            .sidebarPeek(peek, worktree: worktree.id)
         }
     }
 
-    private var selection: Binding<Worktree.ID?> {
+    private func selection(showing selected: Worktree.ID?) -> Binding<Worktree.ID?> {
         Binding(
-            get: { model.selectedWorktree?.id },
+            get: { selected },
             set: { model.select(worktree: $0) }
         )
     }
@@ -100,6 +167,31 @@ struct SidebarView: View {
             get: { project.isExpanded },
             set: { model.setProject(project.id, expanded: $0) }
         )
+    }
+}
+
+extension View {
+    /// For the empty part of the list. Rows and project headers bring their own menus, which a
+    /// list-wide selection menu would replace on the headers.
+    fileprivate func listContextMenu(isAddingProject: Binding<Bool>, islandEditor: Binding<IslandEditor.Mode?>) -> some View {
+        contextMenu {
+            Button("Add Project…", systemImage: "folder.badge.plus") { isAddingProject.wrappedValue = true }
+            Button("New Island…", systemImage: "plus.square.on.square") { islandEditor.wrappedValue = .create }
+            Divider()
+            ProjectsDisclosureButton()
+        }
+    }
+}
+
+/// Names the island a group of the "Needs Me" list belongs to, in its symbol and color.
+private struct NeedsMeIslandHeader: View {
+    let island: Island
+
+    var body: some View {
+        Label(island.name, systemImage: island.symbol)
+            .foregroundStyle(island.tint.color)
+            .font(.subheadline.weight(.semibold))
+            .accessibilityIdentifier("sidebar.needsMe.island")
     }
 }
 
@@ -129,6 +221,7 @@ private struct ProjectsDisclosureButton: View {
 private struct SidebarHeader: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.showsWindowButtons) private var showsWindowButtons
     @Binding var isAddingProject: Bool
     let toggleSidebar: () -> Void
 
@@ -141,6 +234,19 @@ private struct SidebarHeader: View {
         HStack(spacing: 4) {
             // No title: the switcher at the bottom already names the island.
             Spacer(minLength: 0)
+            Button {
+                model.showsOnlyNeedsMe.toggle()
+            } label: {
+                Label("Show Only What Needs Me", systemImage: model.needsMeFilterSymbol)
+                    .contentTransition(.symbolEffect(.replace))
+                    .foregroundStyle(model.showsOnlyNeedsMe ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            }
+            .help(model.showsOnlyNeedsMe ? "Show everything again (⌥⌘U)" : "Show only the worktrees that need you, from every island (⌥⌘U)")
+            .popoverTip(SidebarTips.group.currentTip as? NeedsMeTip, arrowEdge: .bottom)
+            .tipViewStyle(CompactTipStyle())
+            .accessibilityIdentifier("sidebar.needsMe")
+            .accessibilityValue(model.showsOnlyNeedsMe ? "On" : "Off")
+            .frame(width: Self.slotWidth)
             if waiting > 0 {
                 // Jumps anywhere, other islands included, so it counts the whole workspace.
                 Button {
@@ -159,11 +265,14 @@ private struct SidebarHeader: View {
             ProjectsDisclosureButton()
                 .labelStyle(.iconOnly)
                 .frame(width: Self.slotWidth)
+                // Its target is the selected island, which the filtered list does not show.
+                .disabled(model.showsOnlyNeedsMe)
             Button("Add Project", systemImage: "folder.badge.plus") { isAddingProject = true }
                 .help("Add a folder to this island (⇧⌘O)")
                 // The badge shifts the drawn folder about 1.3pt right of and 0.3pt below the symbol's
                 // center, which puts it close to the sidebar icon and below its neighbours.
                 .offset(x: -1.5, y: -0.5)
+                .disabled(model.showsOnlyNeedsMe)
                 .frame(width: Self.slotWidth)
             Button("Hide Sidebar", systemImage: "sidebar.left", action: toggleSidebar)
                 .help("Hide Sidebar")
@@ -175,7 +284,7 @@ private struct SidebarHeader: View {
         .foregroundStyle(.secondary)
         .animation(.snappy, value: waiting > 0)
         // Leaves the window buttons their corner.
-        .padding(.leading, 78)
+        .padding(.leading, showsWindowButtons ? WindowButtons.trailingEdge(for: model.settings.paneStyle) : 0)
         // Keeps the sidebar glyph 10pt from the edge; its slot is wider than the glyph.
         .padding(.trailing, 6.5)
         .frame(height: PaneTabBar.height)

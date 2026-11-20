@@ -90,6 +90,7 @@ struct RemoveWorktreeSheet: View {
             } else {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .untinted()
                 }
                 ToolbarItem(placement: .confirmationAction) { confirmButton }
                 if isWorking {

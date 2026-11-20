@@ -35,6 +35,13 @@ public final class TerminalApp {
     /// such as a tab being moved, which would otherwise land in the shell.
     public var acceptsDroppedText: ((String) -> Bool)?
 
+    /// The terminal colors of the user's Ghostty config, for the chrome the host draws around its
+    /// terminals. Follows the light or dark theme once the color scheme is known.
+    public private(set) var colors: TerminalColors {
+        didSet { if colors != oldValue { onColorsChange?(colors) } }
+    }
+    public var onColorsChange: ((TerminalColors) -> Void)?
+
     /// Loads the user's Ghostty config files if present so Ghostty users keep
     /// their theme, font and keybindings.
     public init() throws {
@@ -58,6 +65,7 @@ public final class TerminalApp {
         }
         self.app = app
         self.config = config
+        colors = TerminalColors(config: config)
         Self.current = self
 
         ghostty_app_set_focus(app, NSApplication.shared.isActive)
@@ -250,6 +258,7 @@ enum RuntimeAction: Sendable {
     case mouseVisible(Bool)
     case openURL(String, kind: UInt32)
     case reloadConfig(soft: Bool)
+    case configChanged(TerminalColors)
 }
 
 extension TerminalApp {
@@ -262,7 +271,9 @@ extension TerminalApp {
             surface = s
             key = sessionKey(ghostty_surface_userdata(s))
         } else if case .reloadConfig = parsed {
-            // The only app-targeted action we act on.
+            // One of the two app-targeted actions we act on.
+        } else if case .configChanged = parsed {
+            // Only the app's config has the light or dark theme applied; a surface's comes from it.
         } else {
             return false
         }
@@ -326,6 +337,10 @@ extension TerminalApp {
             return .openURL(String(decoding: bytes, as: UTF8.self), kind: u.kind.rawValue)
         case GHOSTTY_ACTION_RELOAD_CONFIG:
             return .reloadConfig(soft: a.reload_config.soft)
+        case GHOSTTY_ACTION_CONFIG_CHANGE:
+            // Read now: the config only lives for the duration of the callback.
+            guard let config = a.config_change.config else { return nil }
+            return .configChanged(TerminalColors(config: config))
         default:
             return nil
         }
@@ -341,6 +356,10 @@ extension TerminalApp {
             openURL(string, kind: ghostty_action_open_url_kind_e(kind), session: session(for: key))
             // Always claim it: unhandled, Ghostty falls back to spawning `open`
             // on the raw target, bypassing TerminalLink's checks.
+            return true
+        case .configChanged(let colors):
+            guard key == nil else { return false }
+            self.colors = colors
             return true
         default:
             break
@@ -360,7 +379,7 @@ extension TerminalApp {
             session.surfaceView.setMouseShape(ghostty_action_mouse_shape_e(raw))
         case .mouseVisible(let visible):
             NSCursor.setHiddenUntilMouseMoves(!visible)
-        case .openURL, .reloadConfig:
+        case .openURL, .reloadConfig, .configChanged:
             break
         }
         return true
@@ -614,5 +633,37 @@ extension NSPasteboard {
             result.append(char)
         }
         return result
+    }
+}
+
+extension TerminalColors {
+    init(config: ghostty_config_t) {
+        var background = ghostty_config_color_s()
+        _ = Self.get(config, "background", into: &background)
+        var fill = background
+        // An unset fill reads as false; Ghostty then uses the background, and so do we.
+        _ = Self.get(config, "unfocused-split-fill", into: &fill)
+        var opacity = 0.7
+        _ = Self.get(config, "unfocused-split-opacity", into: &opacity)
+        var foreground = ghostty_config_color_s(r: 255, g: 255, b: 255)
+        _ = Self.get(config, "foreground", into: &foreground)
+        self.init(
+            background: RGB(background),
+            unfocusedSplitFill: RGB(fill),
+            unfocusedSplitOpacity: min(1, max(0.15, opacity)),
+            foreground: RGB(foreground)
+        )
+    }
+
+    private static func get<T>(_ config: ghostty_config_t, _ key: String, into value: inout T) -> Bool {
+        withUnsafeMutablePointer(to: &value) { pointer in
+            ghostty_config_get(config, pointer, key, UInt(key.utf8.count))
+        }
+    }
+}
+
+private extension TerminalColors.RGB {
+    init(_ color: ghostty_config_color_s) {
+        self.init(red: Double(color.r) / 255, green: Double(color.g) / 255, blue: Double(color.b) / 255)
     }
 }

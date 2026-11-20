@@ -17,6 +17,10 @@ struct SidebarProjectHeader: View {
         HStack(spacing: 8) {
             // The rows' icon column, so a worktree sits exactly one indent step right of its project.
             ProjectIconView(project: project, size: density.projectIconSize)
+                // For its worktrees, whose rows are not there to play it while it is collapsed. Not
+                // a light around the header: its content runs wider than a row's card, which would
+                // cut through the badge at the trailing edge.
+                .statusSpot(model.projectPulses[project.id], diameter: density.projectIconSize + 12)
                 .frame(width: SidebarWorktreeRow.iconColumnWidth)
             // Primary, unlike a plain section title: the project is an item with an icon of its
             // own, the way a project or an account heads its group in Xcode and Mail.
@@ -38,6 +42,8 @@ struct SidebarProjectHeader: View {
         .animation(.smooth, value: summary)
         .accessibilityElement(children: .contain)
         .accessibilityValue(project.isExpanded ? "" : summary.accessibilityDescription)
+        // VoiceOver can't hover, so it gets the add button as an action instead.
+        .accessibilityAction(named: "Add Worktree") { model.addWorktreeProjectID = project.id }
         .contextMenu { menu }
         .confirmationDialog("Remove the project \(project.name)?", isPresented: $isConfirmingRemoval) {
             Button("Remove Project", role: .destructive) { model.removeProject(project) }
@@ -76,7 +82,9 @@ struct SidebarProjectHeader: View {
                 .help("Add a worktree to \(project.name)")
                 .opacity(isHovered ? 1 : 0)
                 .allowsHitTesting(isHovered)
-                .accessibilityHidden(!isHovered)
+                // Hidden from accessibility even while hovered. Otherwise SwiftUI merges its name
+                // into the title's label ("fixture, Add Worktree"). The header's action covers it.
+                .accessibilityHidden(true)
         }
     }
 

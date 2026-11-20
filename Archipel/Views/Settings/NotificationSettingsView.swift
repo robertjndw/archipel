@@ -57,6 +57,11 @@ struct NotificationSettingsView: View {
                     Text("Show count on Dock icon")
                     Text("The number of sessions waiting for you.")
                 }
+                Toggle(isOn: $settings.bouncesDockForAttention) {
+                    Text("Bounce Dock icon when an agent needs you")
+                    Text("Once, and only while Archipel is in the background.")
+                }
+                .accessibilityIdentifier("settings.bouncesDock")
             }
 
             if authorizationNote == nil {
