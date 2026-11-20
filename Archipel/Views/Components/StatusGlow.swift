@@ -22,12 +22,65 @@ extension StatusPulse {
         case .failed: .red
         }
     }
+
+    /// The glow's own colors: the status color, and a neighbouring hue it cools to along its tail
+    /// so the light is not one flat color from end to end.
+    ///
+    /// In dark mode both are deeper shades than the system colors, which are tuned to be read as
+    /// text and glyphs on a dark background and come out pastel as a light.
+    fileprivate func glowColors(isDark: Bool) -> (tint: Color, trail: Color) {
+        guard isDark else {
+            return switch self {
+            case .finished: (.green, .mint)
+            case .needsInput: (.orange, .yellow)
+            case .failed: (.red, .pink)
+            }
+        }
+        return switch self {
+        case .finished:
+            (Color(hue: 0.40, saturation: 1, brightness: 0.68), Color(hue: 0.46, saturation: 0.9, brightness: 0.68))
+        case .needsInput:
+            (Color(hue: 0.07, saturation: 1, brightness: 0.92), Color(hue: 0.11, saturation: 1, brightness: 0.9))
+        case .failed:
+            (Color(hue: 0, saturation: 0.95, brightness: 0.82), Color(hue: 0.93, saturation: 0.85, brightness: 0.8))
+        }
+    }
 }
 
 extension View {
     /// One lap of light around the row's selection card each time `pulse` goes up.
     func statusGlow(_ pulse: StatusPulseCount?) -> some View {
         modifier(StatusGlow(pulse: pulse ?? StatusPulseCount()))
+    }
+}
+
+extension View {
+    /// A small pop for the row's status glyph at the moment the glow's lap closes. The lap starts
+    /// next to the glyph, so this ties the light to the status it is about.
+    func statusGlowLanding(_ pulse: StatusPulseCount?) -> some View {
+        modifier(StatusGlowLanding(pulse: pulse ?? StatusPulseCount()))
+    }
+}
+
+private struct StatusGlowLanding: ViewModifier {
+    let pulse: StatusPulseCount
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Counts plays only, like `StatusGlow.plays`.
+    @State private var plays = 0
+
+    func body(content: Content) -> some View {
+        content
+            .keyframeAnimator(initialValue: 1.0, trigger: plays) { view, scale in
+                view.scaleEffect(scale)
+            } keyframes: { _ in
+                LinearKeyframe(1, duration: StatusGlow.landing)
+                SpringKeyframe(1.3, duration: 0.14, spring: .snappy)
+                SpringKeyframe(1, duration: 0.45, spring: .bouncy(extraBounce: 0.1))
+            }
+            .onChange(of: pulse.count) { old, new in
+                // With Reduce Motion there is no lap to come back from.
+                if new > old, !reduceMotion { plays += 1 }
+            }
     }
 }
 
@@ -91,19 +144,24 @@ private struct StatusGlow: ViewModifier {
     /// and the view appearing with an old pulse value must not start them.
     @State private var plays = 0
 
-    private static let lapDuration = 2.2
-    private static let tailDelay = 0.32
+    private static let lapDuration = 2.0
+    /// Laps per second at the start. The lap is at its fastest then and only slows from there,
+    /// so the light is on its way at once instead of gathering speed in the corner.
+    private static let launchSpeed = 0.7
+    private static let tailDelay = 0.28
+    /// When the head is as good as back where it started, which is when the outline flares.
+    static let landing = 1.65
 
     func body(content: Content) -> some View {
         let reduceMotion = reduceMotion
-        let tint = pulse.kind.color
+        let kind = pulse.kind
         return content
             .background {
                 // The animation runs here, in the row; each frame is handed to the light, which lives
                 // in the list behind the rows (see BacklightHost).
                 Color.clear
                     .keyframeAnimator(initialValue: BacklightFrame(), trigger: plays) { view, frame in
-                        view.background { BacklightHost(frame: frame, tint: tint, still: reduceMotion) }
+                        view.background { BacklightHost(frame: frame, kind: kind, still: reduceMotion) }
                     } keyframes: { current in
                         // A lap ends where it began, so a new one picks up wherever the light is. That
                         // is the start after a finished lap, and mid-lap it keeps the light from
@@ -112,25 +170,37 @@ private struct StatusGlow: ViewModifier {
                         let trailing = max(current.head - current.tail, 0)
                         KeyframeTrack(\.head) {
                             LinearKeyframe(start, duration: 0.001)
-                            CubicKeyframe(start + 1, duration: Self.lapDuration)
+                            CubicKeyframe(start + 1, duration: Self.lapDuration, startVelocity: Self.launchSpeed, endVelocity: 0)
                         }
                         // The same lap a moment later. The light spans from here to the head, so it
-                        // grows out of a point as it picks up speed and gathers again as it comes to
-                        // rest, instead of standing still with its whole trail out.
+                        // is at its longest while it is fast and gathers again as it comes to rest,
+                        // instead of standing still with its whole trail out.
                         KeyframeTrack(\.tail) {
                             LinearKeyframe(start - trailing, duration: 0.001 + Self.tailDelay)
-                            CubicKeyframe(start + 1, duration: Self.lapDuration)
+                            CubicKeyframe(start + 1, duration: Self.lapDuration, startVelocity: Self.launchSpeed, endVelocity: 0)
                         }
-                        // Lasts until the tail has caught up, so the light never goes out mid-stretch.
+                        KeyframeTrack(\.origin) {
+                            LinearKeyframe(start, duration: 0.001)
+                        }
+                        // Gone by the time the outline has taken over, so nothing is left standing
+                        // at the point where the lap ends.
                         KeyframeTrack(\.light) {
-                            CubicKeyframe(1, duration: 0.25)
-                            LinearKeyframe(1, duration: reduceMotion ? 0.4 : 1.6)
-                            CubicKeyframe(0, duration: 0.65)
+                            CubicKeyframe(1, duration: 0.2)
+                            LinearKeyframe(1, duration: reduceMotion ? 0.4 : 1.45)
+                            CubicKeyframe(0, duration: 0.55)
+                        }
+                        // What the light leaves on the outline behind it: faint while it is being
+                        // drawn, flaring once when the loop closes, then let go.
+                        KeyframeTrack(\.ring) {
+                            CubicKeyframe(reduceMotion ? 0 : BacklightFrame.wake, duration: 0.35)
+                            LinearKeyframe(reduceMotion ? 0 : BacklightFrame.wake, duration: Self.landing - 0.35)
+                            CubicKeyframe(reduceMotion ? 0 : 1, duration: 0.3)
+                            CubicKeyframe(0, duration: 0.9)
                         }
                         KeyframeTrack(\.card) {
                             CubicKeyframe(1, duration: 0.4)
-                            LinearKeyframe(1, duration: reduceMotion ? 0.7 : 1.5)
-                            CubicKeyframe(0, duration: 0.7)
+                            LinearKeyframe(1, duration: reduceMotion ? 0.7 : 1.75)
+                            CubicKeyframe(0, duration: 0.75)
                         }
                     }
                     .allowsHitTesting(false)
@@ -149,10 +219,17 @@ struct BacklightFrame {
     var tail = 0.0
     /// Strength of the light, 0...1.
     var light = 0.0
+    /// Where this lap started, in laps. The outline is lit from here to the head.
+    var origin = 0.0
+    /// Strength of the glow on the part of the outline the head has passed, 0...1.
+    var ring = 0.0
     /// Strength of the card surface, 0...1. Gives rows that are not selected a card to light.
     var card = 0.0
 
-    var isDark: Bool { light <= 0 && card <= 0 }
+    var isDark: Bool { light <= 0 && ring <= 0 && card <= 0 }
+
+    /// How strong `ring` is while the lap is still running.
+    static let wake = 0.4
 }
 
 /// Puts the light behind the row instead of in it. The list's row view clips at the card, so light
@@ -164,13 +241,15 @@ struct BacklightFrame {
 /// continuous corners. Rows that are not selected have none, so the same inset is applied to them.
 private struct BacklightHost: NSViewRepresentable {
     let frame: BacklightFrame
-    let tint: Color
+    let kind: StatusPulse
     let still: Bool
 
     func makeNSView(context: Context) -> Probe { Probe() }
 
     func updateNSView(_ probe: Probe, context: Context) {
-        probe.show(Backlight(frame: frame, tint: tint, still: still))
+        // The row's color scheme, handed over: the light is hosted in a view of its own, outside
+        // the row's environment.
+        probe.show(Backlight(frame: frame, kind: kind, still: still, isDark: context.environment.colorScheme == .dark))
     }
 
     static func dismantleNSView(_ probe: Probe, coordinator: ()) {
@@ -240,13 +319,14 @@ private final class LightView: NSHostingView<Backlight> {
 }
 
 /// A colored light that runs around behind the card. Only a soft halo just outside the card shows,
-/// brightest at the head and thinning out along the tail, faded out before the spill area ends so
-/// nothing gets clipped. The card's edge picks up a bit of it as it passes.
+/// white-hot at the head and cooling along the tail, faded out before the spill area ends so
+/// nothing gets clipped. The card's edge and a little of its surface pick it up as it passes.
 private struct Backlight: View {
     let frame: BacklightFrame
-    let tint: Color
+    let kind: StatusPulse
     /// Reduce Motion: no travelling light, the whole outline glows and fades instead.
     let still: Bool
+    let isDark: Bool
 
     /// Room around the card for the halo. Sideways it is the card's whole 10pt inset from the
     /// sidebar's edges, which is less than the halo reaches, so it is faded out over `edgeFade`.
@@ -255,19 +335,32 @@ private struct Backlight: View {
     static let cornerRadius = Chrome.controlRadius
     /// The halo: a band along the outline, blurred so it fades out within the spill. It is as wide
     /// as `haloWidth` at the head and narrows to `tailWidth`.
-    private static let haloWidth: CGFloat = 8
+    private static let haloWidth: CGFloat = 10
     private static let tailWidth: CGFloat = 6
     private static let haloBlur: CGFloat = 4.5
+    /// A second, wider and much fainter halo around the head, so the light does not end where
+    /// the narrow one does.
+    private static let bloomWidth: CGFloat = 16
+    private static let bloomBlur: CGFloat = 8
+    /// The light that falls on the card itself.
+    private static let washWidth: CGFloat = 10
+    private static let washBlur: CGFloat = 7
     private static let edgeFade: CGFloat = 4
     /// How far the light reaches ahead of the head, so its front is as soft as its sides.
     private static let lead: CGFloat = 20
     /// Brightness steps from the dim ends to the head. The blur hides the steps.
     private static let levels = 24
+    /// Over what length, and in how many steps, the lit outline fades in where the lap began.
+    private static let wakeFade: CGFloat = 36
+    private static let wakeLevels = 8
+    /// How strong the outline's glow gets when the loop closes, next to the travelling light.
+    private static let ringStrength = 0.5
 
     var body: some View {
         let frame = frame
-        let tint = tint
+        let kind = kind
         let still = still
+        let isDark = isDark
         Canvas { context, size in
             let bounds = CGRect(origin: .zero, size: size)
             let cardRect = bounds.insetBy(dx: Self.spill.width, dy: Self.spill.height)
@@ -276,24 +369,64 @@ private struct Backlight: View {
 
             // The card surface, for rows that have no selection card of their own.
             context.fill(outline, with: .color(.primary.opacity(0.05 * frame.card)))
-            guard frame.light > 0 else { return }
+            guard frame.light > 0 || frame.ring > 0 else { return }
 
+            // White reads as light on a dark sidebar. On a light one it only washes the color out.
+            let (tint, trail) = kind.glowColors(isDark: isDark)
+            let ring = still ? 0 : Self.ringStrength * frame.ring
+            let passed = still ? [] : Self.wake(on: outline, around: cardRect, from: frame.origin, to: frame.head)
             let light = still
-                ? [Stretch(path: outline, opacity: 1, strength: 1)]
+                ? [Stretch(path: outline, opacity: 1, strength: 0.65)]
                 : Self.stretches(of: outline, around: cardRect, head: frame.head, tail: frame.tail)
+            // The tail's hue at the dim end, the status color through the middle, and toward white
+            // over the brightest part by as much as `heat`.
+            func color(of stretch: Stretch, heat: Double) -> Color {
+                let core = max(0, (stretch.strength - 0.55) / 0.45)
+                return trail.mix(with: tint, by: min(1, stretch.strength * 1.6))
+                    .mix(with: .white, by: heat * core * core)
+                    .opacity(stretch.opacity)
+            }
+
+            // On the card. Rows with a selection card of their own cover this with it.
+            var surface = context
+            surface.clip(to: outline)
+            surface.opacity = isDark ? 0.35 : 0.12
+            surface.drawBlurred(radius: Self.washBlur) { wash in
+                wash.opacity = ring
+                for stretch in passed {
+                    wash.stroke(stretch.path, with: .color(tint.opacity(stretch.opacity)), lineWidth: Self.washWidth)
+                }
+                wash.opacity = frame.light
+                for stretch in light {
+                    wash.stroke(stretch.path, with: .color(tint.opacity(stretch.opacity)), lineWidth: Self.washWidth)
+                }
+            }
 
             // Behind the card: nothing of the halo shows inside it.
             var around = context
             var outside = Path(bounds)
             outside.addPath(outline)
             around.clip(to: outside, style: FillStyle(eoFill: true))
-            around.opacity = frame.light
             around.drawLayer { halo in
-                halo.drawLayer { band in
-                    band.addFilter(.blur(radius: Self.haloBlur))
+                // Not on a light sidebar. Color darkens it instead of lighting it up, and the bloom
+                // only shows as a haze around the head.
+                if !still, isDark {
+                    halo.drawBlurred(radius: Self.bloomBlur) { bloom in
+                        bloom.opacity = 0.45 * frame.light
+                        for stretch in light where stretch.strength > 0.3 {
+                            bloom.stroke(stretch.path, with: .color(tint.opacity(stretch.opacity)), lineWidth: Self.bloomWidth)
+                        }
+                    }
+                }
+                halo.drawBlurred(radius: Self.haloBlur) { band in
+                    band.opacity = ring
+                    for stretch in passed {
+                        band.stroke(stretch.path, with: .color(tint.opacity(stretch.opacity)), lineWidth: Self.tailWidth)
+                    }
+                    band.opacity = frame.light
                     for stretch in light {
                         let width = Self.tailWidth + (Self.haloWidth - Self.tailWidth) * stretch.strength
-                        band.stroke(stretch.path, with: .color(tint.opacity(stretch.opacity)), lineWidth: width)
+                        band.stroke(stretch.path, with: .color(color(of: stretch, heat: isDark ? 0.5 : 0.15)), lineWidth: width)
                     }
                 }
                 // The list ends where the spill does on the left and right. The halo is still
@@ -314,12 +447,16 @@ private struct Backlight: View {
                 )
             }
 
-            // Where the light is behind it, the card's edge picks up a little of it.
-            var rim = context
-            rim.opacity = (still ? 0.35 : 0.6) * frame.light
-            rim.drawLayer { edge in
-                for stretch in light {
+            // Where the light is behind it, the card's edge catches it.
+            // Blurred by a hair, which is enough to run the steps of the light into each other.
+            context.drawBlurred(radius: 0.8) { edge in
+                edge.opacity = 0.9 * ring
+                for stretch in passed {
                     edge.stroke(stretch.path, with: .color(tint.opacity(stretch.opacity)), lineWidth: 1)
+                }
+                edge.opacity = (still ? 0.35 : 0.8) * frame.light
+                for stretch in light {
+                    edge.stroke(stretch.path, with: .color(color(of: stretch, heat: isDark ? 0.4 : 0.15)), lineWidth: 1)
                 }
             }
         }
@@ -359,6 +496,22 @@ private struct Backlight: View {
         }
     }
 
+    /// The part of the outline the head has been over since `origin`, which is all of it once the
+    /// lap is done. It fades in from where the lap began, or it would start there with a cut edge,
+    /// and that fade shortens to nothing as the head comes back round to close the gap.
+    private static func wake(on outline: Path, around card: CGRect, from origin: Double, to head: Double) -> [Stretch] {
+        let perimeter = 2 * (card.width + card.height) - (8 - 2 * .pi) * cornerRadius
+        let fade = min(wakeFade / perimeter, max(1 - (head - origin), 0))
+        return (1...wakeLevels).map { level in
+            let strength = Double(level) / Double(wakeLevels)
+            return Stretch(
+                path: arc(of: outline, from: origin + fade * strength, to: head),
+                opacity: 1 / Double(wakeLevels - level + 1),
+                strength: strength
+            )
+        }
+    }
+
     /// The outline between two positions given in laps, across the outline's start if need be.
     private static func arc(of outline: Path, from start: Double, to end: Double) -> Path {
         let length = end - start
@@ -372,34 +525,59 @@ private struct Backlight: View {
     }
 }
 
-#if DEBUG
-// The glow only plays when the count goes up, so this preview needs the live canvas and a click.
-#Preview {
-    @Previewable @State var pulses: [Int: StatusPulseCount] = [:]
-    @Previewable @State var selection: Int? = 0
-    VStack(spacing: 0) {
-        List(selection: $selection) {
-            ForEach(0..<4, id: \.self) { row in
-                // The stack keeps the canvas from crashing, see SidebarView.worktreeRow.
-                HStack(spacing: 0) {
-                    Label(row == 0 ? "Selected row" : "Row \(row)", systemImage: "arrow.triangle.branch")
-                        .padding(.vertical, 6)
-                        .statusGlow(pulses[row])
-                }
-                .tag(row)
-            }
+extension GraphicsContext {
+    /// Draws `content` and blurs the result as one image. A blur filter set on the context that
+    /// does the drawing blurs every stroke on its own instead, and each of them then ends in a
+    /// faint edge where its blur is cut off. Stacked strokes show that as rings around the light.
+    fileprivate func drawBlurred(radius: CGFloat, content: (inout GraphicsContext) -> Void) {
+        drawLayer { blurred in
+            blurred.addFilter(.blur(radius: radius))
+            blurred.drawLayer(content: content)
         }
-        .listStyle(.sidebar)
-        HStack {
-            ForEach([(StatusPulse.finished, "Finished"), (.needsInput, "Needs Input"), (.failed, "Failed")], id: \.0) { kind, title in
-                Button(title) {
-                    for row in 0..<4 { pulses[row, default: StatusPulseCount()].play(kind) }
-                }
-                .tint(kind.color)
-            }
-        }
-        .padding()
     }
-    .frame(width: 260, height: 300)
+}
+
+#if DEBUG
+// The glow only plays when the count goes up, so these previews need the live canvas and a click.
+private struct StatusGlowPreview: View {
+    @State private var pulses: [Int: StatusPulseCount] = [:]
+    @State private var selection: Int? = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            List(selection: $selection) {
+                ForEach(0..<4, id: \.self) { row in
+                    // The stack keeps the canvas from crashing, see SidebarView.worktreeRow.
+                    HStack(spacing: 0) {
+                        Label(row == 0 ? "Selected row" : "Row \(row)", systemImage: "arrow.triangle.branch")
+                            .padding(.vertical, 6)
+                            .statusGlow(pulses[row])
+                    }
+                    .tag(row)
+                }
+            }
+            .listStyle(.sidebar)
+            HStack {
+                ForEach([(StatusPulse.finished, "Finished"), (.needsInput, "Needs Input"), (.failed, "Failed")], id: \.0) { kind, title in
+                    Button(title) {
+                        for row in 0..<4 { pulses[row, default: StatusPulseCount()].play(kind) }
+                    }
+                    .tint(kind.color)
+                }
+            }
+            .padding()
+        }
+        .frame(width: 260, height: 300)
+    }
+}
+
+#Preview("Dark") {
+    StatusGlowPreview()
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Light") {
+    StatusGlowPreview()
+        .preferredColorScheme(.light)
 }
 #endif
