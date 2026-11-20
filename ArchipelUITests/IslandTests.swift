@@ -30,7 +30,8 @@ final class IslandTests: ArchipelUITestCase {
         // Enough projects that the list scrolls in the test window.
         let long = try (1...24).map { try sandbox.makeRepository(named: String(format: "repo%02d", $0)) }
         let other = try sandbox.makeRepository(named: "other")
-        try launch(with: islandWorkspace([("Personal", long), ("Work", [other])]))
+        let third = try sandbox.makeRepository(named: "third")
+        try launch(with: islandWorkspace([("Personal", long), ("Work", [other]), ("Play", [third])]))
         assertExists(sidebarProject("repo01"), "The first island's projects should be listed.")
 
         mainWindow.outlines["sidebar"].scroll(byDeltaX: 0, deltaY: -2000)
@@ -44,12 +45,13 @@ final class IslandTests: ArchipelUITestCase {
         waitUntil("the list is back where it was scrolled to") { sidebarProject("repo24").isHittable }
         XCTAssertFalse(sidebarProject("repo01").isHittable, "The list should not jump back to the top.")
 
-        // The same once the first island's list is gone and has to be built again. A list that is
-        // not shown is kept for 20 seconds after a switch, and for less once the pointer has left
-        // the sidebar. CI ran into that without the wait.
+        // The same once the first island's list is gone and has to be built again. Only the shown
+        // island, its neighbours and the one visited last keep their lists, and from the third
+        // island the first is none of these.
         chooseMenu("Islands", "Work")
         assertExists(sidebarProject("other"), "The second island's project should be listed.")
-        Thread.sleep(forTimeInterval: 23)
+        chooseMenu("Islands", "Play")
+        assertExists(sidebarProject("third"), "The third island's project should be listed.")
         chooseMenu("Islands", "Personal")
         assertExists(sidebarProject("repo24"), "The first island's projects should be back.")
         waitUntil("a rebuilt list is back where it was scrolled to") { sidebarProject("repo24").isHittable }

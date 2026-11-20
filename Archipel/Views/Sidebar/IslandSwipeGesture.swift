@@ -213,8 +213,11 @@ struct IslandPager<Page: View>: View {
         let anchor = state.anchor.flatMap { model.workspace.island(id: $0) }?.id ?? selected
         let strip = state.layout(anchor: anchor, islands: model.workspace.islands, reduceMotion: reduceMotion)
         // Without an island there is still one page, the empty list.
-        IslandStrip(state: state, order: strip.isEmpty ? [nil] : strip, anchor: anchor, crossfades: reduceMotion, page: page)
-            .onHover { state.hover($0) }
+        IslandStrip(
+            state: state, order: strip.isEmpty ? [nil] : strip, anchor: anchor,
+            islands: model.workspace.islands.map(\.id), crossfades: reduceMotion, page: page
+        )
+        .onHover { state.hover($0) }
     }
 }
 
@@ -230,6 +233,13 @@ private struct IslandPage<Page: View>: View {
         page(id.flatMap { model.workspace.island(id: $0) })
             .allowsHitTesting(isCurrent)
             .accessibilityHidden(!isCurrent)
+            // A list kept next to the shown one would otherwise animate every change to its rows
+            // off screen, which costs the main thread as much as if it were seen.
+            .transaction { transaction in
+                guard !isCurrent else { return }
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
     }
 }
 
@@ -239,6 +249,7 @@ private struct IslandStrip<Page: View>: NSViewRepresentable {
     let state: IslandSwipeState
     let order: [Island.ID?]
     let anchor: Island.ID?
+    let islands: [Island.ID]
     let crossfades: Bool
     let page: (Island?) -> Page
 
@@ -250,7 +261,7 @@ private struct IslandStrip<Page: View>: NSViewRepresentable {
         // A hosting view starts with an empty environment. The pages get the sidebar's, with the
         // model, the list style and the tint in it.
         let environment = context.environment
-        view.update(order: order, anchor: anchor, crossfades: crossfades) { id in
+        view.update(order: order, anchor: anchor, islands: islands, crossfades: crossfades) { id in
             AnyView(IslandPage(id: id, page: page).environment(\.self, environment))
         }
     }
@@ -276,6 +287,13 @@ private final class IslandStripView: NSView {
     private var hasBeenAskedForAccessibility = false
     /// Islands whose new list has yet to be scrolled back to where the last one was.
     private var awaitingScroll: [Island.ID: ListScrollAnchor] = [:]
+    /// The island on screen and the one that was there before it.
+    private var shown: Island.ID?
+    private var lastVisited: Island.ID?
+    /// The last visited island's page once the strip has no more use for it, kept out of sight.
+    /// Going back to the island you just left is the most common switch, and this way it does not
+    /// have to build the list again. Only one page, so the lists that are kept do not add up.
+    private var parked: (id: Island.ID, page: NSHostingView<AnyView>)?
     private var springKeys: [String] = []
     private var nextSpringKey = 0
     private var shownFlight = 0
@@ -306,20 +324,54 @@ private final class IslandStripView: NSView {
             hasBeenAskedForAccessibility = true
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.pages.keys.forEach(self.removePage)
+                self.pages.keys.forEach { self.removePage($0, parks: false) }
+                self.unpark()
                 self.buildPages()
             }
         }
         return super.accessibilityChildren()
     }
 
-    /// Takes a page down and remembers how far its list was scrolled. A page only lives while its
-    /// island is shown or kept warm next to the shown one. Coming back to an island later makes
-    /// a new list, which would start at the top.
-    private func removePage(_ id: Island.ID?) {
+    /// Takes a page down and remembers how far its list was scrolled, unless it is the last
+    /// visited island's, which is parked. Any other page only lives while its island is shown or
+    /// kept warm next to the shown one. Coming back to such an island later makes a new list,
+    /// which would start at the top.
+    private func removePage(_ id: Island.ID?, parks: Bool = true) {
         guard let page = pages.removeValue(forKey: id) else { return }
+        noteShown()
+        if parks, let id, id == lastVisited {
+            unpark()
+            page.isHidden = true
+            parked = (id, page)
+            return
+        }
         rememberScroll(of: id, in: page)
         page.removeFromSuperview()
+    }
+
+    /// Lets go of the parked page for good.
+    private func unpark() {
+        guard let (id, page) = parked else { return }
+        parked = nil
+        rememberScroll(of: id, in: page)
+        page.removeFromSuperview()
+    }
+
+    private func noteShown() {
+        let now = state.anchor ?? fallbackAnchor
+        guard now != shown else { return }
+        lastVisited = shown
+        shown = now
+    }
+
+    /// The page for `id`: the parked one if it is that island's, a new one otherwise.
+    private func page(for id: Island.ID?, content: (Island.ID?) -> AnyView) -> (page: NSHostingView<AnyView>, isNew: Bool) {
+        guard let parked, parked.id == id else { return (addPage(id, content: content), true) }
+        self.parked = nil
+        parked.page.rootView = content(id)
+        parked.page.isHidden = false
+        pages[id] = parked.page
+        return (parked.page, false)
     }
 
     private func rememberScroll(of id: Island.ID?, in page: NSView) {
@@ -391,7 +443,7 @@ private final class IslandStripView: NSView {
     /// built and laid out here, so the slide does not begin with an empty list.
     func showNow(order: [Island.ID]) {
         guard let content, window != nil else { return }
-        let added = order.filter { pages[$0] == nil }.map { addPage($0, content: content) }
+        let added = order.filter { pages[$0] == nil }.map { page(for: $0, content: content) }.filter(\.isNew).map(\.page)
         for id in pages.keys where !order.contains(where: { $0 == id }) {
             removePage(id)
         }
@@ -404,9 +456,12 @@ private final class IslandStripView: NSView {
         CATransaction.flush()
     }
 
-    func update(order: [Island.ID?], anchor: Island.ID?, crossfades: Bool, content: @escaping (Island.ID?) -> AnyView) {
+    func update(order: [Island.ID?], anchor: Island.ID?, islands: [Island.ID], crossfades: Bool, content: @escaping (Island.ID?) -> AnyView) {
         self.content = content
         wanted = (order, anchor, crossfades)
+        // Its island was deleted, or Reduce Motion came on, which fades pages out and has no
+        // use for one that is kept.
+        if let parked, crossfades || !islands.contains(parked.id) { unpark() }
         buildPages()
     }
 
@@ -421,7 +476,8 @@ private final class IslandStripView: NSView {
                 page.rootView = content(id)
                 continue
             }
-            let page = addPage(id, content: content)
+            let (page, isNew) = page(for: id, content: content)
+            guard isNew else { continue }
             added.append(id)
             if crossfades, hadPages {
                 page.alphaValue = 0
@@ -482,6 +538,7 @@ private final class IslandStripView: NSView {
     /// the offset is measured from it, so both always change here, in one transaction.
     func render() {
         guard let layer, window != nil else { return }
+        noteShown()
         let anchorIndex: Int
         if let index = order.firstIndex(of: state.anchor) {
             anchorIndex = index
