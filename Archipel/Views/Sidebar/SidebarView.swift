@@ -68,6 +68,8 @@ struct SidebarView: View {
                     let tint = model.tint(of: project).color
                     ForEach(project.worktrees) { worktree in
                         worktreeRow(worktree, tint: tint, isSelected: worktree.id == selected)
+                            .tag(worktree.id)
+                            .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
                     }
                     let suggested = model.suggestedWorktrees(for: project)
                     if !suggested.isEmpty {
@@ -112,6 +114,8 @@ struct SidebarView: View {
                             .listRowSeparator(.hidden)
                         ForEach(entry.worktrees) { worktree in
                             worktreeRow(worktree, tint: tint, isSelected: worktree.id == selected)
+                                .tag(worktree.id)
+                                .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
                         }
                     }
                 } header: {
@@ -133,19 +137,23 @@ struct SidebarView: View {
         .listContextMenu(isAddingProject: $isAddingProject, islandEditor: $islandEditor)
     }
 
-    private func worktreeRow(_ worktree: Worktree, tint: Color, isSelected: Bool) -> some View {
-        SidebarWorktreeRow(
-            worktree: worktree,
-            content: model.rowContent(for: worktree),
-            sessions: model.sessionRows(for: worktree),
-            isSelected: isSelected,
-            tint: tint,
-            removing: $removing,
-            renaming: $renaming
-        )
-        .tag(worktree.id)
-        .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
-        .sidebarPeek(peek, worktree: worktree.id)
+    /// The stack looks redundant and is not. Xcode's canvas crashes inside SwiftUI's outline list
+    /// (macOS 27.2) when a ForEach hands it a custom view or a helper's `some View` as the row.
+    /// With an HStack on the outside it does not, so the return type has to say HStack, and the
+    /// tag and the context menu are put on at the call sites.
+    private func worktreeRow(_ worktree: Worktree, tint: Color, isSelected: Bool) -> HStack<some View> {
+        HStack(spacing: 0) {
+            SidebarWorktreeRow(
+                worktree: worktree,
+                content: model.rowContent(for: worktree),
+                sessions: model.sessionRows(for: worktree),
+                isSelected: isSelected,
+                tint: tint,
+                removing: $removing,
+                renaming: $renaming
+            )
+            .sidebarPeek(peek, worktree: worktree.id)
+        }
     }
 
     private func selection(showing selected: Worktree.ID?) -> Binding<Worktree.ID?> {

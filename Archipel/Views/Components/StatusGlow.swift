@@ -47,7 +47,9 @@ private struct StatusSpot: ViewModifier {
     @State private var plays = 0
 
     func body(content: Content) -> some View {
-        content
+        // Copied out because the animator's closure is Sendable and may not read the property.
+        let reduceMotion = reduceMotion
+        return content
             .background {
                 Circle()
                     .fill(pulse.kind.color)
@@ -378,10 +380,13 @@ private struct Backlight: View {
     VStack(spacing: 0) {
         List(selection: $selection) {
             ForEach(0..<4, id: \.self) { row in
-                Label(row == 0 ? "Selected row" : "Row \(row)", systemImage: "arrow.triangle.branch")
-                    .padding(.vertical, 6)
-                    .statusGlow(pulses[row])
-                    .tag(row)
+                // The stack keeps the canvas from crashing, see SidebarView.worktreeRow.
+                HStack(spacing: 0) {
+                    Label(row == 0 ? "Selected row" : "Row \(row)", systemImage: "arrow.triangle.branch")
+                        .padding(.vertical, 6)
+                        .statusGlow(pulses[row])
+                }
+                .tag(row)
             }
         }
         .listStyle(.sidebar)
