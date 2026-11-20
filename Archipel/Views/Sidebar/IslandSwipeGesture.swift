@@ -267,6 +267,9 @@ private final class IslandStripView: NSView {
     /// The anchor the pager asked for, for when the state has none of its own or a stale one.
     private var fallbackAnchor: Island.ID?
     private var hasLaidOut = false
+    /// What the pager last asked for.
+    private var wanted: (order: [Island.ID?], anchor: Island.ID?, crossfades: Bool)?
+    private var hasBeenAskedForAccessibility = false
     private var springKeys: [String] = []
     private var nextSpringKey = 0
     private var shownFlight = 0
@@ -286,6 +289,24 @@ private final class IslandStripView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     override var isFlipped: Bool { true }
+
+    /// A hosting view builds accessibility elements only if a client was already asking for them
+    /// when it was made. The first page is made at launch, before any client, and would stay
+    /// empty for VoiceOver and for UI tests until a switch replaced it. So the first time
+    /// someone asks, the pages made until then are made again. Not right here: the view tree
+    /// should not change under the client while it is being read.
+    override func accessibilityChildren() -> [Any]? {
+        if !hasBeenAskedForAccessibility {
+            hasBeenAskedForAccessibility = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pages.values.forEach { $0.removeFromSuperview() }
+                self.pages = [:]
+                self.buildPages()
+            }
+        }
+        return super.accessibilityChildren()
+    }
 
     private func addPage(_ id: Island.ID?, content: (Island.ID?) -> AnyView) -> NSHostingView<AnyView> {
         let page = NSHostingView(rootView: content(id))
@@ -318,6 +339,14 @@ private final class IslandStripView: NSView {
 
     func update(order: [Island.ID?], anchor: Island.ID?, crossfades: Bool, content: @escaping (Island.ID?) -> AnyView) {
         self.content = content
+        wanted = (order, anchor, crossfades)
+        buildPages()
+    }
+
+    private func buildPages() {
+        // Not before the view is in its window: a page made earlier never shows up for
+        // accessibility at all, whenever a client comes along.
+        guard let content, let (order, anchor, crossfades) = wanted, window != nil else { return }
         let hadPages = !pages.isEmpty
         for id in order {
             if let page = pages[id] {
@@ -365,7 +394,7 @@ private final class IslandStripView: NSView {
             state.reset()
             state.fold()
         } else {
-            render()
+            buildPages()
         }
     }
 
