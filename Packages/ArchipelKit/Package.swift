@@ -15,6 +15,8 @@ let package = Package(
     dependencies: [
         // highlight.js 11 grammars; EditorUI runs its script directly to get token scopes.
         .package(url: "https://github.com/smittytone/HighlighterSwift.git", exact: "3.1.0"),
+        // CommonMark plus GitHub's extensions (tables, task lists, strikethrough) for the Markdown preview.
+        .package(url: "https://github.com/swiftlang/swift-markdown.git", exact: "0.9.0"),
     ],
     targets: [
         .target(name: "ArchipelCore"),
@@ -25,7 +27,12 @@ let package = Package(
         .target(name: "InspectorUI", dependencies: ["GitKit", "UISupport"]),
         .target(
             name: "EditorUI",
-            dependencies: ["GitKit", "UISupport", .product(name: "Highlighter", package: "HighlighterSwift")]
+            dependencies: [
+                "GitKit",
+                "UISupport",
+                .product(name: "Highlighter", package: "HighlighterSwift"),
+                .product(name: "Markdown", package: "swift-markdown"),
+            ]
         ),
         // Manual verification harness; see Sources/editor-demo/main.swift for usage.
         .executableTarget(name: "editor-demo", dependencies: ["EditorUI"]),

@@ -3,19 +3,24 @@ import SwiftUI
 import UISupport
 
 /// Editor for one file. Text files are editable; images, PDFs and other previewable types show in
-/// Quick Look; binaries and very large files get an explanation instead.
+/// Quick Look; binaries and very large files get an explanation instead. Markdown can also be shown
+/// rendered.
 public struct FileEditor: View {
     private let url: URL
     private let store: FileDocumentStore
+    private let onOpenLink: (URL) -> Void
 
-    public init(url: URL, store: FileDocumentStore) {
+    /// `onOpenLink` gets the links clicked in a Markdown preview: file URLs for relative links,
+    /// anything else as written. Leave it out to open them in their default app.
+    public init(url: URL, store: FileDocumentStore, onOpenLink: ((URL) -> Void)? = nil) {
         self.url = url
         self.store = store
+        self.onOpenLink = onOpenLink ?? { NSWorkspace.shared.open($0) }
     }
 
     public var body: some View {
         // A new identity per file drops the old watcher and text view; the buffer lives on in the store.
-        FileEditorContent(buffer: store.buffer(for: url), store: store)
+        FileEditorContent(buffer: store.buffer(for: url), store: store, onOpenLink: onOpenLink)
             .id(url.standardizedFileURL)
     }
 }
@@ -23,9 +28,14 @@ public struct FileEditor: View {
 private struct FileEditorContent: View {
     let buffer: TextBuffer
     let store: FileDocumentStore
+    var onOpenLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     var body: some View {
         VStack(spacing: 0) {
+            if buffer.state == .text, buffer.isMarkdown {
+                MarkdownHeader(buffer: buffer)
+                Divider()
+            }
             if buffer.state == .text {
                 if let conflict = buffer.conflict {
                     ConflictBar(conflict: conflict, buffer: buffer)
@@ -53,7 +63,11 @@ private struct FileEditorContent: View {
         case .loading:
             Color.clear
         case .text:
-            CodeTextView(buffer: buffer)
+            if buffer.isMarkdown, buffer.showsPreview {
+                MarkdownPreview(buffer: buffer, onOpenLink: onOpenLink)
+            } else {
+                CodeTextView(buffer: buffer)
+            }
         case .preview:
             QuickLookPreview(url: buffer.fileURL, revision: buffer.revision)
         case .missing:
@@ -86,6 +100,39 @@ private struct FileEditorContent: View {
     private var openInDefaultApp: some View {
         Button("Open in Default App") { NSWorkspace.shared.open(buffer.fileURL) }
             .buttonStyle(.glass)
+    }
+}
+
+/// Sits above a Markdown file the way the diff header sits above a diff.
+private struct MarkdownHeader: View {
+    @Bindable var buffer: TextBuffer
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Image(systemName: FileSymbol.name(for: buffer.name))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text(verbatim: buffer.name)
+            }
+            .lineLimit(1)
+            .truncationMode(.middle)
+            Spacer(minLength: 8)
+            Picker("Presentation", selection: $buffer.showsPreview) {
+                Label("Source", systemImage: "chevron.left.forwardslash.chevron.right").tag(false)
+                Label("Preview", systemImage: "eye").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelStyle(.iconOnly)
+            .labelsHidden()
+            .controlSize(.small)
+            .fixedSize()
+            .help("Show the Markdown source or the rendered preview")
+            .accessibilityIdentifier("editor.markdownPresentation")
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .frame(height: 32)
     }
 }
 
@@ -159,6 +206,16 @@ private func previewEditor(_ buffer: TextBuffer) -> some View {
 
 #Preview("Text") {
     previewEditor(.previewSample(url: sampleURL, text: PreviewSamples.swiftSource))
+}
+
+#Preview("Markdown") {
+    previewEditor(.previewSample(url: PreviewSamples.url("README.md"), text: PreviewSamples.markdownSource))
+}
+
+#Preview("Markdown Preview") {
+    let buffer = TextBuffer.previewSample(url: PreviewSamples.url("README.md"), text: PreviewSamples.markdownSource)
+    buffer.showsPreview = true
+    return previewEditor(buffer)
 }
 
 #Preview("Changed on Disk") {

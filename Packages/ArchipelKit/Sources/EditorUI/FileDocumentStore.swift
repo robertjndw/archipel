@@ -151,6 +151,8 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
     var saveError: String?
     /// Bumped on every change on disk, for views that reload themselves (Quick Look).
     private(set) var revision = 0
+    /// Markdown shown rendered instead of as source. Kept on the buffer so it survives tab switches.
+    var showsPreview = false
 
     @ObservationIgnored let textStorage = NSTextStorage()
     @ObservationIgnored let undoManager = UndoManager()
@@ -183,6 +185,7 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
 
     var name: String { url.lastPathComponent }
     var text: String { textStorage.string }
+    var isMarkdown: Bool { grammar == "markdown" }
 
     // MARK: Watching
 

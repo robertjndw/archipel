@@ -113,6 +113,38 @@ final class EditorTests: ArchipelUITestCase {
         waitUntil("the edit is on disk") { self.contents(of: "notes.txt", in: repository)?.contains("kept") == true }
     }
 
+    func testMarkdownPreviewRendersFollowsLinksAndReloads() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try repository.write("README.md", "# Rendered Title\n\nSee the [notes file](notes.txt).\n")
+        try launch(with: repository.workspace())
+
+        openQuickly("README.md")
+        let presentation = mainWindow.radioGroups["editor.markdownPresentation"]
+        assertExists(presentation, "A Markdown file should offer source and preview.")
+        let webView = mainWindow.webViews.firstMatch
+        XCTAssertFalse(webView.exists, "Markdown opens as source.")
+
+        presentation.radioButtons["Preview"].click()
+        assertExists(webView.staticTexts["Rendered Title"], "The preview should render the heading.")
+        assertGone(editor, "The preview replaces the text view.")
+
+        // Relative links open the file in the app rather than navigating the preview away.
+        webView.links["notes file"].click()
+        assertExists(tab("notes.txt"), "A relative link should open the file as a tab.")
+
+        // The choice belongs to the file, so coming back finds the preview again.
+        tab("README.md").click()
+        assertExists(webView.staticTexts["Rendered Title"], "Switching back should keep the preview.")
+
+        // Agents edit the file on disk, so that is what the open preview has to pick up.
+        try repository.write("README.md", "# Changed on Disk\n")
+        assertExists(webView.staticTexts["Changed on Disk"], "The preview should follow the file on disk.")
+
+        presentation.radioButtons["Source"].click()
+        assertExists(editor, "Source brings the text view back.")
+        waitUntil("the source shows the file as it is now") { (self.editor.value as? String)?.contains("# Changed on Disk") == true }
+    }
+
     func testCancelKeepsTheDirtyTabOpen() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         try launch(with: repository.workspace())
