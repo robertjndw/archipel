@@ -1401,7 +1401,7 @@ final class AppModel {
     func activity(for worktree: Worktree) -> SessionActivity? {
         let all = worktree.sessions.compactMap { activities[$0.id] }
         return all.first(where: \.needsUser)
-            ?? all.first { $0.status == .working || $0.status == .starting }
+            ?? all.first(where: \.showsProgress)
             ?? all.first(where: \.unread)
     }
 

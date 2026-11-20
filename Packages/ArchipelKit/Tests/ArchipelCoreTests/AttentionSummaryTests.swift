@@ -106,4 +106,13 @@ struct AttentionTests {
         #expect(SessionActivity(status: .finished, unread: true).needsMe)
         #expect(SessionActivity(status: .needsAttention(.question)).needsMe)
     }
+
+    @Test func finishedTurnWithSubagentsRunningCountsAsWorking() {
+        var activity = SessionActivity(status: .working)
+        activity.apply(.subagentStarted(id: "x"), isBeingViewed: false)
+        activity.apply(.turnFinished(message: nil, backgroundTasks: nil), isBeingViewed: false)
+        let summary = attentionSummary(of: [a], activities: [a.id: activity])
+        #expect(summary == .init(working: 1))
+        #expect(summary.dominant == .working)
+    }
 }

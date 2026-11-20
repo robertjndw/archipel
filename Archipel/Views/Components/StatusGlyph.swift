@@ -32,6 +32,13 @@ struct StatusGlyph: View {
                 attention("hand.raised.fill", label: activity.status.label)
             case .needsAttention:
                 attention("questionmark.bubble.fill", label: activity.status.label)
+            case .finished where activity.isBusy:
+                // The main turn ended, but background subagents are still running and the result
+                // isn't final until they stop. A checkmark here would look done too early.
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Subagents running")
+                    .help("Subagents running")
             case .finished:
                 // The dot is for a result you have not seen yet. Once seen, a quiet check stays until
                 // the next prompt, so a done session does not look like one that never ran.

@@ -37,6 +37,12 @@ public struct SessionActivity: Equatable, Sendable {
         status == .working || subagents.count > 0
     }
 
+    /// Drives the spinner. Unlike `isBusy` it includes `.starting`. A pending request wins over
+    /// running subagents, so that session shows and counts as waiting, not working.
+    public var showsProgress: Bool {
+        status == .starting || (isBusy && !needsUser)
+    }
+
     public mutating func markViewed() {
         unread = false
     }
