@@ -79,13 +79,13 @@ struct ContextLabel: View {
     }
 }
 
-/// A ring the size of the status bar's capital letters, filled the way the usage bars are. Neutral
+/// A ring as tall as the SF Symbols beside it, filled the way the usage bars are. Neutral
 /// until it is worth watching: the tint is kept for what wants attention.
 struct ContextRing: View {
     let usedPercent: Double
     let fill: AppSettings.UsageBarFill
-    var diameter: CGFloat = 9
-    var lineWidth: CGFloat = 2
+    var diameter: CGFloat = 11
+    var lineWidth: CGFloat = 1.5
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
