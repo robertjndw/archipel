@@ -253,7 +253,16 @@ private struct PaneView: View {
         case .session(let id):
             if let tab = pane.selectedTab { SessionContent(sessionID: id, tabID: tab.id) }
         case .file(let url):
-            FileEditor(url: url, store: model.documents)
+            FileEditor(url: url, store: model.documents) { link in
+                if link.isFileURL {
+                    // A folder would open as a tab that can only say it is a folder.
+                    if model.isDirectory(link) { model.revealInFinder(link) } else { model.openFile(link, in: worktree.id, preview: false) }
+                } else if link.scheme == "http" || link.scheme == "https" {
+                    model.openWebLink(link, in: worktree.id)
+                } else {
+                    NSWorkspace.shared.open(link)
+                }
+            }
         case .diff(let path, let staged):
             if model.isGitAvailable {
                 DiffViewer(

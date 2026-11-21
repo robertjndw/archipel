@@ -12,7 +12,7 @@
 //
 // Review comments (diff only): --review turns commenting on with --targets N fake sessions (default 1);
 // --comment SIDE:LINE:TEXT seeds a comment (repeatable). --click X,Y;X,Y clicks window points (top-left
-// origin) one after another, --comment-text TEXT types into the open comment popover and presses
+// origin) one after another, in file mode too; --comment-text TEXT types into the open comment popover and presses
 // Command-Return, or Escape with --cancel-comment. --shots DIR saves a screenshot of the window and any
 // popover after each step; --quit exits after the last one.
 // Sending prints the prompt.
@@ -142,7 +142,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         if typed != nil || saves || external != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Self.exerciseEditing(in: window) }
         }
-        if review {
+        if review || !clicks.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Self.exerciseComments(in: window, step: 0) }
         }
         if let scrollFraction {
