@@ -386,6 +386,46 @@ struct SidebarWorktreeMenu: View {
     }
 }
 
+/// The context menu of a row that is part of a multi-selection. No New Session here: each new
+/// session would switch the window to it.
+struct SidebarBatchMenu: View {
+    @Environment(AppModel.self) private var model
+    let worktrees: [Worktree]
+
+    var body: some View {
+        let ids = worktrees.map(\.id)
+        let pullable = ids.count { model.canSync(.pull, $0) }
+        let pushable = ids.count { model.canSync(.push, $0) }
+        Button(pullable > 0 ? "Pull \(pullable) Worktrees" : "Pull", systemImage: "arrow.down") { model.sync(.pull, worktrees: ids) }
+            .disabled(pullable == 0)
+        Button(pushable > 0 ? "Push \(pushable) Worktrees" : "Push", systemImage: "arrow.up") { model.sync(.push, worktrees: ids) }
+            .disabled(pushable == 0)
+        Divider()
+        Button("Show in Finder", systemImage: "folder") { model.revealInFinder(worktrees.map(\.path)) }
+        Button("Copy Paths", systemImage: "document.on.document") {
+            model.copyToPasteboard(worktrees.map(\.path.path).joined(separator: "\n"))
+        }
+        let branches = worktrees.compactMap(\.branch)
+        if !branches.isEmpty {
+            Button(branches.count == 1 ? "Copy Branch Name" : "Copy Branch Names", systemImage: "arrow.triangle.branch") {
+                model.copyToPasteboard(branches.joined(separator: "\n"))
+            }
+        }
+        if worktrees.contains(where: { attentionSummary(of: $0, activities: model.activities).unread > 0 }) {
+            Divider()
+            Button("Mark All as Read", systemImage: "envelope.open") {
+                for id in ids { model.markRead(worktree: id) }
+            }
+        }
+        Divider()
+        let removable = worktrees.filter { !$0.isMain }
+        Button(removable.count == 1 ? "Remove Worktree…" : "Remove \(removable.count) Worktrees…", systemImage: "minus.circle") {
+            model.requestRemoval(of: removable)
+        }
+        .disabled(removable.isEmpty)
+    }
+}
+
 extension PullRequestBadge.State {
     var color: Color {
         switch self {

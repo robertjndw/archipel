@@ -220,9 +220,9 @@ struct PaletteCommand: Identifiable {
             ) { actions.switchBranch() },
             PaletteCommand(
                 id: "remove-worktree",
-                title: "Remove Worktree…",
+                title: actions.removeWorktreesTitle,
                 symbol: "minus.circle",
-                isAvailable: actions.removableWorktree != nil,
+                isAvailable: !actions.removableWorktrees.isEmpty,
                 refocusesTab: false
             ) { actions.removeSelectedWorktree() },
             PaletteCommand(id: "project-settings", title: "Project Settings…", symbol: "gearshape", isAvailable: project != nil, refocusesTab: false) {

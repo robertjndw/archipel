@@ -140,8 +140,6 @@ extension AppModel {
 
     func rowContent(for worktree: Worktree) -> WorktreeRowContent {
         let summary = gitSummaries[worktree.id]
-        let lookup = pullRequests[worktree.id]
-        let pullRequest = lookup?.branch == summary?.branch ? lookup?.pullRequest : nil
         let git = summary.map {
             WorktreeGitState(
                 changedFiles: $0.changedFiles,
@@ -149,7 +147,7 @@ extension AppModel {
                 behind: $0.behind,
                 insertions: $0.diffStat?.insertions ?? 0,
                 deletions: $0.diffStat?.deletions ?? 0,
-                pullRequest: pullRequest.map(Self.badge)
+                pullRequest: pullRequestBadge(for: worktree.id)
             )
         }
         let options = WorktreeRowContent.Options(
@@ -172,6 +170,14 @@ extension AppModel {
               lookup.branch == gitSummaries[id]?.branch
         else { return nil }
         return lookup.pullRequest
+    }
+
+    /// The pull request of the branch the worktree has checked out. A lookup made for a branch it
+    /// has since switched away from does not count.
+    func pullRequestBadge(for id: Worktree.ID) -> PullRequestBadge? {
+        let lookup = pullRequests[id]
+        guard lookup?.branch == gitSummaries[id]?.branch, let pullRequest = lookup?.pullRequest else { return nil }
+        return Self.badge(for: pullRequest)
     }
 
     private static func badge(for pullRequest: GitPullRequest) -> PullRequestBadge {

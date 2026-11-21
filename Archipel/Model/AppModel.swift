@@ -28,6 +28,8 @@ final class AppModel {
             guard showsOnlyNeedsMe != oldValue else { return }
             if showsOnlyNeedsMe { SidebarTips.needsMeFilterUsed() }
             needsMePin = nil
+            // The other list may not show the rows that were picked.
+            sidebarSelection = []
             // Pin the worktree that's already open, or answering its request would pull the row
             // out from under the user.
             guard showsOnlyNeedsMe, let selected = selectedWorktree?.id,
@@ -109,6 +111,12 @@ final class AppModel {
     /// The worktree itself rather than its id: the sheet stays up to report on a branch it could
     /// not delete, after the worktree has left the workspace.
     var worktreeAwaitingRemoval: Worktree?
+    /// The worktrees the batch removal sheet is open for, from the sidebar's multi-selection.
+    var worktreesAwaitingRemoval: WorktreeBatch?
+    /// The rows picked in the sidebar with ⌘- or ⇧-click, only used with two or more. Kept apart from
+    /// the workspace's selection because picking rows does not change what the window shows. Cleared
+    /// when the selected island or worktree changes.
+    var sidebarSelection: Set<Worktree.ID> = []
     var isCreatingIsland = false
     /// The push, pull or fetch running per worktree for the Project menu and the palette, which
     /// offer one at a time. See AppModel+Sync.
@@ -623,6 +631,7 @@ final class AppModel {
         if showsOnlyNeedsMe { needsMePin = selectedWorktree?.id }
         if previousPlace.1 != selectedWorktree?.id { SidebarTips.worktreeSwitched() }
         if previousPlace != (selectedIsland?.id, selectedWorktree?.id) {
+            sidebarSelection = []
             refreshGitStatus(lookingUpPullRequests: true)
         }
         let current = Set(visibleSessionIDs)
