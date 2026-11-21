@@ -314,14 +314,18 @@ struct PeekTail: View {
 
     var body: some View {
         // No scroll view: a fixed-size text anchored to the bottom just overflows upward and is
-        // clipped, so a refresh never moves anything that did not change.
-        Text(verbatim: text)
-            .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(foreground)
-            .fixedSize()
-            .padding(.horizontal, 14)
-            .padding(.bottom, 6)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        // clipped, so a refresh never moves anything that did not change. It has to be an overlay:
+        // a flexible frame grows to fit the text and the fixed frame around it then centers it,
+        // which cuts off the start of every line and the newest lines at the bottom.
+        Color.clear
+            .overlay(alignment: .bottomLeading) {
+                Text(verbatim: text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(foreground)
+                    .fixedSize()
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 6)
+            }
             .clipped()
             .mask {
                 LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.22)], startPoint: .top, endPoint: .bottom)
@@ -425,7 +429,8 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
 #if DEBUG
 // Previews never have a live terminal, so the peek shows its placeholder instead of output.
 #Preview("Running") {
-    let lines = (1...40).map { "\($0)  compiling module \($0 % 7 == 0 ? "ArchipelCore" : "AgentKit") (\($0 * 3)ms)" }
+    // Wider than the peek, like most real panes.
+    let lines = (1...40).map { "\($0)  compiling module \($0 % 7 == 0 ? "ArchipelCore" : "AgentKit") (\($0 * 3)ms) " + String(repeating: "─", count: 120) }
     return VStack(spacing: 0) {
         PeekTail(foreground: .primary) { lines.suffix(SessionPeekView.lineCount).joined(separator: "\n") }
             .frame(width: 640, height: 380)
