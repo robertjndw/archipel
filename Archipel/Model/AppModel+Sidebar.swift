@@ -96,7 +96,11 @@ extension AppModel {
     }
 
     func revealInFinder(_ url: URL) {
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        revealInFinder([url])
+    }
+
+    func revealInFinder(_ urls: [URL]) {
+        NSWorkspace.shared.activateFileViewerSelecting(urls)
     }
 
     func copyToPasteboard(_ string: String) {
@@ -138,4 +142,36 @@ struct NeedsMeProject: Identifiable {
     let project: Project
     let worktrees: [Worktree]
     var id: Project.ID { project.id }
+}
+
+// MARK: Multi-selection
+
+/// Several worktrees acted on together. Identifiable so it can drive `.sheet(item:)`.
+struct WorktreeBatch: Identifiable {
+    let id = UUID()
+    let worktrees: [Worktree]
+}
+
+extension AppModel {
+    /// The worktrees picked together in the sidebar, in sidebar order. Empty unless there are at
+    /// least two, so callers can fall back to the selected worktree.
+    var multiSelectedWorktrees: [Worktree] {
+        guard sidebarSelection.count > 1 else { return [] }
+        return workspace.allWorktrees.filter { sidebarSelection.contains($0.id) }
+    }
+
+    /// The part of the multi-selection that can be removed. The primary checkout is the project
+    /// itself, so it is left out rather than blocking the rest.
+    var removableMultiSelection: [Worktree] {
+        multiSelectedWorktrees.filter { !$0.isMain }
+    }
+
+    func requestRemoval(of worktrees: [Worktree]) {
+        guard !worktrees.isEmpty, readyForSheet() else { return }
+        if worktrees.count == 1 {
+            worktreeAwaitingRemoval = worktrees[0]
+        } else {
+            worktreesAwaitingRemoval = WorktreeBatch(worktrees: worktrees)
+        }
+    }
 }

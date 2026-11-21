@@ -69,7 +69,7 @@ struct SidebarView: View {
                     ForEach(project.worktrees) { worktree in
                         worktreeRow(worktree, tint: tint, isSelected: worktree.id == selected)
                             .tag(worktree.id)
-                            .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
+                            .contextMenu { worktreeMenu(worktree) }
                     }
                     let suggested = model.suggestedWorktrees(for: project)
                     if !suggested.isEmpty {
@@ -84,6 +84,7 @@ struct SidebarView: View {
         // which animations from outside do not reach.
         .animation(.snappy, value: model.settings.sidebarDensity)
         .accessibilityIdentifier("sidebar")
+        .onDeleteCommand(perform: removeSelection)
         .overlay {
             if let island, island.projects.isEmpty {
                 ContentUnavailableView {
@@ -114,7 +115,7 @@ struct SidebarView: View {
                         ForEach(entry.worktrees) { worktree in
                             worktreeRow(worktree, tint: tint, isSelected: worktree.id == selected)
                                 .tag(worktree.id)
-                                .contextMenu { SidebarWorktreeMenu(worktree: worktree, removing: $removing) }
+                                .contextMenu { worktreeMenu(worktree) }
                         }
                     }
                 } header: {
@@ -123,6 +124,7 @@ struct SidebarView: View {
             }
         }
         .accessibilityIdentifier("sidebar")
+        .onDeleteCommand(perform: removeSelection)
         .overlay {
             if needsMe.isEmpty {
                 ContentUnavailableView {
@@ -155,11 +157,41 @@ struct SidebarView: View {
         }
     }
 
-    private func selection(showing selected: Worktree.ID?) -> Binding<Worktree.ID?> {
+    /// A plain click selects a worktree as before. ⌘- and ⇧-click pick rows for the batch actions
+    /// without changing what the window shows, since it can only show one of them.
+    private func selection(showing selected: Worktree.ID?) -> Binding<Set<Worktree.ID>> {
         Binding(
-            get: { selected },
-            set: { model.select(worktree: $0) }
+            get: { model.sidebarSelection.count > 1 ? model.sidebarSelection : Set([selected].compactMap(\.self)) },
+            set: { ids in
+                if ids.count > 1 {
+                    model.sidebarSelection = ids
+                } else {
+                    model.sidebarSelection = []
+                    // Deselecting down to nothing leaves the shown worktree selected, as before.
+                    model.select(worktree: ids.first ?? selected)
+                }
+            }
         )
+    }
+
+    /// Right-clicking a picked row acts on all picked rows. Any other row keeps its own menu, as in Finder.
+    @ViewBuilder
+    private func worktreeMenu(_ worktree: Worktree) -> some View {
+        let batch = model.multiSelectedWorktrees
+        if batch.contains(where: { $0.id == worktree.id }) {
+            SidebarBatchMenu(worktrees: batch)
+        } else {
+            SidebarWorktreeMenu(worktree: worktree, removing: $removing)
+        }
+    }
+
+    private func removeSelection() {
+        let batch = model.removableMultiSelection
+        if !batch.isEmpty {
+            model.requestRemoval(of: batch)
+        } else if let worktree = model.selectedWorktree, !worktree.isMain, model.readyForSheet() {
+            removing = worktree
+        }
     }
 
     private func expansion(of project: Project) -> Binding<Bool> {

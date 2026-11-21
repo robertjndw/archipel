@@ -191,6 +191,56 @@ final class WorktreeTests: ArchipelUITestCase {
                      "The main checkout should be selected after the removal.")
     }
 
+    func testRemovingSeveralWorktreesPickedTogether() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let first = try repository.addWorktree(branch: "first", in: sandbox.worktreesRoot)
+        let second = try repository.addWorktree(branch: "second", in: sandbox.worktreesRoot)
+        let third = try repository.addWorktree(branch: "third", in: sandbox.worktreesRoot)
+        try launch(with: repository.workspace(linkedWorktrees: [first, second, third]))
+
+        sidebarWorktree("first").click()
+        XCUIElement.perform(withKeyModifiers: .command) { sidebarWorktree("third").click() }
+        // Picking a second row adds to the selection without switching what the window shows.
+        assertExists(mainWindow(titled: "fixture - first"), "⌘-click should not change the shown worktree.")
+
+        sidebarWorktree("third").rightClick()
+        chooseContextMenu("Remove 2 Worktrees…")
+        assertExists(sheet.buttons["Remove"], "Removing several worktrees should ask once.")
+        let deleteFolders = sheet.switches.element(boundBy: 0)
+        let deleteBranches = sheet.switches.element(boundBy: 1)
+        deleteFolders.click()
+        waitUntil("the branch switch is enabled") { deleteBranches.isEnabled }
+        deleteBranches.click()
+        sheet.buttons["Delete"].click()
+
+        assertGone(sidebarWorktree("first"), "The first picked worktree should leave the sidebar.")
+        assertGone(sidebarWorktree("third"), "The second picked worktree should leave the sidebar.")
+        assertExists(sidebarWorktree("second"), "A worktree that was not picked stays.")
+        waitUntil("git has forgotten both worktrees and their branches") {
+            try repository.worktreePaths == [repository.url.path, second.path.path]
+                && repository.branches.sorted() == ["main", "second"]
+        }
+    }
+
+    func testTheProjectMenuRemovesEveryPickedWorktreeButThePrimaryCheckout() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let feature = try repository.addWorktree(branch: "feature", in: sandbox.worktreesRoot)
+        let other = try repository.addWorktree(branch: "other", in: sandbox.worktreesRoot)
+        try launch(with: repository.workspace(linkedWorktrees: [feature, other]))
+
+        sidebarWorktree("main").click()
+        XCUIElement.perform(withKeyModifiers: .shift) { sidebarWorktree("other").click() }
+        // The primary checkout is picked too, but it cannot be removed, so only two are counted.
+        chooseMenu("Project", "Remove 2 Worktrees…")
+        sheet.buttons["Remove"].click()
+
+        assertGone(sidebarWorktree("feature"), "The worktree should leave the sidebar.")
+        assertGone(sidebarWorktree("other"), "The worktree should leave the sidebar.")
+        assertExists(sidebarWorktree("main"), "The primary checkout stays.")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: feature.path.path), "The folders were not asked to be deleted.")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: other.path.path), "The folders were not asked to be deleted.")
+    }
+
     func testAWorktreeMadeOutsideTheAppIsSuggested() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         // In git's list, but not in the workspace the app starts with.
