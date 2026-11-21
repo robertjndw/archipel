@@ -39,29 +39,41 @@ extension AppModel {
     }
 
     func sync(_ action: SyncAction, worktree id: Worktree.ID) {
+        Task { await performSync(action, worktree: id) }
+    }
+
+    /// For several worktrees picked in the sidebar. One after the other, since they often share a
+    /// repository and git locks its refs while it fetches. The ones that cannot sync are skipped.
+    func sync(_ action: SyncAction, worktrees ids: [Worktree.ID]) {
+        let ids = ids.filter { canSync(action, $0) }
+        guard !ids.isEmpty else { return }
+        Task {
+            for id in ids { await performSync(action, worktree: id, namingIt: true) }
+        }
+    }
+
+    private func performSync(_ action: SyncAction, worktree id: Worktree.ID, namingIt: Bool = false) async {
         guard let worktree = workspace.worktree(id: id), isGitAvailable, syncsInFlight[id] == nil else { return }
         syncsInFlight[id] = action
-        let git = git
-        let folder = worktree.path
-        Task { [weak self] in
-            var failure: String?
-            do {
-                switch action {
-                case .push: try await git.push(in: folder)
-                case .pull: try await git.pull(in: folder)
-                case .fetch: try await git.fetch(in: folder, userInitiated: true)
-                }
-            } catch is CancellationError {
-                // Nobody is waiting for an answer any more.
-            } catch {
-                failure = error.localizedDescription
+        var failure: String?
+        do {
+            switch action {
+            case .push: try await git.push(in: worktree.path)
+            case .pull: try await git.pull(in: worktree.path)
+            case .fetch: try await git.fetch(in: worktree.path, userInitiated: true)
             }
-            guard let self else { return }
-            self.syncsInFlight[id] = nil
-            if let failure { self.problem = "\(action.failureTitle) \(failure)" }
-            // Also after a failure: a rejected push or a refused pull has usually fetched, so the
-            // counts moved anyway. A push can have created the pull request's branch on the remote.
-            self.refreshGitStatus(of: [id], lookingUpPullRequests: action == .push, minimumPullRequestAge: .zero)
+        } catch is CancellationError {
+            // Nobody is waiting for an answer any more.
+        } catch {
+            failure = error.localizedDescription
         }
+        syncsInFlight[id] = nil
+        if let failure {
+            // In a batch the user has to be told which of the worktrees it was.
+            problem = namingIt ? "\(action.failureTitle) \(worktree.displayName): \(failure)" : "\(action.failureTitle) \(failure)"
+        }
+        // Also after a failure: a rejected push or a refused pull has usually fetched, so the
+        // counts moved anyway. A push can have created the pull request's branch on the remote.
+        refreshGitStatus(of: [id], lookingUpPullRequests: action == .push, minimumPullRequestAge: .zero)
     }
 }

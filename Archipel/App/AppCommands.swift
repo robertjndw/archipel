@@ -122,23 +122,35 @@ struct AppActions {
 
     // MARK: Worktrees
 
-    /// The primary checkout is the project itself and cannot be removed.
-    var removableWorktree: Worktree? {
-        guard let worktree = model.selectedWorktree, !worktree.isMain else { return nil }
-        return worktree
+    /// The rows picked together in the sidebar when there are several, else the selected worktree.
+    /// The primary checkout is the project itself and cannot be removed, so it is left out.
+    var removableWorktrees: [Worktree] {
+        let picked = model.multiSelectedWorktrees
+        if !picked.isEmpty { return picked.filter { !$0.isMain } }
+        guard let worktree = model.selectedWorktree, !worktree.isMain else { return [] }
+        return [worktree]
+    }
+
+    var removeWorktreesTitle: String {
+        let count = removableWorktrees.count
+        return count > 1 ? "Remove \(count) Worktrees…" : "Remove Worktree…"
     }
 
     func removeSelectedWorktree() {
-        if let worktree = removableWorktree, model.readyForSheet() { model.worktreeAwaitingRemoval = worktree }
+        model.requestRemoval(of: removableWorktrees)
+    }
+
+    private var worktreesToMarkRead: [Worktree] {
+        let picked = model.multiSelectedWorktrees
+        return picked.isEmpty ? [model.selectedWorktree].compactMap(\.self) : picked
     }
 
     var selectedWorktreeHasUnread: Bool {
-        guard let worktree = model.selectedWorktree else { return false }
-        return worktree.sessions.contains { model.activities[$0.id]?.unread == true }
+        worktreesToMarkRead.contains { $0.sessions.contains { model.activities[$0.id]?.unread == true } }
     }
 
     func markSelectedWorktreeRead() {
-        if let worktree = model.selectedWorktree { model.markRead(worktree: worktree.id) }
+        for worktree in worktreesToMarkRead { model.markRead(worktree: worktree.id) }
     }
 
     /// The project the Add Worktree sheet would open for. Nil without git, which the sheet needs
@@ -354,8 +366,8 @@ private struct ProjectMenuItems: View {
         Button("Switch Branch…", systemImage: "arrow.triangle.swap") { actions.switchBranch() }
             .keyboardShortcut("b", modifiers: [.command, .shift])
             .disabled(actions.worktreeForBranchSwitch == nil)
-        Button("Remove Worktree…", systemImage: "minus.circle") { actions.removeSelectedWorktree() }
-            .disabled(actions.removableWorktree == nil)
+        Button(actions.removeWorktreesTitle, systemImage: "minus.circle") { actions.removeSelectedWorktree() }
+            .disabled(actions.removableWorktrees.isEmpty)
         Divider()
         Button("Commit…", systemImage: "checkmark.circle") { actions.startCommit() }
             .keyboardShortcut("c", modifiers: [.command, .option])

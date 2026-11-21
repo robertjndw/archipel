@@ -71,6 +71,9 @@ struct RootView: View {
         .sheet(item: $model.worktreeAwaitingRemoval) { worktree in
             RemoveWorktreeSheet(worktree: worktree)
         }
+        .sheet(item: $model.worktreesAwaitingRemoval) { batch in
+            RemoveWorktreesSheet(worktrees: batch.worktrees)
+        }
         .sheet(isPresented: $model.isCreatingIsland) {
             IslandEditor(mode: .create)
         }
