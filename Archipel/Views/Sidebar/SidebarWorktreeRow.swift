@@ -376,10 +376,6 @@ struct SidebarWorktreeMenu: View {
             Divider()
             Button("Mark as Read", systemImage: "envelope.open") { model.markRead(worktree: worktree.id) }
         }
-        if let project {
-            Divider()
-            Button("Project Settings…", systemImage: "gearshape") { model.openProjectSettings(project.id) }
-        }
         Divider()
         if worktree.isMain {
             Button("Primary Checkout Can't Be Removed", systemImage: "lock") {}
