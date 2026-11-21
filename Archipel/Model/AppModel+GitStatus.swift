@@ -6,8 +6,17 @@ import GitKit
 /// switch the old answer must not be shown, even before the next lookup.
 struct PullRequestLookup {
     var branch: String
+    /// After a failed lookup this is still the answer from before it: a dropped connection or an
+    /// expired `gh` login says nothing about the pull request, and the badge should not blink away.
     var pullRequest: GitPullRequest?
     var checkedAt: ContinuousClock.Instant
+    /// Lookups in a row that failed, for this branch.
+    var failures = 0
+
+    var answer: PullRequestFreshness.Answer {
+        if failures > 0 { return .failed(repeatedly: failures > 1) }
+        return pullRequest == nil ? .none : .found
+    }
 }
 
 /// Bookkeeping that keeps refreshes of one worktree from overlapping. Not observed.
@@ -45,10 +54,9 @@ struct GitRefreshState {
 extension AppModel {
     static let gitStatusInterval = Duration.seconds(10)
     static let diffStatInterval = Duration.seconds(60)
-    /// `gh` is a network call per worktree, and a pull request rarely appears or changes state without
-    /// the user knowing, so this can be slow. The status timer asks on every tick; this is what
-    /// turns that into one lookup per interval.
-    static let pullRequestInterval = Duration.seconds(300)
+    /// `gh` is a network call per worktree, so the timer's ticks are capped at one lookup per
+    /// interval. "No PR yet" and failures are asked again sooner; see `PullRequestFreshness`.
+    static let pullRequestInterval = PullRequestFreshness.foundLifetime
     /// One network call per repository. Five minutes keeps the behind counts reasonably fresh without
     /// fetching all the time.
     static let fetchInterval = Duration.seconds(300)
@@ -158,6 +166,14 @@ extension AppModel {
         )
     }
 
+    /// The selected worktree's pull request, only while the answer is for the branch it is on.
+    var selectedWorktreePullRequest: GitPullRequest? {
+        guard let id = workspace.selectedWorktreeID, let lookup = pullRequests[id],
+              lookup.branch == gitSummaries[id]?.branch
+        else { return nil }
+        return lookup.pullRequest
+    }
+
     private static func badge(for pullRequest: GitPullRequest) -> PullRequestBadge {
         let state: PullRequestBadge.State = switch pullRequest.state {
         case .open: pullRequest.isDraft ? .draft : .open
@@ -228,20 +244,33 @@ extension AppModel {
         }
     }
 
-    /// Every failure, including a missing `gh` or no network, just means no badge.
+    /// A missing `gh` means no badge. Any other failure keeps the badge that was there.
     private func lookUpPullRequest(of id: Worktree.ID, summary: GitSummary?, minimumAge: Duration) {
-        guard let worktree = workspace.worktree(id: id), let summary, let branch = summary.branch, summary.upstream != nil else {
-            // Runs with every poll for each worktree without an upstream, and writing nil over nil
+        // No upstream is not enough to skip: `gh` matches the branch name, and a branch pushed
+        // without `-u` (`git push origin HEAD`) can have a pull request all the same.
+        guard let worktree = workspace.worktree(id: id), let summary, let branch = summary.branch,
+              summary.upstream != nil || worktreesWithRemote.contains(id)
+        else {
+            // Runs with every poll for each worktree without a remote, and writing nil over nil
             // would still redraw the sidebar.
             if pullRequests[id] != nil { pullRequests[id] = nil }
             return
         }
-        if let last = pullRequests[id], last.branch == branch, last.checkedAt.duration(to: .now) < minimumAge { return }
+        if let last = pullRequests[id], last.branch == branch,
+           !PullRequestFreshness.isDue(
+               last.answer,
+               age: last.checkedAt.duration(to: .now),
+               hasUpstream: summary.upstream != nil,
+               requestedAge: minimumAge
+           ) {
+            return
+        }
         if let asked = gitRefresh.pullRequestsInFlight[id] {
             // The running lookup answers for the branch it was started on. After a switch that
             // answer is filed under the old name, and without this nothing would ask again until
-            // the next refresh that looks up pull requests.
-            if asked != branch {
+            // the next refresh that looks up pull requests. A forced lookup is queued even for the
+            // same branch, since the running one may have asked just before the PR was opened.
+            if asked != branch || minimumAge == .zero {
                 gitRefresh.pullRequestsQueued[id] = min(gitRefresh.pullRequestsQueued[id] ?? minimumAge, minimumAge)
             }
             return
@@ -250,14 +279,30 @@ extension AppModel {
         let gitHub = gitHubClient()
         Task { [weak self] in
             let client = await gitHub.value
-            let pullRequest = try? await client?.pullRequest(in: worktree.path)
+            var pullRequest: GitPullRequest?
+            // Counts as a failure so a missing `gh` backs off instead of being searched for every minute.
+            var failed = client == nil
+            if let client {
+                do {
+                    pullRequest = try await client.pullRequest(in: worktree.path)
+                } catch {
+                    failed = true
+                }
+            }
             guard let self else { return }
             // A missing gh is looked for again next time, since it may be installed while the app runs.
             if client == nil, self.gitRefresh.gitHub == gitHub { self.gitRefresh.gitHub = nil }
             self.gitRefresh.pullRequestsInFlight[id] = nil
             let queued = self.gitRefresh.pullRequestsQueued.removeValue(forKey: id)
             guard self.workspace.worktree(id: id) != nil else { return }
-            self.pullRequests[id] = PullRequestLookup(branch: branch, pullRequest: pullRequest, checkedAt: .now)
+            var failures = 0
+            if failed {
+                let previous = self.pullRequests[id].flatMap { $0.branch == branch ? $0 : nil }
+                // Without `gh` there is nothing left to vouch for the old badge.
+                if client != nil { pullRequest = previous?.pullRequest }
+                failures = (previous?.failures ?? 0) + 1
+            }
+            self.pullRequests[id] = PullRequestLookup(branch: branch, pullRequest: pullRequest, checkedAt: .now, failures: failures)
             if let queued, self.settings.showsPullRequests {
                 self.lookUpPullRequest(of: id, summary: self.gitSummaries[id], minimumAge: queued)
             }

@@ -1,3 +1,4 @@
+import GitKit
 import SwiftUI
 import UISupport
 
@@ -5,6 +6,7 @@ public struct InspectorView: View {
     private let root: URL?
     private let actions: InspectorActions
     private let searchPATH: @MainActor () async -> String
+    private let knownPullRequest: @MainActor () -> GitPullRequest?
     @Binding private var focusCommitMessage: Bool
     @AppStorage(InspectorView.selectedTabKey) private var tab: Tab = .files
 
@@ -17,9 +19,13 @@ public struct InspectorView: View {
     /// Setting `focusCommitMessage` puts the cursor in the commit message field once the Changes tab
     /// shows it; the inspector sets it back to false.
     /// With `onSwitchBranch`, the branch name in the Changes tab becomes a button that calls it.
+    /// `knownPullRequest` is the host's latest PR for the worktree's branch. The Changes tab looks up
+    /// its own only now and then, so when the host's answer changes it asks again. It's a closure so
+    /// that only the tab reading it redraws when the host's lookups come in.
     public init(
         root: URL?,
         searchPATH: @escaping @MainActor () async -> String,
+        knownPullRequest: @escaping @MainActor () -> GitPullRequest? = { nil },
         focusCommitMessage: Binding<Bool> = .constant(false),
         onOpenFile: @escaping (_ url: URL, _ preview: Bool) -> Void,
         onOpenDiff: @escaping (_ path: String, _ staged: Bool, _ preview: Bool) -> Void,
@@ -27,6 +33,7 @@ public struct InspectorView: View {
     ) {
         self.root = root
         self.searchPATH = searchPATH
+        self.knownPullRequest = knownPullRequest
         _focusCommitMessage = focusCommitMessage
         actions = InspectorActions(openFile: onOpenFile, openDiff: onOpenDiff, switchBranch: onSwitchBranch)
     }
@@ -50,7 +57,14 @@ public struct InspectorView: View {
         Group {
             if let root {
                 // A new identity per root throws away the old models, tasks and expansion state.
-                InspectorContent(root: root, tab: tab, actions: actions, searchPATH: searchPATH, focusCommitMessage: $focusCommitMessage)
+                InspectorContent(
+                    root: root,
+                    tab: tab,
+                    actions: actions,
+                    searchPATH: searchPATH,
+                    knownPullRequest: knownPullRequest,
+                    focusCommitMessage: $focusCommitMessage
+                )
                     .id(root)
             } else {
                 ContentUnavailableView(
@@ -152,6 +166,7 @@ private struct InspectorContent: View {
     let tab: InspectorView.Tab
     let actions: InspectorActions
     let searchPATH: @MainActor () async -> String
+    let knownPullRequest: @MainActor () -> GitPullRequest?
     @Binding var focusCommitMessage: Bool
     /// Made on appear rather than in init: the parent rebuilds this struct on every update, and a
     /// model made in init would be allocated, along with its GitClient, each time and thrown away.
@@ -167,12 +182,14 @@ private struct InspectorContent: View {
         tab: InspectorView.Tab,
         actions: InspectorActions,
         searchPATH: @escaping @MainActor () async -> String,
+        knownPullRequest: @escaping @MainActor () -> GitPullRequest?,
         focusCommitMessage: Binding<Bool>
     ) {
         self.root = root
         self.tab = tab
         self.actions = actions
         self.searchPATH = searchPATH
+        self.knownPullRequest = knownPullRequest
         _focusCommitMessage = focusCommitMessage
     }
 
@@ -181,7 +198,13 @@ private struct InspectorContent: View {
             if let models {
                 switch tab {
                 case .files: FilesTab(model: models.files, actions: actions)
-                case .changes: ChangesTab(model: models.changes, actions: actions, focusCommitMessage: $focusCommitMessage)
+                case .changes:
+                    ChangesTab(
+                        model: models.changes,
+                        actions: actions,
+                        focusCommitMessage: $focusCommitMessage,
+                        knownPullRequest: knownPullRequest()
+                    )
                 }
             } else {
                 Color.clear

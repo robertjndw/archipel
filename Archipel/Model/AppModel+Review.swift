@@ -68,8 +68,9 @@ extension AppModel {
         case .exited: true
         default: false
         }
+        // Agents push and open PRs during a turn, so don't wait out the PR cache here.
         if endedWork, let worktree = workspace.worktree(containing: id) {
-            refreshGitStatus(of: [worktree.id], lookingUpPullRequests: true)
+            refreshGitStatus(of: [worktree.id], lookingUpPullRequests: true, minimumPullRequestAge: .zero)
         }
     }
 

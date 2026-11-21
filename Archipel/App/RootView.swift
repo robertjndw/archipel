@@ -164,6 +164,7 @@ struct RootView: View {
             InspectorView(
                 root: model.selectedWorktree?.path,
                 searchPATH: { await model.toolSearchPATH() },
+                knownPullRequest: { model.selectedWorktreePullRequest },
                 focusCommitMessage: $model.focusCommitMessageRequest,
                 onOpenFile: { url, preview in model.openFile(url, preview: preview) },
                 onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) },
