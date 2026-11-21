@@ -474,9 +474,8 @@ private struct TabButtonContent: View, Equatable {
         .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("pane.tab")
-        // Before macOS 27.2 a combined element takes its activation point from the status glyph,
-        // which is where the close button appears on hover, so a click at that point (VoiceOver's
-        // or XCUITest's) closed the tab instead of selecting it.
+        // On macOS 27.0.1 the activation point lands on the status glyph, right where the close
+        // button shows up on hover, so XCUITest and VoiceOver clicks closed the tab.
         .accessibilityActivationPoint(.center)
         .accessibilityAction(.default) { model.select(tab: tab.id) }
     }

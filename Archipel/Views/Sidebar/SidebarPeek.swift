@@ -417,8 +417,8 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
         /// inside its frame is the list (or a control in the sidebar). Text
         /// editing goes through a field editor, which is never ours to take.
         ///
-        /// Before macOS 27.2 clicking a row doesn't make the list first responder, which leaves
-        /// the window itself as one. Nothing else in the window wants Space then, so that counts.
+        /// On macOS 27.0.1 clicking a row leaves the window as first responder instead of the
+        /// list. Nothing else wants Space in that case, so treat it as sidebar focus.
         private var sidebarHasKeyboardFocus: Bool {
             guard let window else { return false }
             if window.firstResponder === window { return true }
