@@ -174,4 +174,22 @@ struct SessionActivityTests {
         #expect(activity.backgroundTasks == 0)
         #expect(!activity.hasWorkInFlight)
     }
+
+    @Test func backgroundSubagentsKeepTheSpinnerAfterTheTurnEnds() {
+        var activity = SessionActivity(status: .working)
+        activity.apply(.subagentStarted(id: "a"), isBeingViewed: false)
+        activity.apply(.turnFinished(message: "done", backgroundTasks: nil), isBeingViewed: false)
+        #expect(activity.status == .finished)
+        #expect(activity.showsProgress)
+
+        // A pending request replaces the spinner while the subagent keeps running.
+        activity.apply(.attentionRequested(.permission, message: nil), isBeingViewed: false)
+        #expect(!activity.showsProgress)
+        activity.apply(.subagentActivity(id: "a"), isBeingViewed: false)
+        #expect(activity.showsProgress)
+
+        activity.apply(.subagentFinished(id: "a"), isBeingViewed: false)
+        #expect(!activity.showsProgress)
+        #expect(SessionActivity(status: .starting).showsProgress)
+    }
 }

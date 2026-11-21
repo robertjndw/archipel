@@ -3,8 +3,9 @@ import Foundation
 public struct AttentionSummary: Equatable, Sendable {
     public var needsAttention: Int
     public var unread: Int
-    /// Sessions starting up or in the middle of a turn. Not attention as such, but what tells the user
-    /// that something is still going on in a place they are not looking at.
+    /// Sessions starting up, in the middle of a turn, or waiting on background subagents. Not
+    /// attention as such, but what tells the user that something is still going on in a place
+    /// they are not looking at.
     public var working: Int
 
     public init(needsAttention: Int = 0, unread: Int = 0, working: Int = 0) {
@@ -53,7 +54,7 @@ public func attentionSummary(of sessions: [Session], activities: [Session.ID: Se
         return total + AttentionSummary(
             needsAttention: activity.needsUser ? 1 : 0,
             unread: activity.unread ? 1 : 0,
-            working: activity.status == .working || activity.status == .starting ? 1 : 0
+            working: activity.showsProgress ? 1 : 0
         )
     }
 }

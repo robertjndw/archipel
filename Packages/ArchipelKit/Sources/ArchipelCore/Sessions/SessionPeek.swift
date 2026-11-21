@@ -67,10 +67,7 @@ public enum SessionPeek {
     ) -> Session.ID? {
         let sessions = worktree.sessions
         if let id = sessions.first(where: { activities[$0.id]?.needsUser == true })?.id { return id }
-        if let id = sessions.first(where: {
-            let status = activities[$0.id]?.status
-            return status == .working || status == .starting
-        })?.id { return id }
+        if let id = sessions.first(where: { activities[$0.id]?.showsProgress == true })?.id { return id }
         if let focusedSessionID, sessions.contains(where: { $0.id == focusedSessionID }) { return focusedSessionID }
         return sessions.first(where: { isLive($0.id) })?.id ?? sessions.first?.id
     }
