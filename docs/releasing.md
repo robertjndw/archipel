@@ -166,6 +166,52 @@ Or add a `v*` tag rule under Settings > Environments > github-pages.
 appcast. If you ship releases from a fork, change both to your own, or your
 builds will update to the ones from this repo.
 
+## Homebrew
+
+Archipel is also a cask in the shared tap
+[robertjndw/homebrew-tap](https://github.com/robertjndw/homebrew-tap), in
+`Casks/archipel.rb`:
+
+```sh
+brew install --cask robertjndw/tap/archipel
+```
+
+After the DMG is built, the `homebrew` job in `release.yml` sets `version` and
+`sha256` in that file to the new release and pushes the change as
+github-actions[bot]. Nothing else in the cask is touched, so edit the rest by
+hand in the tap.
+
+- Only notarized DMGs are pushed. Homebrew quarantines what it downloads, so
+  Gatekeeper would block an ad-hoc or unnotarized build.
+- A stable release always updates the cask. A prerelease updates it only while
+  there is no stable release yet, so testers can install alphas now, but once
+  `0.1.0` is out a later beta never replaces it.
+- Without the `HOMEBREW_TAP_TOKEN` secret the job logs a warning and skips,
+  and the release still succeeds.
+- Re-running a release that is already in the cask pushes nothing.
+
+### Tap token
+
+The default workflow token can't write to another repo, so the job needs a
+fine-grained personal access token:
+
+1. GitHub > Settings > Developer settings > Personal access tokens >
+   Fine-grained tokens > Generate new token.
+2. Resource owner: robertjndw. Repository access: Only select repositories,
+   and pick only `robertjndw/homebrew-tap`.
+3. Repository permissions: Contents, Read and write. Leave everything else at
+   No access (GitHub adds Metadata read-only by itself).
+4. Set an expiration, and put a reminder in your calendar a few days before it,
+   since an expired token only shows up as a failed `homebrew` job.
+5. Add it as an Actions secret in robertjndw/archipel:
+
+   ```sh
+   gh secret set HOMEBREW_TAP_TOKEN --repo robertjndw/archipel
+   ```
+
+To renew it, generate a new token the same way and run the `gh secret set`
+command again.
+
 ## Runner
 
 The workflow runs on the `xcode-27` image (macOS 27, Xcode 27), which GitHub
