@@ -416,8 +416,13 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
         /// This view backs the sidebar's list, so a first responder that sits
         /// inside its frame is the list (or a control in the sidebar). Text
         /// editing goes through a field editor, which is never ours to take.
+        ///
+        /// On macOS 27.0.1 clicking a row leaves the window as first responder instead of the
+        /// list. Nothing else wants Space in that case, so treat it as sidebar focus.
         private var sidebarHasKeyboardFocus: Bool {
-            guard let window, let responder = window.firstResponder as? NSView, !(responder is NSText) else { return false }
+            guard let window else { return false }
+            if window.firstResponder === window { return true }
+            guard let responder = window.firstResponder as? NSView, !(responder is NSText) else { return false }
             let sidebar = convert(bounds, to: nil)
             let focused = (responder.enclosingScrollView ?? responder).convert(
                 (responder.enclosingScrollView ?? responder).bounds, to: nil)
