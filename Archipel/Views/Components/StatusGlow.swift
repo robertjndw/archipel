@@ -57,21 +57,29 @@ extension View {
 extension View {
     /// A small pop for the row's status glyph at the moment the glow's lap closes. The lap starts
     /// next to the glyph, so this ties the light to the status it is about.
-    func statusGlowLanding(_ pulse: StatusPulseCount?) -> some View {
-        modifier(StatusGlowLanding(pulse: pulse ?? StatusPulseCount()))
+    ///
+    /// Pass `pops: false` while the glyph is a spinner. The spinner is an NSProgressIndicator, and a
+    /// keyframe scale lays it out at a fractional size each frame that its constraints never agree
+    /// with. A few of those at once keep the window's layout from ever finishing, and AppKit throws.
+    func statusGlowLanding(_ pulse: StatusPulseCount?, pops: Bool = true) -> some View {
+        modifier(StatusGlowLanding(pulse: pulse ?? StatusPulseCount(), pops: pops))
     }
 }
 
 private struct StatusGlowLanding: ViewModifier {
     let pulse: StatusPulseCount
+    let pops: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Counts plays only, like `StatusGlow.plays`.
     @State private var plays = 0
 
     func body(content: Content) -> some View {
-        content
+        // Copied out because the animator's closure is Sendable and may not read the property.
+        // Checked per frame too: the glyph can turn into a spinner while a pop is still running.
+        let pops = pops
+        return content
             .keyframeAnimator(initialValue: 1.0, trigger: plays) { view, scale in
-                view.scaleEffect(scale)
+                view.scaleEffect(pops ? scale : 1)
             } keyframes: { _ in
                 LinearKeyframe(1, duration: StatusGlow.landing)
                 SpringKeyframe(1.3, duration: 0.14, spring: .snappy)
@@ -79,7 +87,7 @@ private struct StatusGlowLanding: ViewModifier {
             }
             .onChange(of: pulse.count) { old, new in
                 // With Reduce Motion there is no lap to come back from.
-                if new > old, !reduceMotion { plays += 1 }
+                if new > old, !reduceMotion, pops { plays += 1 }
             }
     }
 }

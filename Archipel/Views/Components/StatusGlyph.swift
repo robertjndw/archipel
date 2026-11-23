@@ -20,6 +20,16 @@ extension SessionStatus {
 struct StatusGlyph: View {
     let activity: SessionActivity
 
+    /// Whether the glyph for `activity` is a spinner. Keep in step with the cases in `body` that
+    /// show a `ProgressView`.
+    static func showsSpinner(_ activity: SessionActivity) -> Bool {
+        switch activity.status {
+        case .starting, .working: true
+        case .finished: activity.isBusy
+        default: false
+        }
+    }
+
     var body: some View {
         Group {
             switch activity.status {

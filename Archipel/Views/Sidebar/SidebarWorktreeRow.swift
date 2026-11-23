@@ -59,7 +59,7 @@ struct SidebarWorktreeRow: View {
                     .animation(reduceMotion ? nil : Motion.hover, value: isHovered)
                     // Out here and not on the glyph: the glyph often only appears with the change
                     // that starts the glow, and a view that new would miss it.
-                    .statusGlowLanding(model.statusPulses[worktree.id])
+                    .statusGlowLanding(model.statusPulses[worktree.id], pops: !showsSpinner)
             }
             if !sessions.isEmpty {
                 VStack(spacing: 0) {
@@ -80,6 +80,11 @@ struct SidebarWorktreeRow: View {
     }
 
     private var isMissing: Bool { model.missingWorktrees.contains(worktree.id) }
+
+    private var showsSpinner: Bool {
+        guard case .status(let activity) = content.trailing else { return false }
+        return StatusGlyph.showsSpinner(activity)
+    }
 
     /// The agent's logo when one session runs here, otherwise what the worktree is: a branch or a
     /// plain folder. Logos keep their own color; the glyphs take the project's.
