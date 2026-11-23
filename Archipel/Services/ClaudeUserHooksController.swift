@@ -5,9 +5,9 @@ import Observation
 /// Installs and maintains Archipel's opt-in hook entries in the user's own Claude settings, so a
 /// Claude typed by hand into a shell tab reports to the app.
 ///
-/// The entries point at a symlink in the support directory rather than into the app bundle, so
-/// moving or updating the app does not leave a stale path in a file the user owns. The link is
-/// repointed at launch while the setting is on.
+/// The entries point at the `HelperLink` in the support directory rather than into the app bundle,
+/// so moving or updating the app does not leave a stale path in a file the user owns. The link is
+/// repointed at launch while the setting is on, and stays when it is off since Codex uses it too.
 @Observable
 final class ClaudeUserHooksController {
     enum State: Equatable {
@@ -22,17 +22,16 @@ final class ClaudeUserHooksController {
     /// Where the entries live. Nil until the login shell has been asked for CLAUDE_CONFIG_DIR.
     private(set) var settingsFile: URL?
 
-    @ObservationIgnored private let link: URL
-    @ObservationIgnored private let bundledHelper: URL
+    @ObservationIgnored private let helperLink: HelperLink
+    @ObservationIgnored private var link: URL { helperLink.url }
     @ObservationIgnored private let socketURL: URL
     @ObservationIgnored private let settings: AppSettings
     /// Chains operations so a toggle during the launch refresh can't interleave with it and leave
     /// the file half-written.
     @ObservationIgnored private var lastOperation: Task<Void, Never>?
 
-    init(supportDirectory: URL, bundledHelper: URL, socketURL: URL, settings: AppSettings) {
-        link = supportDirectory.appending(path: "bin", directoryHint: .isDirectory).appending(path: "archipel-hook")
-        self.bundledHelper = bundledHelper
+    init(helperLink: HelperLink, socketURL: URL, settings: AppSettings) {
+        self.helperLink = helperLink
         self.socketURL = socketURL
         self.settings = settings
         settingsFile = settings.claudeUserHooksFilePath.map { URL(fileURLWithPath: $0) }
@@ -48,10 +47,10 @@ final class ClaudeUserHooksController {
                 return
             }
             let (file, isRemembered) = await targetFile()
-            let (link, helper, socket) = (link, bundledHelper, socketURL)
+            let (link, helperLink, socket) = (link, helperLink, socketURL)
             let result = await Task.detached { () -> Result<ClaudeUserHooks.Status, Error> in
                 Result {
-                    try Self.refreshLink(link, pointingAt: helper)
+                    try helperLink.refresh()
                     return try ClaudeUserHooks.status(file: file, link: link, socket: socket)
                 }
             }.value
@@ -113,7 +112,7 @@ final class ClaudeUserHooksController {
     }
 
     private var isTranslocated: Bool {
-        bundledHelper.path.contains("/AppTranslocation/")
+        helperLink.bundledHelper.path.contains("/AppTranslocation/")
     }
 
     private func refreshState() async {
@@ -133,16 +132,15 @@ final class ClaudeUserHooksController {
     /// Returns whether the file ended up as asked.
     @discardableResult
     private func apply(install: Bool, file: URL, alsoRemoveFrom old: URL? = nil) async -> Bool {
-        let (link, helper, socket) = (link, bundledHelper, socketURL)
+        let (link, helperLink, socket) = (link, helperLink, socketURL)
         let result = await Task.detached { () -> Result<ClaudeUserHooks.Status, Error> in
             Result {
                 if let old { try? ClaudeUserHooks.uninstall(file: old, link: link) }
                 if install {
-                    try Self.refreshLink(link, pointingAt: helper)
+                    try helperLink.refresh()
                     try ClaudeUserHooks.install(file: file, link: link, socket: socket)
                 } else {
                     try ClaudeUserHooks.uninstall(file: file, link: link)
-                    try? FileManager.default.removeItem(at: link)
                 }
                 return try ClaudeUserHooks.status(file: file, link: link, socket: socket)
             }
@@ -190,21 +188,5 @@ final class ClaudeUserHooksController {
         )
         if settingsFile != file { settingsFile = file }
         return file
-    }
-
-    /// Creates or repoints the stable link. Renaming a temporary link over it is atomic, so a
-    /// running Claude never finds the helper missing.
-    private nonisolated static func refreshLink(_ link: URL, pointingAt helper: URL) throws {
-        let manager = FileManager.default
-        try manager.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if (try? manager.destinationOfSymbolicLink(atPath: link.path)) == helper.path { return }
-
-        let temporary = link.deletingLastPathComponent().appending(path: ".archipel-hook-\(UUID().uuidString)")
-        try manager.createSymbolicLink(atPath: temporary.path, withDestinationPath: helper.path)
-        if rename(temporary.path, link.path) != 0 {
-            let code = errno
-            try? manager.removeItem(at: temporary)
-            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
-        }
     }
 }

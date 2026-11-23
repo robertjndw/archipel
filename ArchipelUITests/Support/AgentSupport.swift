@@ -141,6 +141,78 @@ extension Sandbox {
     }
 }
 
+/// A stand-in for Codex with trusted hooks, driven through files in the sandbox.
+struct CodexHooksStub {
+    fileprivate let root: URL
+    fileprivate let name: String
+
+    /// Makes the stub report a permission request, as Codex does before a command that needs approval.
+    func ask() throws { try Data().write(to: root.appending(path: "\(name)-ask")) }
+    /// Makes the stub finish its turn.
+    func finishTurn() throws { try Data().write(to: root.appending(path: "\(name)-finish")) }
+}
+
+extension Sandbox {
+    /// A `codex` that reports through hooks the way a trusted Codex does: it runs the stable
+    /// `archipel-hook` link with `event codex-hooks` and the payload on standard input. It sends
+    /// SessionStart at once, then a PermissionRequest on `ask()` and a Stop on `finishTurn()`.
+    func installCodexHooksStub(named name: String) throws -> CodexHooksStub {
+        let stub = CodexHooksStub(root: root, name: name)
+        let hook = support.appending(path: "bin/archipel-hook").path
+        let script = """
+            #!/bin/sh
+            send() { printf '%s' "$1" | '\(hook)' event codex-hooks; }
+            send '{"session_id":"codex-stub-1","hook_event_name":"SessionStart","source":"startup"}'
+            while [ ! -e '\(root.path)/\(name)-ask' ]; do sleep 0.2; done
+            send '{"session_id":"codex-stub-1","turn_id":"t1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}'
+            while [ ! -e '\(root.path)/\(name)-finish' ]; do sleep 0.2; done
+            send '{"session_id":"codex-stub-1","turn_id":"t1","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Done."}'
+            while :; do sleep 1; done
+
+            """
+        let executable = bin.appending(path: name)
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        return stub
+    }
+}
+
+/// A stand-in for OpenCode with Archipel's plugin loaded, driven through files in the sandbox.
+struct OpenCodeStub {
+    fileprivate let root: URL
+    fileprivate let name: String
+
+    /// Makes the stub report a permission request.
+    func ask() throws { try Data().write(to: root.appending(path: "\(name)-ask")) }
+    /// Makes the stub finish its turn.
+    func finishTurn() throws { try Data().write(to: root.appending(path: "\(name)-finish")) }
+}
+
+extension Sandbox {
+    /// An `opencode` that reports the way the plugin does: `$ARCHIPEL_HOOK_BIN event opencode` with
+    /// the payload on standard input. It sends started and busy at once, then a permission request
+    /// on `ask()` and idle on `finishTurn()`.
+    func installOpenCodeStub(named name: String) throws -> OpenCodeStub {
+        let stub = OpenCodeStub(root: root, name: name)
+        let script = """
+            #!/bin/sh
+            send() { printf '%s' "$1" | "$ARCHIPEL_HOOK_BIN" event opencode; }
+            send '{"event":"started","opencodeSessionID":"ses_stub","running":false}'
+            send '{"event":"busy","opencodeSessionID":"ses_stub"}'
+            while [ ! -e '\(root.path)/\(name)-ask' ]; do sleep 0.2; done
+            send '{"event":"permission","opencodeSessionID":"ses_stub","action":"bash","resources":["ls"]}'
+            while [ ! -e '\(root.path)/\(name)-finish' ]; do sleep 0.2; done
+            send '{"event":"idle","opencodeSessionID":"ses_stub"}'
+            while :; do sleep 1; done
+
+            """
+        let executable = bin.appending(path: name)
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        return stub
+    }
+}
+
 extension Session {
     static func claude(_ title: String = "Claude Code") -> Session {
         Session(title: title, agent: .claude)

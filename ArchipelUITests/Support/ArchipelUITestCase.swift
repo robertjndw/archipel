@@ -177,6 +177,28 @@ class ArchipelUITestCase: XCTestCase {
         shown?.click()
     }
 
+    // MARK: Settings
+
+    /// Selects one agent in the list of Settings > Agents, which shows its settings beside the
+    /// list. Its header switch only exists for the selected agent, so that is what is waited for.
+    func selectAgent(
+        _ id: String,
+        named name: String,
+        in settingsWindow: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let row = settingsWindow.descendants(matching: .any).matching(identifier: "settings.agents.\(id).row").firstMatch
+        assertExists(row, "Settings > Agents should list \(name).", file: file, line: line)
+        row.click()
+        assertExists(
+            settingsWindow.switches["settings.agents.\(id).enabled"],
+            "Selecting \(name) should show its settings.",
+            file: file,
+            line: line
+        )
+    }
+
     // MARK: Waiting
 
     /// Polls for something outside the app's interface, such as the state of a repository or the

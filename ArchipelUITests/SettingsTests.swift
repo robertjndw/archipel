@@ -55,6 +55,41 @@ final class SettingsTests: ArchipelUITestCase {
         return bounce
     }
 
+    func testADisabledAgentLeavesTheNewSessionMenuAndStaysOut() throws {
+        try launch()
+        let newCodexSession = menuItem("File", "New Codex Session")
+        XCTAssertTrue(fileMenuShows(newCodexSession), "Every agent starts out in File > New Session.")
+
+        app.typeKey(",", modifierFlags: .command)
+        assertExists(settingsWindow, "⌘, should open Settings.")
+        settingsWindow.toolbars.buttons["Agents"].click()
+        waitUntil("Settings shows Agents") { self.settingsWindow.title == "Agents" }
+        selectAgent("codex", named: "Codex", in: settingsWindow)
+        let enabled = settingsWindow.switches["settings.agents.codex.enabled"]
+        XCTAssertEqual(enabled.value as? Int, 1, "Codex should start out enabled.")
+        enabled.click()
+        waitUntil("Codex is switched off") { enabled.value as? Int == 0 }
+        app.typeKey("w", modifierFlags: .command)
+        assertGone(settingsWindow, "⌘W should close Settings.")
+
+        XCTAssertFalse(fileMenuShows(newCodexSession), "A disabled agent should not be offered by File > New Session.")
+        XCTAssertTrue(fileMenuShows(menuItem("File", "New Claude Code Session")), "The other agents should stay in the menu.")
+
+        try launch(keepingState: true)
+        XCTAssertFalse(fileMenuShows(newCodexSession), "Disabling an agent should survive a relaunch.")
+    }
+
+    /// Opens the File menu to look for an item, then closes it again. SwiftUI fills in the menu as
+    /// it opens, so its items are only reliable while it is shown.
+    private func fileMenuShows(_ item: XCUIElement) -> Bool {
+        let bar = app.menuBars.menuBarItems["File"]
+        bar.click()
+        assertExists(bar.menuItems["Add Project…"], "The File menu should open.")
+        let shown = item.exists
+        app.typeKey(.escape, modifierFlags: [])
+        return shown
+    }
+
     func testChoosingStatusBarItems() throws {
         try launch()
         let usage = mainWindow.descendants(matching: .any)["statusBar.usage"]

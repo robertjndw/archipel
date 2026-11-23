@@ -24,6 +24,8 @@ public struct HookMessage: Equatable, Sendable {
     /// Subscription limits, from Claude's status line. Never set together with an event.
     public var usage: ProviderUsage?
     public var origin: HookOrigin
+    /// The envelope's source, which says which of an adapter's hook configurations sent it.
+    public var source: String?
     public var lifecycle: HookLifecycle?
     /// The processes above the hook helper, its parent first, so the app can tell which Claude sent
     /// it. Only hooks from the user's settings carry them, and older helpers send none.
@@ -39,6 +41,7 @@ public struct HookMessage: Equatable, Sendable {
         usage: ProviderUsage? = nil,
         context: SessionContext? = nil,
         origin: HookOrigin = .launch,
+        source: String? = nil,
         lifecycle: HookLifecycle? = nil,
         ancestorPIDs: [Int32] = []
     ) {
@@ -48,6 +51,7 @@ public struct HookMessage: Equatable, Sendable {
         self.usage = usage
         self.context = context
         self.origin = origin
+        self.source = source
         self.lifecycle = lifecycle
         self.ancestorPIDs = ancestorPIDs
     }
@@ -83,6 +87,8 @@ public enum HookServerError: Error, Equatable, CustomStringConvertible {
 public final class HookServer: Sendable {
     public let socketURL: URL
     public let messages: AsyncStream<HookMessage>
+    /// Decides which adapter reads an envelope, by its `source`.
+    public let registry: AgentRegistry
 
     private enum State {
         case idle
@@ -104,12 +110,13 @@ public final class HookServer: Sendable {
     private let state = Mutex<State>(.idle)
     private let limits: Limits
 
-    public convenience init(socketURL: URL) {
-        self.init(socketURL: socketURL, limits: Limits())
+    public convenience init(socketURL: URL, registry: AgentRegistry = .builtIn) {
+        self.init(socketURL: socketURL, limits: Limits(), registry: registry)
     }
 
-    init(socketURL: URL, limits: Limits) {
+    init(socketURL: URL, limits: Limits, registry: AgentRegistry = .builtIn) {
         self.socketURL = socketURL
+        self.registry = registry
         self.limits = limits
         (messages, continuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
     }
@@ -130,9 +137,10 @@ public final class HookServer: Sendable {
             let continuation = self.continuation
             let queue = self.queue
             let limits = self.limits
+            let registry = self.registry
             let clients = Clients()
             source.setEventHandler {
-                Self.acceptPending(on: fd, queue: queue, clients: clients, limits: limits, continuation: continuation)
+                Self.acceptPending(on: fd, queue: queue, clients: clients, limits: limits, registry: registry, continuation: continuation)
             }
             source.setCancelHandler { close(fd) }
             source.resume()
@@ -219,6 +227,7 @@ public final class HookServer: Sendable {
         queue: DispatchQueue,
         clients: Clients,
         limits: Limits,
+        registry: AgentRegistry,
         continuation: AsyncStream<HookMessage>.Continuation
     ) {
         while true {
@@ -244,7 +253,7 @@ public final class HookServer: Sendable {
             _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
             clients.open += 1
             let connection = Connection(fd: fd, queue: queue, clients: clients) { line in
-                if let message = decodeEnvelope(line) {
+                if let message = decodeEnvelope(line, registry: registry) {
                     continuation.yield(message)
                 }
             }
@@ -252,22 +261,14 @@ public final class HookServer: Sendable {
         }
     }
 
-    static func decodeEnvelope(_ line: Data, receivedAt date: Date = .now) -> HookMessage? {
+    static func decodeEnvelope(_ line: Data, receivedAt date: Date = .now, registry: AgentRegistry = .builtIn) -> HookMessage? {
         guard
             let envelope = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
             let session = (envelope["session"] as? String).flatMap(UUID.init(uuidString:)),
-            let payload = envelope["payload"] as? [String: Any]
+            let payload = envelope["payload"] as? [String: Any],
+            let source = envelope["source"] as? String,
+            let decoded = HookDecoder.decode(source: source, payload: payload, receivedAt: date, registry: registry)
         else { return nil }
-        // Not a hook: the status line runs on every redraw and carries no event, only the limits and
-        // the context window. API key accounts get no limits but still get the context.
-        if envelope["source"] as? String == "claude-statusline" {
-            let usage = UsageDecoder.claudeStatusLine(payload, at: date)
-            let context = UsageDecoder.claudeContext(payload)
-            guard usage != nil || context != nil else { return nil }
-            return HookMessage(sessionID: session, event: nil, agentSessionID: nil, usage: usage, context: context)
-        }
-        guard let source = (envelope["source"] as? String).flatMap(HookSource.init(rawValue:)) else { return nil }
-        let decoded = HookDecoder.decode(source: source, payload: payload)
         // Older helpers send no origin. Treat a missing or unknown one as `.launch`, which the app
         // only acts on for sessions it launched.
         let origin = (envelope["origin"] as? String).flatMap(HookOrigin.init(rawValue:)) ?? .launch
@@ -275,8 +276,11 @@ public final class HookServer: Sendable {
             sessionID: session,
             event: decoded.event,
             agentSessionID: decoded.agentSessionID,
+            usage: decoded.usage,
+            context: decoded.context,
             origin: origin,
-            lifecycle: HookDecoder.lifecycle(source: source, payload: payload),
+            source: source,
+            lifecycle: decoded.lifecycle,
             ancestorPIDs: ((envelope["ancestorPIDs"] as? [Any]) ?? []).compactMap { ($0 as? Int).flatMap(Int32.init(exactly:)) }
         )
     }

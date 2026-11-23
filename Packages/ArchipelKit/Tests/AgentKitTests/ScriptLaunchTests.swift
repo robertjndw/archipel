@@ -86,7 +86,7 @@ struct ScriptLaunchTests {
     }
 
     @Test func agentLaunchesCanCarryTheWorktreeVariables() {
-        let command = AgentDefinition.shell.launchCommand(for: context).adding(worktree)
+        let command = ShellAdapter().launchCommand(for: context).adding(worktree)
         #expect(command.arguments == ["-l"])
         #expect(command.environment["ARCHIPEL_WORKTREE_PATH"] != nil)
         #expect(command.environment["ARCHIPEL_SESSION_ID"] == sessionID.uuidString)

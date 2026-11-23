@@ -101,9 +101,10 @@ final class LaunchPresetTests: ArchipelUITestCase {
         openAgentSettings()
         let add = settingsWindow.buttons.matching(identifier: "settings.presets.claude.add").element(boundBy: 0)
         assertExists(add, "Claude Code's presets should have an Add button.")
-        // The Agents pane can be taller than the screen.
+        // Claude's settings can be taller than the pane, which then scrolls.
+        let form = settingsWindow.scrollViews.containing(.button, identifier: "settings.presets.claude.add").element(boundBy: 0)
         for _ in 0..<10 where !add.isHittable {
-            settingsWindow.scrollViews.element(boundBy: 0).scroll(byDeltaX: 0, deltaY: -200)
+            form.scroll(byDeltaX: 0, deltaY: -200)
         }
         let presetArguments = settingsWindow.textFields.matching(identifier: "settings.presets.claude.arguments")
         let seeded = presetArguments.count
@@ -114,8 +115,12 @@ final class LaunchPresetTests: ArchipelUITestCase {
         let toggleDefault = settingsWindow.buttons.matching(identifier: "settings.presets.claude.toggleDefault").element(boundBy: 0)
         waitUntil("Set as Default is offered for the new preset") { toggleDefault.isEnabled && toggleDefault.label == "Set as Default" }
         toggleDefault.click()
-        // SwiftUI's Table reports itself as an outline.
-        let badge = settingsWindow.outlines.staticTexts.matching(NSPredicate(format: "value == %@", "Default")).element(boundBy: 0)
+        // SwiftUI's Table reports itself as an outline. The presets table is the one with argument
+        // fields, in case another outline ever shows the same word.
+        let badge = settingsWindow.outlines
+            .containing(.textField, identifier: "settings.presets.claude.arguments")
+            .staticTexts.matching(NSPredicate(format: "value == %@", "Default"))
+            .element(boundBy: 0)
         assertExists(badge, "The default preset should be marked in the table.")
 
         let added = presetArguments.element(boundBy: seeded)
@@ -192,5 +197,6 @@ final class LaunchPresetTests: ArchipelUITestCase {
         assertExists(settingsWindow, "⌘, should open Settings.")
         settingsWindow.toolbars.buttons["Agents"].click()
         waitUntil("Settings shows Agents") { self.settingsWindow.title == "Agents" }
+        selectAgent("claude", named: "Claude Code", in: settingsWindow)
     }
 }

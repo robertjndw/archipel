@@ -2,99 +2,341 @@ import AgentKit
 import AppKit
 import SwiftUI
 
+/// The agents in a list on the left, grouped into on and off, and the selected one's settings on
+/// the right. Wider than the other panes, since it is two columns.
 struct AgentSettingsView: View {
     @Environment(AppModel.self) private var model
-    private let agents = AgentDefinition.builtIns.filter { $0.id != AgentDefinition.shell.id }
+    @AppStorage("settings.selectedAgent") private var storedSelection = ""
 
     var body: some View {
-        @Bindable var settings = model.settings
-        Form {
-            Section {
-                Picker(selection: $settings.defaultAgentID) {
-                    ForEach(AgentDefinition.builtIns) { agent in
-                        // Still selectable: the agent may be installed later, and its section below
-                        // says where it was looked for.
-                        Label(
-                            model.isInstalled(agent) ? agent.displayName : "\(agent.displayName) (Not Installed)",
-                            symbol: agent.symbolName
-                        )
-                        .tag(agent.id)
-                    }
-                } label: {
-                    Text("Default agent")
-                    Text("Started by New Session (⌘T) and the plus button.")
-                }
-            }
-
-            ForEach(agents) { agent in
-                AgentSection(agent: agent, showsFooter: agent.id == agents.last?.id)
+        HStack(spacing: 0) {
+            // No divider: the toolbar above has no separator for a line to meet, and the cards
+            // on the right already set the detail apart from the list.
+            AgentList(selection: selection)
+                .frame(width: 210)
+            if let agent = selectedAgent {
+                AgentDetails(agent: agent)
+                    // A fresh form per agent, so the scroll position and the presets table's
+                    // selection don't carry over to the next one.
+                    .id(agent.id)
+                    .frame(maxWidth: .infinity)
             }
         }
-        .formStyle(.grouped)
+    }
+
+    /// The stored id can name an agent that no longer exists, or nothing yet. The default agent
+    /// is the one worth showing first then.
+    private var selectedAgent: (any AgentAdapter)? {
+        model.agentRegistry.adapter(id: storedSelection) ?? model.defaultAgent
+    }
+
+    private var selection: Binding<String?> {
+        Binding(
+            get: { selectedAgent?.id },
+            // The list clears its selection on a click into empty space. Keep the agent shown.
+            set: { id in if let id { storedSelection = id } }
+        )
     }
 }
 
-private struct AgentSection: View {
+/// How the list groups the agents. A missing executable is not a group of its own: the agent is
+/// still on, and its row and details say what is wrong.
+private enum AgentGroup: CaseIterable {
+    case on, off
+
+    var title: String {
+        switch self {
+        case .on: "On"
+        case .off: "Off"
+        }
+    }
+}
+
+/// The list never becomes first responder, so its selection stays the quiet gray of an inactive
+/// list instead of the accent fill, the way the reference sidebars look. It is still a real List
+/// selection for VoiceOver; the arrow keys go through the focusable wrapper instead.
+private struct AgentList: View {
     @Environment(AppModel.self) private var model
-    let agent: AgentDefinition
-    /// The arguments note is the same for every agent, so only the last section shows it.
-    let showsFooter: Bool
-    /// Nil while the login PATH is still being resolved.
-    @State private var location: String??
+    @Binding var selection: String?
+    @FocusState private var isFocused: Bool
 
     var body: some View {
-        Section {
-            LabeledContent("Executable") {
-                switch location {
-                case .none:
-                    ProgressView().controlSize(.small)
-                case .some(.some(let path)):
-                    Label {
-                        Text(URL(filePath: path).abbreviatedPath)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                    } icon: {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        List(selection: $selection) {
+            ForEach(groups, id: \.group) { group in
+                Section {
+                    ForEach(group.agents, id: \.id) { agent in
+                        AgentListRow(agent: agent)
+                            .tag(agent.id)
                     }
-                    .foregroundStyle(.secondary)
-                    .help(path)
-                case .some(.none):
-                    Label {
-                        Text("\(agent.executableName) not found on your PATH")
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                } header: {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(group.group.title)
+                        Spacer()
+                        Text(group.agents.count, format: .number)
+                            .monospacedDigit()
                     }
-                    .foregroundStyle(.secondary)
-                }
-            }
-            if agent.acceptsPrompts {
-                PresetsEditor(agent: agent)
-            }
-            if agent.id == AgentDefinition.claude.id {
-                ShellHooksRows(controller: model.claudeUserHooks)
-            }
-        } header: {
-            Label(agent.displayName, symbol: agent.symbolName)
-        } footer: {
-            if showsFooter || agent.id == AgentDefinition.claude.id {
-                VStack(alignment: .leading, spacing: 6) {
-                    if agent.id == AgentDefinition.claude.id {
-                        Text("Gives a Claude you start in a shell tab the same status as one Archipel starts. Adds hooks to your Claude settings.json that only run inside Archipel and leaves your other settings alone. Applies to Claude started after you turn this on.")
-                    }
-                    if showsFooter { sharedFooter }
+                    // A sidebar list lays its headers out wider than its rows, by the selection's
+                    // inset. Taking that back ends the count where the rows' dots end.
+                    .padding(.trailing, AgentListRow.trailingInset + 12)
+                    .accessibilityElement(children: .combine)
                 }
             }
         }
-        .task {
-            let path = await model.toolSearchPATH()
-            location = .some(LoginEnvironment.locate(agent.executableName, inPATH: path))
+        .listStyle(.sidebar)
+        // One surface for the whole window: the list sits on the pane's background, not its own.
+        .scrollContentBackground(.hidden)
+        .focusable(false)
+        .accessibilityIdentifier("settings.agents.list")
+        .focusable()
+        .focusEffectDisabled()
+        .focused($isFocused)
+        .onMoveCommand(perform: move)
+        // A click selects through the table, which can't take focus, so the keys follow it here.
+        .onChange(of: selection) { isFocused = true }
+    }
+
+    /// Only the groups that have agents, in the order the list shows them.
+    private var groups: [(group: AgentGroup, agents: [any AgentAdapter])] {
+        AgentGroup.allCases.compactMap { group in
+            let agents = model.agentRegistry.adapters.filter {
+                model.settings.isEnabled($0.id) == (group == .on)
+            }
+            return agents.isEmpty ? nil : (group, agents)
         }
     }
 
-    @ViewBuilder private var sharedFooter: some View {
-        Text("New Session (⌘T) uses the agent's default preset, or no extra arguments if it has none. Quote values that contain spaces.")
-        Text("All presets show up under File > New Session with Preset, and the first nine get ⌃⌘1 to ⌃⌘9. A session started from one keeps its arguments even if you edit the preset later.")
+    private func move(_ direction: MoveCommandDirection) {
+        let ids = groups.flatMap { $0.agents.map(\.id) }
+        guard let current = selection.flatMap(ids.firstIndex(of:)) else { return }
+        switch direction {
+        case .up where current > ids.startIndex: selection = ids[current - 1]
+        case .down where current < ids.endIndex - 1: selection = ids[current + 1]
+        default: break
+        }
+    }
+}
+
+private struct AgentListRow: View {
+    @Environment(AppModel.self) private var model
+    let agent: any AgentAdapter
+
+    /// What the row's content keeps clear of the selection's trailing edge, shared with the
+    /// section headers so their counts end where the dots do.
+    static let trailingInset: CGFloat = 2
+
+    var body: some View {
+        let isEnabled = model.settings.isEnabled(agent.id)
+        HStack(spacing: 8) {
+            Image(symbol: agent.symbolName)
+                .font(.system(size: 15))
+                // A fixed, centered frame so the names line up whatever the symbol's width.
+                .frame(width: 20, alignment: .center)
+                // The logos are multicolor, so only dropping the colour makes an off one gray.
+                .saturation(isEnabled ? 1 : 0)
+            Text(agent.displayName)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if isEnabled {
+                Circle()
+                    .fill(model.isInstalled(agent) ? Color.green : Color.orange)
+                    .frame(width: 6, height: 6)
+                    .padding(.trailing, Self.trailingInset)
+                    .accessibilityHidden(true)
+            }
+        }
+        .foregroundStyle(isEnabled ? .primary : .secondary)
+        .accessibilityElement(children: .combine)
+        // The dot is colour only, so VoiceOver hears the status in words.
+        .accessibilityValue(!isEnabled ? "Off" : model.isInstalled(agent) ? "On" : "On, not installed")
+        .accessibilityIdentifier("settings.agents.\(agent.id).row")
+    }
+}
+
+/// Everything about one agent: a card with its switch, executable and default, then its presets
+/// and whatever its adapter asks for. An agent that is off keeps all of it editable, so its
+/// presets can be set up before it is turned on.
+private struct AgentDetails: View {
+    @Environment(AppModel.self) private var model
+    let agent: any AgentAdapter
+
+    var body: some View {
+        Form {
+            Section {
+                header
+                ExecutableRow(agent: agent)
+                LabeledContent("Default") {
+                    if isDefault {
+                        Text("Default agent")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // makeDefault turns an agent that is off back on.
+                        Button("Make Default") { model.makeDefault(agent) }
+                            .accessibilityIdentifier("settings.agents.\(agent.id).makeDefault")
+                    }
+                }
+            } footer: {
+                Text(isEnabled
+                    ? "New Session (⌘T) and the plus button start the default agent."
+                    : "Agents that are off leave the New Session menus. Sessions already open keep running.")
+            }
+
+            if agent.capabilities.acceptsPrompts {
+                Section {
+                    PresetsEditor(agent: agent)
+                } footer: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("New Session (⌘T) uses the agent's default preset, or no extra arguments if it has none. Quote values that contain spaces.")
+                        Text("All presets show up under File > New Session with Preset, and the first nine get ⌃⌘1 to ⌃⌘9. A session started from one keeps its arguments even if you edit the preset later.")
+                    }
+                }
+            }
+
+            ForEach(agent.capabilities.settingsSections, id: \.self) { section in
+                settingsSection(section)
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    private var isEnabled: Bool { model.settings.isEnabled(agent.id) }
+    private var isDefault: Bool { isEnabled && model.defaultAgent.id == agent.id }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(symbol: agent.symbolName)
+                .font(.system(size: 28))
+                // Barely wider than the symbol, so it lines up with the row labels below it.
+                .frame(width: 30)
+                .saturation(isEnabled ? 1 : 0)
+                .foregroundStyle(isEnabled ? .primary : .secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(agent.displayName)
+                    .font(.title3.weight(.semibold))
+                Text(statusLine)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 8)
+            Toggle("Show \(agent.displayName) in New Session menus", isOn: enabled)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .disabled(!model.canDisable(agent))
+                .help(model.canDisable(agent) ? "" : "At least one agent stays in the New Session menus.")
+                .accessibilityIdentifier("settings.agents.\(agent.id).enabled")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var statusLine: String {
+        guard isEnabled else { return "Off" }
+        var parts = ["On"]
+        if isDefault { parts.append("default agent") }
+        if !model.isInstalled(agent) { parts.append("not installed") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var enabled: Binding<Bool> {
+        Binding(
+            get: { model.settings.isEnabled(agent.id) },
+            set: { model.setEnabled($0, for: agent) }
+        )
+    }
+
+    @ViewBuilder private func settingsSection(_ section: AgentSettingsSection) -> some View {
+        switch section {
+        case .claudeShellHooks:
+            Section {
+                ShellHooksRows(controller: model.claudeUserHooks)
+            } footer: {
+                Text("Gives a Claude you start in a shell tab the same status as one Archipel starts. Adds hooks to your Claude settings.json that only run inside Archipel and leaves your other settings alone. Applies to Claude started after you turn this on.")
+            }
+        case .codexHooksStatus:
+            Section { CodexHooksStatusRows() }
+        case .openCodeIntegration:
+            OpenCodeIntegrationRows()
+        }
+    }
+}
+
+/// Where the agent is started from: found on the login PATH, or a file the user picked because
+/// it lives somewhere the PATH does not reach.
+private struct ExecutableRow: View {
+    @Environment(AppModel.self) private var model
+    let agent: any AgentAdapter
+    /// Nil while the login PATH is still being resolved.
+    @State private var location: ExecutableLocation?
+
+    private var chosenPath: String? { model.settings.executablePath(for: agent.id) }
+
+    var body: some View {
+        LabeledContent("Executable") {
+            HStack(spacing: 8) {
+                value
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("settings.agents.\(agent.id).executable")
+                Button("Choose…", action: choose)
+                if chosenPath != nil {
+                    Button("Use PATH") { model.setExecutablePath(nil, for: agent) }
+                        .help("Look for \(agent.executableName) on your PATH again")
+                }
+            }
+        }
+        .task(id: chosenPath) {
+            location = await model.locate(agent)
+        }
+    }
+
+    @ViewBuilder private var value: some View {
+        switch location {
+        case nil:
+            Text("Looking for \(agent.executableName)…")
+                .foregroundStyle(.secondary)
+        case .onPATH(let path), .chosen(let path):
+            Text(URL(filePath: path).abbreviatedPath)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .help(path)
+        case .chosenMissing(let path):
+            Text("Chosen file is missing")
+                .foregroundStyle(.orange)
+                .help(path)
+        case .notOnPATH:
+            Text("Not found on your PATH")
+                .foregroundStyle(.orange)
+                .help("Looked for \(agent.executableName) on your login shell's PATH")
+        }
+    }
+
+    /// An open panel rather than `fileImporter`: agents are usually installed as symlinks into a
+    /// versioned folder, and the panel must keep the link, not pin the version it points at today.
+    /// Hidden folders are shown since `~/.local/bin` and friends are where they tend to live.
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = false
+        panel.showsHiddenFiles = true
+        panel.treatsFilePackagesAsDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose the \(agent.displayName) executable."
+        let current = location?.path ?? chosenPath
+        panel.directoryURL = current.map { URL(filePath: $0).deletingLastPathComponent() }
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            model.setExecutablePath(url.path, for: agent)
+        }
+    }
+}
+
+extension AppModel {
+    fileprivate func locate(_ agent: any AgentAdapter) async -> ExecutableLocation {
+        let path = await toolSearchPATH()
+        return Self.locateExecutable(agent, override: settings.executablePath(for: agent.id), inPATH: path)
     }
 }
 
@@ -178,7 +420,7 @@ private struct ShellHooksRows: View {
 /// Settings. The settings keep every agent's presets in one array, so edits go through the ids.
 private struct PresetsEditor: View {
     @Environment(AppModel.self) private var model
-    let agent: AgentDefinition
+    let agent: any AgentAdapter
     @State private var selection: Set<LaunchPreset.ID> = []
 
     private var presets: [LaunchPreset] {
@@ -253,7 +495,7 @@ private struct PresetsEditor: View {
     }
 
     private var prompt: String {
-        agent.id == AgentDefinition.claude.id ? "--model opus" : "--model gpt-5"
+        agent.capabilities.presetPlaceholder
     }
 
     /// Grows with the rows up to seven so no row is cut in half by the button bar. Past that
@@ -312,33 +554,22 @@ private struct PresetsEditor: View {
     }
 }
 
+
 #if DEBUG
 #Preview("Agents") {
     AgentSettingsView()
         .environment(AppModel.preview())
-        // The size the Settings window gives each pane.
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(width: 540)
+        // The size the Settings window gives this pane.
+        .frame(width: 720, height: 540)
 }
 
-#Preview("No presets") {
+#Preview("Codex off, OpenCode missing") {
     let model = AppModel.preview()
-    model.settings.launchPresets = []
+    model.setEnabled(false, for: CodexAdapter())
+    // A chosen file that isn't there, so OpenCode shows as not installed once the lookup ends.
+    model.setExecutablePath("/nonexistent/opencode", for: OpenCodeAdapter())
     return AgentSettingsView()
         .environment(model)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(width: 540)
-}
-
-#Preview("Presets") {
-    let model = AppModel.preview()
-    let plan = LaunchPreset(agentID: AgentDefinition.claude.id, name: "Plan", arguments: "--model opus --permission-mode plan")
-    let mini = LaunchPreset(agentID: AgentDefinition.codex.id, name: "Mini", arguments: "--model gpt-5-mini")
-    model.settings.launchPresets = LaunchPreset.defaults + [plan, mini]
-    model.settings.setDefaultPreset(plan.id, for: AgentDefinition.claude.id)
-    return AgentSettingsView()
-        .environment(model)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(width: 540)
+        .frame(width: 720, height: 540)
 }
 #endif

@@ -4,6 +4,7 @@
 //   Codex:       archipel-hook codex-notify <json>  (payload appended as the last argument)
 //   Claude Code: archipel-hook statusline           (status line input on stdin)
 //   Claude Code: archipel-hook user-settings <socket>  (entry in the user's own settings, stdin)
+//   Any agent:   archipel-hook event <source>      (payload on stdin, sent with that source)
 //
 // As a hook this runs inside the agent's hook machinery, so it must never print to stdout (Claude
 // parses hook stdout), never exit non-zero (exit 2 blocks Claude), and never hang. Every failure
@@ -62,6 +63,11 @@ func run() {
     if arguments.count >= 3, arguments[1] == "codex-notify" {
         source = "codex"
         rawPayload = Data(arguments[arguments.count - 1].utf8)
+    } else if arguments.count >= 3, arguments[1] == "event", !arguments[2].isEmpty {
+        // The generic mode: the app's adapter for this source decides what the payload means, so a
+        // new agent needs no new mode here.
+        source = arguments[2]
+        rawPayload = FileHandle.standardInput.readDataToEndOfFile()
     } else {
         source = isStatusLine ? "claude-statusline" : "claude"
         rawPayload = FileHandle.standardInput.readDataToEndOfFile()
@@ -91,10 +97,11 @@ func run() {
     }
 }
 
-/// The keys `HookDecoder` in the app reads, for Claude and Codex alike. Keep the two in step.
+/// The keys the app's adapters read, for every agent. Keep the two in step.
 let decodedKeys = [
     "hook_event_name", "session_id", "agent_id", "tool_name", "notification_type", "message",
     "last_assistant_message", "type", "thread-id", "last-assistant-message", "source", "reason",
+    "event", "opencodeSessionID", "action",
 ]
 
 /// The app drops anything over 4 MiB, and a permission request for a large Write carries the
@@ -118,6 +125,12 @@ func slimmed(_ payload: Any, rawSize: Int) -> Any {
     // Not a string, so the loop above skips it. Each entry is capped by Claude, and without the
     // list the app could not tell that the agent left something running.
     if let tasks = object["background_tasks"] as? [Any] { slim["background_tasks"] = tasks }
+    if let running = object["running"] as? Bool { slim["running"] = running }
+    // OpenCode's permission request lists what it wants to touch, which is what makes the
+    // payload big here. A few entries are plenty for a notification.
+    if let resources = object["resources"] as? [String] {
+        slim["resources"] = resources.prefix(5).map { String($0.prefix(1024)) }
+    }
     return slim
 }
 

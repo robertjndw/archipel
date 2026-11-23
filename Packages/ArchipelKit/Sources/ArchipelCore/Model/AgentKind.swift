@@ -17,5 +17,6 @@ public struct AgentKind: RawRepresentable, Hashable, Codable, Sendable {
 
     public static let claude = AgentKind(rawValue: "claude")
     public static let codex = AgentKind(rawValue: "codex")
+    public static let opencode = AgentKind(rawValue: "opencode")
     public static let shell = AgentKind(rawValue: "shell")
 }

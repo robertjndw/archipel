@@ -240,11 +240,13 @@ private struct FileMenuItems: View {
 
     var body: some View {
         let worktree = model.selectedWorktree
-        ForEach(Array(zip(model.agentsInMenuOrder, Self.newSessionModifiers)), id: \.0.id) { agent, modifiers in
+        // Every enabled agent gets an item, but only the first three get a shortcut: zipping with
+        // the modifiers would drop the agents past the third from the menu altogether.
+        ForEach(Array(model.agentsInMenuOrder.enumerated()), id: \.element.id) { index, agent in
             Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
                 if let worktree { model.newSession(in: worktree.id, agent: agent) }
             }
-            .keyboardShortcut("t", modifiers: modifiers)
+            .keyboardShortcut(index < Self.newSessionModifiers.count ? KeyboardShortcut("t", modifiers: Self.newSessionModifiers[index]) : nil)
             .disabled(worktree == nil || !model.canStartSession(with: agent))
         }
         PresetMenu(model: model, actions: actions, worktree: worktree?.id)

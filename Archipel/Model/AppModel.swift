@@ -138,9 +138,11 @@ final class AppModel {
     /// The known editors found on this Mac, in `ExternalEditor.known` order. Looked up at launch and
     /// whenever the app comes forward, since menus and tab bars read it in their bodies.
     private(set) var installedEditors: [ExternalEditor] = []
+    /// The agents the app can start and the hooks it understands.
+    let agentRegistry = AgentRegistry.builtIn
     /// Ids of the agents whose executable is on the login PATH, for dimming the ones that are not.
     /// Holds every agent until the PATH is known, so nothing is dimmed on a guess.
-    private(set) var installedAgentIDs = Set(AgentDefinition.builtIns.map(\.id))
+    private(set) var installedAgentIDs = Set(AgentRegistry.builtIn.adapters.map(\.id))
     /// False on a Mac without Xcode or the Command Line Tools; see `DeveloperTools`. Nothing may
     /// start git then, or the system's install dialog comes up.
     private(set) var isGitAvailable = true
@@ -195,6 +197,16 @@ final class AppModel {
     )
     private static let recentTabsKey = "recentTabIDs"
     private let hookExecutableURL: URL
+    /// The helper's stable link, or nil when it could not be created. Codex remembers what the user
+    /// trusted by command line, so its hooks must not point into the app bundle.
+    private let stableHookURL: URL?
+    /// Where the OpenCode plugin was installed this launch, or nil when that failed.
+    private let opencodePluginDirectory: URL?
+    /// `XDG_CONFIG_HOME` as the login shell sets it. OpenCode reads its cli.json from there, and an
+    /// app started from the Dock never sees variables exported only in a shell profile.
+    @ObservationIgnored private var loginXDGConfigHome: String?
+    /// Sessions whose agent has reported through its hooks since it last started.
+    private(set) var hookedSessions = HookedSessions()
     private var loginPATH: Task<String, Never>
     private var eventTasks: [Session.ID: Task<Void, Never>] = [:]
     private var saveTask: Task<Void, Never>?
@@ -240,9 +252,12 @@ final class AppModel {
         reviewComments = ReviewCommentStore(fileURL: support.appending(path: "review-comments.json"))
         hookServer = HookServer(socketURL: support.appending(path: "hook.sock"))
         hookExecutableURL = Bundle.main.bundleURL.appending(path: "Contents/Helpers/archipel-hook")
+        let helperLink = HelperLink(supportDirectory: support, bundledHelper: hookExecutableURL)
+        // Before any session starts, so the first Codex launch already has a link to point its hooks at.
+        stableHookURL = (try? helperLink.refresh()) == nil ? nil : helperLink.url
+        opencodePluginDirectory = OpenCodePluginInstaller.install(in: support)
         claudeUserHooks = ClaudeUserHooksController(
-            supportDirectory: support,
-            bundledHelper: hookExecutableURL,
+            helperLink: helperLink,
             socketURL: hookServer.socketURL,
             settings: settings
         )
@@ -303,6 +318,12 @@ final class AppModel {
             }
         }
         refreshAttention()
+        // Sessions restored right below may start before this answers; they read the app's own
+        // environment then, which only matters when XDG_CONFIG_HOME is set in a shell profile alone.
+        Task { [weak self] in
+            let value = await Task.detached { await LoginEnvironment.resolveVariable("XDG_CONFIG_HOME") }.value
+            self?.loginXDGConfigHome = value
+        }
         for id in visibleSessionIDs { ensureRunning(id) }
         openVisibleWebPages()
         if let id = focusedTab?.id { recentTabs.visit(id) }
@@ -346,9 +367,10 @@ final class AppModel {
         let defaults = UserDefaults(suiteName: "ArchipelPreview")!
         defaults.removePersistentDomain(forName: "ArchipelPreview")
         settings = AppSettings(defaults: defaults)
+        stableHookURL = nil
+        opencodePluginDirectory = nil
         claudeUserHooks = ClaudeUserHooksController(
-            supportDirectory: scratch,
-            bundledHelper: hookExecutableURL,
+            helperLink: HelperLink(supportDirectory: scratch, bundledHelper: hookExecutableURL),
             socketURL: hookServer.socketURL,
             settings: settings
         )
@@ -575,23 +597,25 @@ final class AppModel {
     func refreshAgentAvailability() {
         Task { [weak self] in
             guard let path = await self?.loginPATH.value else { return }
-            // The shell is launched by its full path, which need not be in a folder on the PATH.
-            let executables = AgentDefinition.builtIns.map {
-                (id: $0.id, name: $0.id == AgentDefinition.shell.id ? AgentDefinition.loginShellPath : $0.executableName)
-            }
-            let installed = await Task.detached(priority: .utility) {
-                Set(executables.filter { LoginEnvironment.locate($0.name, inPATH: path) != nil }.map(\.id))
-            }.value
             guard let self else { return }
+            let agents = self.agentRegistry.adapters
+            let lookups = agents.map { (agent: $0, override: self.settings.executablePath(for: $0.id)) }
+            let installed = await Task.detached(priority: .utility) {
+                Set(lookups.filter {
+                    Self.locateExecutable($0.agent, override: $0.override, inPATH: path).path != nil
+                }.map(\.agent.id))
+            }.value
             if installed != self.installedAgentIDs { self.installedAgentIDs = installed }
             // Until the user picks one, the default is an agent that can actually start.
-            if let first = AgentDefinition.builtIns.first(where: { $0.acceptsPrompts && installed.contains($0.id) }) {
+            if let first = agents.first(where: {
+                $0.capabilities.acceptsPrompts && installed.contains($0.id) && self.settings.isEnabled($0.id)
+            }) {
                 self.settings.suggestDefaultAgent(first.id)
             }
         }
     }
 
-    func isInstalled(_ agent: AgentDefinition) -> Bool {
+    func isInstalled(_ agent: any AgentAdapter) -> Bool {
         installedAgentIDs.contains(agent.id)
     }
 
@@ -1147,7 +1171,7 @@ final class AppModel {
 
     /// The preset's arguments are copied onto the session, so later edits to the preset don't
     /// change it. Without a preset the session follows the agent's default preset.
-    func newSession(in worktreeID: Worktree.ID, agent: AgentDefinition, preset: LaunchPreset? = nil, pane: Pane.ID? = nil) {
+    func newSession(in worktreeID: Worktree.ID, agent: any AgentAdapter, preset: LaunchPreset? = nil, pane: Pane.ID? = nil) {
         guard let worktree = workspace.worktree(id: worktreeID) else { return }
         // Numbered per agent, not per preset, so "Claude Code (Opus) 2" means the second Claude tab.
         let count = worktree.sessions.count { $0.agent.rawValue == agent.id }
@@ -1350,7 +1374,7 @@ final class AppModel {
             title = "Close \"\(session.displayTitle)\" while it is \(state)?"
             message = if agent.isDetected {
                 // Archipel never resumes a hand-started Claude, so closing loses no conversation.
-                "\(agent.definition.displayName) will be stopped."
+                "\(agent.adapter.displayName) will be stopped."
             } else if isAgent {
                 "The agent will be stopped. Closing the tab removes the session, so its conversation can no longer be resumed in Archipel."
             } else {
@@ -1359,7 +1383,7 @@ final class AppModel {
         case .restart(let fresh):
             title = "Restart \"\(session.displayTitle)\" while it is \(state)?"
             message = if agent.isDetected {
-                "\(agent.definition.displayName) will be stopped and the shell starts again."
+                "\(agent.adapter.displayName) will be stopped and the shell starts again."
             } else if !isAgent {
                 "The running command will be stopped and started again."
             } else if fresh || session.agentSessionID == nil {
@@ -1451,7 +1475,7 @@ final class AppModel {
         guard terminals[id] == nil, let session = workspace.session(id: id),
               let worktree = workspace.worktree(containing: id), let terminalApp
         else { return }
-        let definition = session.agent.definition
+        let adapter = session.agent.adapter
         let script = scriptSessions[id]
         let location = WorktreeEnvironment(
             worktreePath: worktree.path,
@@ -1471,12 +1495,14 @@ final class AppModel {
                 worktree: location
             )
         } else {
-            agentCommand(for: session, definition: definition).adding(location)
+            agentCommand(for: session, adapter: adapter).adding(location)
         }
 
         // Here and not at launch: starting an agent is what gives the question its context.
-        if script == nil, definition.acceptsPrompts { notifier.requestAuthorizationIfNeeded() }
+        if script == nil, adapter.capabilities.acceptsPrompts { notifier.requestAuthorizationIfNeeded() }
         launchFailures[id] = nil
+        // The agent may be trusted differently this time, so it has to prove its hooks again.
+        hookedSessions.reset(id)
         apply(.launched, to: id)
         launchGenerations[id, default: 0] += 1
         let launch = launchGenerations[id]
@@ -1490,8 +1516,18 @@ final class AppModel {
                 apply(.processExited(code: 1), to: id)
                 return
             }
-            guard let executable = LoginEnvironment.locate(command.executable, inPATH: path) else {
-                launchFailures[id] = "\(definition.displayName) is not installed, or \"\(command.executable)\" is not on your PATH."
+            let chosenLocation: ExecutableLocation? = if script == nil, let chosen = settings.executablePath(for: adapter.id) {
+                Self.locateExecutable(adapter, override: chosen, inPATH: path)
+            } else {
+                nil
+            }
+            if case .chosenMissing(let chosen)? = chosenLocation {
+                launchFailures[id] = "The \(adapter.displayName) executable chosen in Settings, \(chosen), is missing or can't be run."
+                apply(.processExited(code: 127), to: id)
+                return
+            }
+            guard let executable = chosenLocation?.path ?? LoginEnvironment.locate(command.executable, inPATH: path) else {
+                launchFailures[id] = "\(adapter.displayName) is not installed, or \"\(command.executable)\" is not on your PATH."
                 apply(.processExited(code: 127), to: id)
                 return
             }
@@ -1512,9 +1548,9 @@ final class AppModel {
                 if script?.kind == .setup {
                     // A setup script is a job with an end, so the sidebar shows it as busy until it exits.
                     apply(.activity, to: id)
-                } else if !definition.reportsLifecycleThroughHooks {
-                    // Only Claude announces itself through a hook. Everything else
-                    // would sit on "starting" forever without this.
+                } else if !adapter.capabilities.reportsLifecycleThroughHooks, !hookedSessions.contains(id) {
+                    // An agent without hooks never announces itself, so it would sit on
+                    // "starting" forever without this.
                     apply(.sessionStarted, to: id)
                 }
             } catch {
@@ -1524,23 +1560,33 @@ final class AppModel {
         }
     }
 
-    private func agentCommand(for session: Session, definition: AgentDefinition) -> LaunchCommand {
-        // Claude lets us choose the conversation id up front. It is only
+    private func agentCommand(for session: Session, adapter: any AgentAdapter) -> LaunchCommand {
+        // Some agents let us choose the conversation id up front. It is only
         // persisted once a hook confirms it, so a session that never really
         // started is not "resumed" into an error on the next launch.
-        let presetID = definition.presetsAgentSessionID ? UUID().uuidString.lowercased() : nil
-        let context = LaunchContext(
+        let presetID = adapter.capabilities.sessionID == .presetByApp ? adapter.makePresetSessionID() : nil
+        var context = LaunchContext(
             archipelSessionID: session.id,
             agentSessionID: session.agentSessionID ?? presetID,
             hookExecutableURL: hookExecutableURL,
+            stableHookURL: stableHookURL,
             socketURL: hookServer.socketURL
         )
-        var command = definition.launchCommand(for: context)
-        if session.agentSessionID != nil, let resume = definition.resumeCommand(for: context) {
+        if adapter.id == AgentKind.opencode.rawValue, let directory = opencodePluginDirectory {
+            context.opencodePluginDirectory = directory
+            // Read for each launch: OpenCode replaces its plugin list with ours, so a stale copy
+            // would drop plugins the user added since.
+            context.opencodeUserPlugins = OpenCodeCLIConfig.userPlugins(
+                environment: ["XDG_CONFIG_HOME": loginXDGConfigHome ?? ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"] ?? ""],
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+            )
+        }
+        var command = adapter.launchCommand(for: context)
+        if session.agentSessionID != nil, let resume = adapter.resumeCommand(for: context) {
             command = resume
         }
-        if definition.acceptsPrompts {
-            command.arguments += session.arguments.map(ArgumentSplitter.split) ?? settings.extraArguments(for: definition.id)
+        if adapter.capabilities.acceptsPrompts {
+            command.arguments += session.arguments.map(ArgumentSplitter.split) ?? settings.extraArguments(for: adapter.id)
         }
         return command
     }
@@ -1581,26 +1627,19 @@ final class AppModel {
               // back into an attention state.
               !agent.reportsLifecycleThroughHooks
         else { return }
-        if agent.isDetected {
-            guard let reason = ClaudeTerminalNotification.reason(forBody: body) else { return }
-            apply(.attentionRequested(reason, message: body), to: id)
-            return
-        }
-        switch agent.kind {
-        case .codex:
-            // The launch overrides restrict Codex to approval notifications.
-            apply(.attentionRequested(.permission, message: body), to: id)
-        default:
-            apply(.attentionRequested(.question, message: body), to: id)
-        }
+        // A detected agent resolves to its own adapter too, so a hand-started Claude reads its
+        // notifications the way Claude writes them.
+        guard let reason = agent.adapter.attentionReason(forTerminalNotification: body) else { return }
+        apply(.attentionRequested(reason, message: body), to: id)
     }
 
     /// Agents name their conversation through the terminal title, usually
     /// behind a status glyph or spinner character that we do not want in a tab.
     private func receiveTerminalTitle(_ raw: String, for id: Session.ID) {
-        let title = String(raw.drop { !($0.isLetter || $0.isNumber) })
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, let session = workspace.session(id: id), session.agentTitle != title else { return }
+        guard let session = workspace.session(id: id),
+              let title = session.agent.adapter.conversationTitle(fromTerminalTitle: raw),
+              session.agentTitle != title
+        else { return }
         mutate { $0.updateSession(id: id) { $0.agentTitle = title } }
     }
 
@@ -1637,6 +1676,18 @@ final class AppModel {
         // older helper that sends no origin. Acting on it would save a Claude conversation id on
         // the shell session.
         if isPlainShell(session) { return }
+        switch hookedSessions.admit(message, agent: session.agent) {
+        case .dropped:
+            return
+        case .firstHook:
+            // Remembered so Settings can say the hooks were trusted, even before the next session.
+            // Other agents get here too, and their hooks say nothing about Codex's trust.
+            if message.source == CodexAdapter.hooksSource {
+                settings.codexHooksTrustedCommand = codexHookCommand
+            }
+        case .accepted:
+            break
+        }
         if let context = message.context {
             recordContext(context, for: session.id)
         } else if message.usage != nil {
@@ -1653,10 +1704,15 @@ final class AppModel {
             mutate { $0.updateSession(id: session.id) { $0.agentSessionID = agentSessionID } }
         }
         if let event = message.event { apply(event, to: session.id) }
-        // Codex has just written the turn's token counts, and its limits with them, to its log.
-        if session.agent == .codex, case .turnFinished? = message.event { refreshCodexUsage() }
+        // The agent has just written the turn's token counts, and its limits with them, to its log.
+        if session.agent.adapter.capabilities.usage == .codexLogs, case .turnFinished? = message.event { refreshCodexUsage() }
         // The turn's last request has made it into the transcript by now.
         if case .turnFinished? = message.event { refreshPromptCache(for: session.id) }
+    }
+
+    /// What Codex runs for each hook, which is also what its trust is bound to.
+    var codexHookCommand: String? {
+        stableHookURL.map(CodexAdapter.hookCommand(link:))
     }
 
     func apply(_ event: AgentEvent, to id: Session.ID) {

@@ -140,10 +140,16 @@ final class ManualAgentTests: ArchipelUITestCase {
         assertExists(settingsWindow, "⌘, should open Settings.")
         settingsWindow.toolbars.buttons["Agents"].click()
         waitUntil("Settings shows Agents") { self.settingsWindow.title == "Agents" }
+        selectAgent("claude", named: "Claude Code", in: settingsWindow)
     }
 
     private func clickHookSwitch() {
         waitUntil("the switch for Claude in a shell tab is shown") { self.hookSwitch.exists }
+        // It sits below Claude's presets, which can push it out of view.
+        let form = settingsWindow.scrollViews.containing(.switch, identifier: "settings.claudeUserHooks").element(boundBy: 0)
+        for _ in 0..<10 where !hookSwitch.isHittable {
+            form.scroll(byDeltaX: 0, deltaY: -200)
+        }
         hookSwitch.click()
     }
 

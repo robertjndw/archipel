@@ -166,6 +166,9 @@ final class AppSettings {
     /// The settings file the entries were written to. CLAUDE_CONFIG_DIR is read from a login shell,
     /// which can time out, so checks and removal use this path instead of guessing again.
     var claudeUserHooksFilePath: String? { didSet { defaults.set(claudeUserHooksFilePath, forKey: Key.claudeUserHooksFilePath) } }
+    /// The Codex hook command that has reported at least once, which means the user trusted it. A
+    /// different command (the path changed) has to be trusted again.
+    var codexHooksTrustedCommand: String? { didSet { defaults.set(codexHooksTrustedCommand, forKey: Key.codexHooksTrustedCommand) } }
     var showsMenuBarExtra: Bool { didSet { defaults.set(showsMenuBarExtra, forKey: Key.showsMenuBarExtra) } }
     /// Banners for a session you are not looking at are redundant while Archipel itself is frontmost.
     var suppressesNotificationsWhileActive: Bool {
@@ -211,6 +214,32 @@ final class AppSettings {
         ArgumentSplitter.split(defaultPreset(for: agentID)?.arguments ?? "")
     }
 
+    /// Per agent id. An agent without an entry uses the defaults, so a newly added agent shows up
+    /// enabled. Entries for ids this version does not know stay in place for the version that does.
+    private(set) var agentPreferences: [String: AgentPreferences] {
+        didSet { defaults.set(try? JSONEncoder().encode(agentPreferences), forKey: Key.agentPreferences) }
+    }
+
+    func isEnabled(_ agentID: String) -> Bool {
+        agentPreferences[agentID]?.isEnabled ?? true
+    }
+
+    /// Stores the switch as asked. Keeping one agent enabled and moving the default away from a
+    /// disabled one is up to `AppModel.setEnabled(_:for:)`, which knows the registry.
+    func setEnabled(_ enabled: Bool, for agentID: String) {
+        agentPreferences[agentID, default: AgentPreferences()].isEnabled = enabled
+    }
+
+    /// The executable the user chose for an agent instead of the one found on the PATH.
+    func executablePath(for agentID: String) -> String? {
+        agentPreferences[agentID]?.executablePath
+    }
+
+    /// Nil goes back to looking the agent up on the PATH.
+    func setExecutablePath(_ path: String?, for agentID: String) {
+        agentPreferences[agentID, default: AgentPreferences()].executablePath = path.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     static let standardWorktreesRoot = URL.homeDirectory.appending(path: ".archipel/worktrees", directoryHint: .isDirectory)
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -249,9 +278,11 @@ final class AppSettings {
         bouncesDockForAttention = bool(Key.bouncesDockForAttention, false)
         claudeUserHooksEnabled = bool(Key.claudeUserHooksEnabled, false)
         claudeUserHooksFilePath = defaults.string(forKey: Key.claudeUserHooksFilePath)
+        codexHooksTrustedCommand = defaults.string(forKey: Key.codexHooksTrustedCommand)
         showsMenuBarExtra = bool(Key.showsMenuBarExtra, true)
         suppressesNotificationsWhileActive = bool(Key.suppressesNotificationsWhileActive, false)
         holdsNotificationsWhileSharingScreen = bool(Key.holdsNotificationsWhileSharingScreen, true)
+        agentPreferences = defaults.data(forKey: Key.agentPreferences).map(AgentPreferences.decodeAll(from:)) ?? [:]
         // Seeded only while the key is missing, so a list the user emptied stays empty. Data that
         // no longer decodes also falls back to the defaults rather than losing the menu.
         let presets = defaults.data(forKey: Key.launchPresets)
@@ -298,11 +329,49 @@ final class AppSettings {
         static let showsDockBadge = "settings.showsDockBadge"
         static let claudeUserHooksEnabled = "settings.claudeUserHooksEnabled"
         static let claudeUserHooksFilePath = "settings.claudeUserHooksFilePath"
+        static let codexHooksTrustedCommand = "settings.codexHooksTrustedCommand"
         static let showsMenuBarExtra = "settings.showsMenuBarExtra"
         static let suppressesNotificationsWhileActive = "settings.suppressesNotificationsWhileActive"
         static let holdsNotificationsWhileSharingScreen = "settings.holdsNotificationsWhileSharingScreen"
         static let agentArguments = "settings.agentArguments"
         static let launchPresets = "settings.launchPresets"
         static let defaultPresetIDs = "settings.defaultPresetIDs"
+        static let agentPreferences = "settings.agentPreferences"
+    }
+}
+
+/// What the user set for one agent in Settings > Agents.
+struct AgentPreferences: Codable, Equatable {
+    /// Whether New Session menus, buttons and the palette offer the agent. Sessions that already
+    /// exist keep running and resuming either way.
+    var isEnabled = true
+    /// Nil finds the agent on the login PATH.
+    var executablePath: String?
+
+    init(isEnabled: Bool = true, executablePath: String? = nil) {
+        self.isEnabled = isEnabled
+        self.executablePath = executablePath
+    }
+
+    /// Each field falls back on its own, so a value of the wrong type or a field written by a newer
+    /// version does not throw the whole entry away.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .isEnabled)) ?? true
+        executablePath = (try? container.decodeIfPresent(String.self, forKey: .executablePath)) ?? nil
+    }
+
+    /// Decodes the stored dictionary entry by entry: one broken entry costs only that agent its
+    /// preferences, and data that is not a dictionary at all means defaults for everyone.
+    static func decodeAll(from data: Data) -> [String: AgentPreferences] {
+        let entries = (try? JSONDecoder().decode([String: Lenient].self, from: data)) ?? [:]
+        return entries.compactMapValues(\.value)
+    }
+
+    private struct Lenient: Decodable {
+        let value: AgentPreferences?
+        init(from decoder: any Decoder) throws {
+            value = try? AgentPreferences(from: decoder)
+        }
     }
 }

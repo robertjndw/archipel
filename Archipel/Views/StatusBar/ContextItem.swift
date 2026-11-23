@@ -183,7 +183,8 @@ struct ContextDetails: View {
             TimelineView(.explicit(cache.map { [$0.expiresAt] } ?? [])) { timeline in
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(alignment: .firstTextBaseline) {
-                        Label(model.workspace.session(id: sessionID)?.displayTitle ?? "Claude Code", symbol: AgentDefinition.claude.symbolName)
+                        // Only Claude's status line reports the context window.
+                        Label(model.workspace.session(id: sessionID)?.displayTitle ?? ClaudeAdapter().displayName, symbol: ClaudeAdapter().symbolName)
                             .font(.headline)
                             .lineLimit(1)
                         Spacer()

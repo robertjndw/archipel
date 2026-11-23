@@ -36,12 +36,14 @@ struct PaletteCommand: Identifiable {
         let session = actions.focusedSession
         let publishes = model.pushPublishes(worktreeID)
 
-        let newSessions = zip(model.agentsInMenuOrder, ["⌘T", "⌥⌘T", "⇧⌘T"]).map { agent, hint in
+        // Same rule as the File menu: every agent is listed, the first three show a shortcut.
+        let shortcutHints = ["⌘T", "⌥⌘T", "⇧⌘T"]
+        let newSessions = model.agentsInMenuOrder.enumerated().map { index, agent in
             PaletteCommand(
                 id: "new-\(agent.id)",
                 title: "New \(agent.displayName) Session",
                 symbol: agent.symbolName,
-                shortcutHint: hint,
+                shortcutHint: index < shortcutHints.count ? shortcutHints[index] : nil,
                 isAvailable: hasSelection && model.canStartSession(with: agent)
             ) {
                 if let worktreeID { model.newSession(in: worktreeID, agent: agent) }
@@ -466,7 +468,7 @@ final class CommandPaletteModel {
             perform = { app.select(worktree: worktreeID) }
         case .session(let sessionID):
             id = "session:\(sessionID)"
-            symbol = (app.effectiveAgent(for: sessionID)?.definition ?? .shell).symbolName
+            symbol = (app.effectiveAgent(for: sessionID)?.adapter ?? ShellAdapter()).symbolName
             activity = app.activity(for: sessionID)
             perform = { app.select(session: sessionID) }
         }

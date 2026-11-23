@@ -86,8 +86,8 @@ struct SidebarWorktreeRow: View {
     private var icon: some View {
         Group {
             if let agent = content.agent {
-                Image(symbol: agent.definition.symbolName)
-                    .accessibilityLabel(agent.definition.displayName)
+                Image(symbol: agent.adapter.symbolName)
+                    .accessibilityLabel(agent.adapter.displayName)
             } else {
                 Image(systemName: worktree.branch == nil ? "folder" : "arrow.triangle.branch")
                     .accessibilityHidden(true)
@@ -306,7 +306,7 @@ struct SidebarSessionRow: View {
             model.select(session: content.id)
         } label: {
             HStack(spacing: 7) {
-                Image(symbol: content.agent.definition.symbolName)
+                Image(symbol: content.agent.adapter.symbolName)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)

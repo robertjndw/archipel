@@ -221,7 +221,7 @@ struct SessionPeekView: View {
         let activity = session.map { model.activity(for: $0.id) }
         let tint = model.project(ofWorktree: target.worktreeID).map { model.tint(of: $0).color }
         return HStack(spacing: 10) {
-            Image(symbol: (session.map { model.effectiveAgent(for: $0).definition } ?? .shell).symbolName)
+            Image(symbol: (session.map { model.effectiveAgent(for: $0).adapter } ?? ShellAdapter()).symbolName)
                 .font(.title3.weight(.medium))
                 .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary))
                 .frame(width: 24)

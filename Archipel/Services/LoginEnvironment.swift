@@ -6,7 +6,7 @@ import Foundation
 /// user's shell once and reuse the answer for every session.
 enum LoginEnvironment {
     nonisolated static func resolvePATH() async -> String {
-        let shell = AgentDefinition.loginShellPath
+        let shell = ShellAdapter.loginShellPath
         // Interactive first: zsh reads ~/.zshrc only then, and that is where nvm, mise, fnm, volta and
         // ~/.local/bin usually end up. An rc file written for a terminal can hang or bail out without
         // one, so the plain login shell is still asked when the interactive one gives no answer.
@@ -20,7 +20,7 @@ enum LoginEnvironment {
     /// A variable from the user's login shell, for settings that live in rc files and so never
     /// reach an app started by launchd. Nil when it is unset or empty.
     nonisolated static func resolveVariable(_ name: String) async -> String? {
-        let shell = AgentDefinition.loginShellPath
+        let shell = ShellAdapter.loginShellPath
         // Retry without -i only when the shell gave no answer. An unset variable is a real answer.
         let answer = value(of: name, from: shell, flags: ["-l", "-i"]) ?? value(of: name, from: shell, flags: ["-l"])
         guard let answer, !answer.isEmpty else { return nil }

@@ -294,7 +294,7 @@ private struct PaneView: View {
             } actions: {
                 GlassEffectContainer {
                     HStack(spacing: 8) {
-                        ForEach(AgentDefinition.builtIns) { agent in
+                        ForEach(model.enabledAgents, id: \.id) { agent in
                             let canStart = model.canStartSession(with: agent)
                             Button(agent.displayName, symbol: agent.symbolName) {
                                 model.newSession(in: worktree.id, agent: agent, pane: pane.id)
