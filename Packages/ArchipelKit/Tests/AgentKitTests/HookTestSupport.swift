@@ -39,7 +39,11 @@ func runHook(arguments: [String] = [], environment: [String: String], stdin: Str
     let clock = ContinuousClock()
     let start = clock.now
     try process.run()
-    input.fileHandleForWriting.write(Data(stdin.utf8))
+    // On a busy runner the helper's watchdog can exit before a large stdin is written. The write
+    // would then raise SIGPIPE and kill the whole test process, failing every test instead of the
+    // slow one.
+    _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+    try? input.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
     try input.fileHandleForWriting.close()
     let stdout = output.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
