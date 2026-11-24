@@ -151,8 +151,11 @@ final class GitClientRemoteTests {
 
         let summary = try await git.summary(in: repo)
         #expect(summary.branch == "main")
-        // a.txt once, b.txt once, and the untracked directory once.
-        #expect(summary.changedFiles == 3)
+        // a.txt once, b.txt once, and each file of the untracked directory, as the Changes tab lists them.
+        #expect(summary.changedFiles == 4)
+        let status = try await git.status(in: repo)
+        #expect(status.changedFiles == summary.changedFiles)
+        #expect(status.unstaged.count { $0.kind == .untracked } == 2)
     }
 
     // MARK: Switching branches

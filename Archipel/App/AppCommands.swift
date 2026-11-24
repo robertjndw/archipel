@@ -166,7 +166,7 @@ struct AppActions {
     }
 
     var selectedWorktreeHasUnread: Bool {
-        worktreesToMarkRead.contains { $0.sessions.contains { model.activities[$0.id]?.unread == true } }
+        worktreesToMarkRead.contains(where: model.hasUnread(in:))
     }
 
     func markSelectedWorktreeRead() {

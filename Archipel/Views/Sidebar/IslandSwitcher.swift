@@ -338,16 +338,13 @@ struct StatusDot: View {
         .accessibilityHidden(true)
     }
 
-    private var isWaiting: Bool {
-        if case .needsAttention = summary.dominant { true } else { false }
-    }
+    private var isWaiting: Bool { summary.needsAttention > 0 }
 
+    /// Not `dominant`: the dot has no way to say "working", and an unread result should not go
+    /// unmarked because something else is still running.
     private var color: Color? {
-        switch summary.dominant {
-        case .needsAttention: StatusPulse.needsInput.color
-        case .unread: StatusPulse.finished.color
-        case .working, nil: nil
-        }
+        if isWaiting { return StatusPulse.needsInput.color }
+        return summary.unread > 0 ? StatusPulse.finished.color : nil
     }
 }
 

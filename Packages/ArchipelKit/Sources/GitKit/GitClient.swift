@@ -239,24 +239,31 @@ public struct GitClient: Sendable {
         throw GitError(command: "git branch", output: result)
     }
 
+    /// Lists untracked files one by one (`--untracked-files=all`), which is what the Changes tab
+    /// needs to stage or discard them and what `GitStatus.changedFiles` counts. The poll pays for
+    /// that too: a huge untracked folder is nearly always ignored, and an ignored folder costs
+    /// nothing either way.
     public func status(in folder: URL) async throws -> GitStatus {
-        var status = GitParser.status(try await run(["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"], in: folder))
+        try await status(in: folder, untracked: "all")
+    }
+
+    /// The status of `status(in:)` boiled down, with the same count.
+    public func summary(in folder: URL) async throws -> GitSummary {
+        GitSummary(try await status(in: folder))
+    }
+
+    /// Branch and upstream for push and pull, which have no use for the files.
+    private func tracking(in folder: URL) async throws -> GitStatus {
+        try await status(in: folder, untracked: "no")
+    }
+
+    private func status(in folder: URL, untracked: String) async throws -> GitStatus {
+        var status = GitParser.status(try await run(["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=\(untracked)"], in: folder))
         if let missing = status.goneUpstream, await upstreamRemoteHasNoBranches(of: status.branch, in: folder) {
             status.goneUpstream = nil
             status.pendingUpstream = missing
         }
         return status
-    }
-
-    /// Skips `--untracked-files=all` so a huge untracked directory counts once and the call stays fast
-    /// enough to poll for every worktree.
-    public func summary(in folder: URL) async throws -> GitSummary {
-        var summary = GitParser.summary(try await run(["status", "--porcelain=v2", "-z", "--branch"], in: folder))
-        if let missing = summary.goneUpstream, await upstreamRemoteHasNoBranches(of: summary.branch, in: folder) {
-            summary.goneUpstream = nil
-            summary.pendingUpstream = missing
-        }
-        return summary
     }
 
     /// Status reports a missing upstream the same way whether the branch was deleted on the remote
@@ -318,7 +325,7 @@ public struct GitClient: Sendable {
     /// No BatchMode, unlike the unattended fetches: a push is something the user asked for, so an askpass
     /// helper they set up for their key may still show its window.
     public func push(in folder: URL) async throws {
-        let summary = try await summary(in: folder)
+        let summary = try await tracking(in: folder)
         guard summary.branch != nil else {
             throw GitError(message: "HEAD is detached. Check out a branch before pushing.")
         }
@@ -391,7 +398,7 @@ public struct GitClient: Sendable {
     /// Fetches, then fast-forwards the branch to its upstream. Never merges or rebases. A diverged
     /// branch is refused with an explanation, since sorting that out needs someone in a terminal.
     public func pull(in folder: URL) async throws {
-        let before = try await summary(in: folder)
+        let before = try await tracking(in: folder)
         guard before.branch != nil else {
             throw GitError(message: "HEAD is detached. Check out a branch before pulling.")
         }
@@ -403,7 +410,7 @@ public struct GitClient: Sendable {
         }
         // Only ever asked for by the user.
         try await fetch(in: folder, userInitiated: true)
-        let after = try await summary(in: folder)
+        let after = try await tracking(in: folder)
         // The fetch prunes, so it can be the one that finds the branch deleted on the remote.
         // Without this the pull would end as if there had simply been nothing new.
         if let gone = after.goneUpstream { throw GitError(message: Self.goneUpstreamMessage(gone)) }

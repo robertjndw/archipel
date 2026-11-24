@@ -129,7 +129,7 @@ public struct SessionActivity: Equatable, Sendable {
         if case .exited = status, event != .launched { return }
         // Only a turn in flight can be interrupted. Anything else is a late report about a turn
         // that has ended some other way since, and must leave its background subagents alone.
-        if event == .turnInterrupted, !(status == .working || status.needsUser) { return }
+        if event == .turnInterrupted, !status.isMidTurn { return }
         let previous = status
         let previousRequest = pendingRequest
         let wasBusy = isBusy

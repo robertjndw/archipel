@@ -25,55 +25,13 @@ struct CommitControl: Equatable {
     var title: LocalizedStringKey { mode == .commit ? "Commit" : "Commit All" }
 }
 
-/// What the sync row shows and whether pushing makes sense.
-struct SyncState: Equatable {
-    var upstream: String?
-    var ahead: Int
-    var behind: Int
-    var isDetached: Bool
-    var hasRemote: Bool
-    /// Where Publish Branch would push to; nil when git could only guess, see `GitClient.publishRemote`.
-    var publishRemote: String?
-    /// The upstream the branch had until it was deleted. Such a branch is unpublished again.
-    var goneUpstream: String?
-    var isBusy: Bool
+/// The Changes tab's view of the one sync rule, see `GitSyncState`.
+typealias SyncState = GitSyncState
 
-    init(status: GitStatus, remotes: [String], isBusy: Bool) {
-        upstream = status.upstream
-        ahead = status.ahead
-        behind = status.behind
-        isDetached = status.branch == nil
-        hasRemote = !remotes.isEmpty
-        publishRemote = GitClient.publishRemote(among: remotes, goneUpstream: status.goneUpstream ?? status.pendingUpstream)
-        goneUpstream = status.goneUpstream
-        self.isBusy = isBusy
-    }
+extension GitSyncState {
+    var canPush: Bool { canPush(from: .changesTab) }
 
-    var isPublished: Bool { upstream != nil }
-
-    /// Whether a push has anything to do, ignoring whether an action is already running.
-    var canPublishOrPush: Bool {
-        guard !isDetached else { return false }
-        return isPublished ? ahead > 0 : publishRemote != nil
-    }
-
-    var canPush: Bool { canPublishOrPush && !isBusy }
-
-    /// Whether the primary button may offer the push. Not for a branch whose upstream was deleted:
-    /// that is what a merged pull request leaves behind, and one click on the main button would
-    /// put the branch back on the remote. Publishing it again stays in the sync menu, for the
-    /// times it is meant.
-    var promotesPush: Bool { canPublishOrPush && goneUpstream == nil }
-
-    /// Whether the primary button should offer Pull. Also true for a diverged branch: the pull fails
-    /// with an explanation, which beats a push that git rejects.
-    var needsPull: Bool { isPublished && !isDetached && behind > 0 }
-
-    /// Pull fetches first, so from the menu it is useful even when the last known count is zero.
-    var canPull: Bool { isPublished && !isDetached && !isBusy }
-    var canFetch: Bool { hasRemote && !isBusy }
-
-    var pushTitle: String { isPublished ? String(localized: "Push") : String(localized: "Publish Branch") }
+    var pushTitle: String { pushTitle(from: .changesTab) }
 
     var help: LocalizedStringKey {
         if isDetached { return "HEAD is detached. Check out a branch to push." }
@@ -178,17 +136,6 @@ enum PrimaryAction: Equatable {
         case .publish: "icloud.and.arrow.up"
         }
     }
-}
-
-struct PullRequestLookup: Equatable {
-    enum Outcome: Equatable {
-        case none
-        case found(GitPullRequest)
-        case unavailable
-    }
-
-    var branch: String
-    var outcome: Outcome
 }
 
 extension GitPullRequest {

@@ -29,12 +29,13 @@ struct AttentionTests {
     @Test func rollUps() {
         let ws = workspace()
         let acts = activities()
-        #expect(attentionSummary(of: [a, b, c], activities: acts) == .init(needsAttention: 1, unread: 2, working: 1))
-        #expect(attentionSummary(of: ws.islands[0].projects[0].worktrees[0], activities: acts) == .init(needsAttention: 1, unread: 2))
-        #expect(attentionSummary(of: ws.islands[0].projects[0], activities: acts) == .init(needsAttention: 1, unread: 2))
-        #expect(attentionSummary(of: ws.islands[0], activities: acts) == .init(needsAttention: 1, unread: 2, working: 1))
+        // A waiting session is unread as well, and is still one session.
+        #expect(attentionSummary(of: [a, b, c], activities: acts) == .init(needsAttention: 1, unread: 1, working: 1))
+        #expect(attentionSummary(of: ws.islands[0].projects[0].worktrees[0], activities: acts) == .init(needsAttention: 1, unread: 1))
+        #expect(attentionSummary(of: ws.islands[0].projects[0], activities: acts) == .init(needsAttention: 1, unread: 1))
+        #expect(attentionSummary(of: ws.islands[0], activities: acts) == .init(needsAttention: 1, unread: 1, working: 1))
         #expect(attentionSummary(of: ws.islands[1], activities: acts) == .init(needsAttention: 1, unread: 0))
-        #expect(attentionSummary(of: ws, activities: acts) == .init(needsAttention: 2, unread: 2, working: 1))
+        #expect(attentionSummary(of: ws, activities: acts) == .init(needsAttention: 2, unread: 1, working: 1))
         #expect(attentionSummary(of: ws, activities: [:]) == .zero)
     }
 
@@ -71,7 +72,8 @@ struct AttentionTests {
         #expect(AttentionSummary.zero.dominant == nil)
         #expect(AttentionSummary.zero.accessibilityDescription.isEmpty)
         #expect(AttentionSummary(working: 2).dominant == .working)
-        #expect(AttentionSummary(unread: 1, working: 2).dominant == .unread)
+        #expect(AttentionSummary(unread: 1).dominant == .unread)
+        #expect(AttentionSummary(unread: 1, working: 2).dominant == .working)
         let all = AttentionSummary(needsAttention: 3, unread: 1, working: 1)
         #expect(all.dominant == .needsAttention(3))
         #expect(all.accessibilityDescription == "3 waiting for you, 1 unread, 1 agent working")
@@ -105,6 +107,42 @@ struct AttentionTests {
         #expect(!SessionActivity(status: .finished).needsMe)
         #expect(SessionActivity(status: .finished, unread: true).needsMe)
         #expect(SessionActivity(status: .needsAttention(.question)).needsMe)
+    }
+
+    @Test func everySessionIsCountedOnceAsItsMostPressingState() {
+        #expect(SessionActivity(status: .needsAttention(.permission), unread: true).attention == .needsUser)
+        #expect(SessionActivity(status: .starting).attention == .working)
+        // A bell during a turn: the turn is what there is to say about the session.
+        #expect(SessionActivity(status: .working, unread: true).attention == .working)
+        #expect(SessionActivity(status: .finished, unread: true).attention == .unread)
+        #expect(SessionActivity(status: .finished).attention == nil)
+        #expect(SessionActivity(status: .notStarted).attention == nil)
+    }
+
+    /// An exit is unread news like a result: what counts it also lists it and jumps to it.
+    @Test func anUnreadExitIsCountedListedAndJumpedTo() {
+        let ws = workspace()
+        var exited = SessionActivity(status: .working)
+        exited.apply(.processExited(code: 1), isBeingViewed: false)
+        let acts = [c.id: exited]
+        #expect(exited.attention == .unread)
+        #expect(attentionSummary(of: ws, activities: acts) == .init(unread: 1))
+        #expect(worktreesNeedingAttention(in: ws, activities: acts) == [ws.islands[0].projects[1].worktrees[0].id])
+        #expect(nextSessionNeedingAttention(after: nil, in: ws, activities: acts) == c.id)
+    }
+
+    @Test func aGroupIsStoodForByItsMostPressingSession() {
+        var acts = [
+            a.id: SessionActivity(status: .finished, unread: true),
+            b.id: SessionActivity(status: .working),
+            c.id: SessionActivity(status: .working),
+        ]
+        #expect(mostPressingSession(of: [a, b, c], activities: acts) == b.id)
+        // The session picked and the summary's strongest signal are the same ranking.
+        #expect(attentionSummary(of: [a, b, c], activities: acts).dominant == .working)
+        acts[c.id] = SessionActivity(status: .needsAttention(.question))
+        #expect(mostPressingSession(of: [a, b, c], activities: acts) == c.id)
+        #expect(mostPressingSession(of: [a], activities: [a.id: SessionActivity(status: .finished)]) == nil)
     }
 
     @Test func finishedTurnWithSubagentsRunningCountsAsWorking() {

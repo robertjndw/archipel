@@ -64,7 +64,7 @@ extension AppModel {
             deliverPendingReview(to: id)
         }
         let endedWork = switch new {
-        case .finished: old == .working || old.needsUser
+        case .finished: old.isMidTurn
         case .exited: true
         default: false
         }

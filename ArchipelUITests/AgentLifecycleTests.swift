@@ -271,11 +271,16 @@ final class AgentLifecycleTests: ArchipelUITestCase {
 
         // Codex asks for approval through a terminal notification and never says when it got one.
         try stub.ask()
-        waitUntil("the request is waiting and unread") { self.agentsStatus == "1 waiting for you, 1 unread" }
+        // A waiting session is counted once, so the summary says nothing of its unread mark: the
+        // enabled Mark as Read is what shows the request is unread too.
+        waitUntil("the request is waiting") { self.agentsStatus == "1 waiting for you" }
 
         // Marking as read answers nothing, so the request has to stay where the user can find it.
         chooseMenu("Project", "Mark as Read")
-        waitUntil("only the unread mark is gone") { self.agentsStatus == "1 waiting for you" }
+        app.menuBars.menuBarItems["Project"].click()
+        XCTAssertFalse(menuItem("Project", "Mark as Read").isEnabled, "The request should be marked as read.")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(agentsStatus, "1 waiting for you", "Marking as read must leave the request waiting.")
 
         // Clicking into the session is the only sign there will ever be that it was dealt with.
         mainWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
@@ -290,7 +295,7 @@ final class AgentLifecycleTests: ArchipelUITestCase {
 
         // A permission request arrives through the hook, not through a terminal notification.
         try stub.ask()
-        waitUntil("the request is waiting and unread") { self.agentsStatus == "1 waiting for you, 1 unread" }
+        waitUntil("the request is waiting") { self.agentsStatus == "1 waiting for you" }
 
         // Hooks say when the request was dealt with, so ending the turn clears it without the user
         // having to look at the session.
@@ -305,7 +310,7 @@ final class AgentLifecycleTests: ArchipelUITestCase {
         waitUntil("the window shows OpenCode working") { self.agentsStatus == "1 agent working" }
 
         try stub.ask()
-        waitUntil("the request is waiting and unread") { self.agentsStatus == "1 waiting for you, 1 unread" }
+        waitUntil("the request is waiting") { self.agentsStatus == "1 waiting for you" }
 
         // The plugin says when the request was dealt with, so ending the turn clears it.
         try stub.finishTurn()

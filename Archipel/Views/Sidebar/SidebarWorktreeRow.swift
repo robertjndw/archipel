@@ -381,14 +381,14 @@ struct SidebarWorktreeMenu: View {
         }
         Divider()
         FolderActions(folder: worktree.path, isMissing: isMissing)
-        if worktree.branch != nil || model.gitSummaries[worktree.id] != nil {
+        if worktree.branch != nil || model.gitState(for: worktree.id)?.status != nil {
             Button("Switch Branch…", systemImage: "arrow.triangle.swap") { model.switchBranchWorktreeID = worktree.id }
                 .disabled(!model.isGitAvailable || isMissing)
         }
         if let branch = worktree.branch {
             Button("Copy Branch Name", systemImage: "arrow.triangle.branch") { model.copyToPasteboard(branch) }
         }
-        if attentionSummary(of: worktree, activities: model.activities).unread > 0 {
+        if model.hasUnread(in: worktree) {
             Divider()
             Button("Mark as Read", systemImage: "envelope.open") { model.markRead(worktree: worktree.id) }
         }
@@ -434,7 +434,7 @@ struct SidebarBatchMenu: View {
                 model.copyToPasteboard(branches.joined(separator: "\n"))
             }
         }
-        if worktrees.contains(where: { attentionSummary(of: $0, activities: model.activities).unread > 0 }) {
+        if worktrees.contains(where: model.hasUnread(in:)) {
             Divider()
             Button("Mark All as Read", systemImage: "envelope.open") {
                 for id in ids { model.markRead(worktree: id) }
@@ -497,16 +497,19 @@ private enum WorktreeRowSamples {
         )
         activities[doneSession.id] = SessionActivity(status: .finished, lastMessage: "Updated 12 packages, tests pass", completedTurn: true)
         let model = AppModel(preview: Workspace(islands: [Island(name: "Work", projects: [project])]), activities: activities)
-        model.gitSummaries = PreviewFixtures.gitSummaries
-        model.gitSummaries[done.id] = GitSummary(branch: "chore/bump-deps", upstream: "origin/chore/bump-deps", ahead: 0, behind: 0, changedFiles: 0)
-        model.pullRequests = PreviewFixtures.pullRequests
-        model.pullRequests[done.id] = PullRequestLookup(
-            branch: "chore/bump-deps",
-            pullRequest: GitPullRequest(
-                number: 117, url: URL(string: "https://github.com/example/orbit/pull/117")!,
-                title: "Bump dependencies", state: .merged, isDraft: false
-            ),
-            checkedAt: .now
+        model.showGitForPreview(PreviewFixtures.gitSummaries, pullRequests: PreviewFixtures.pullRequests)
+        model.showGitForPreview(
+            done.id,
+            root: done.path,
+            summary: GitSummary(branch: "chore/bump-deps", upstream: "origin/chore/bump-deps", ahead: 0, behind: 0, changedFiles: 0),
+            pullRequest: PullRequestLookup(
+                branch: "chore/bump-deps",
+                pullRequest: GitPullRequest(
+                    number: 117, url: URL(string: "https://github.com/example/orbit/pull/117")!,
+                    title: "Bump dependencies", state: .merged, isDraft: false
+                ),
+                checkedAt: .now
+            )
         )
         model.missingWorktrees = [missing.id]
         return model

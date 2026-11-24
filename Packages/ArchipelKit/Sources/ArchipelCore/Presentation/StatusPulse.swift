@@ -14,7 +14,7 @@ public enum StatusPulse: Comparable, Sendable {
         switch new {
         case .finished:
             // A session that merely became ready after launching is not a result.
-            old == .working || old.needsUser ? .finished : nil
+            old.isMidTurn ? .finished : nil
         case .needsAttention:
             // A request that only changes its reason is still the same request.
             old.needsUser ? nil : .needsInput

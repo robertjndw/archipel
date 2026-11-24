@@ -13,20 +13,21 @@ private struct ListedChange: Identifiable {
     var id: ChangeID { ChangeID(path: change.path, staged: staged) }
 }
 
+/// The Changes tab's own state: what is selected, the message being written, errors to show and the
+/// queue of git commands started here. Everything git says about the worktree, and whether a push,
+/// pull, fetch or commit runs in it, is in the shared `GitWorktreeState`, which the sidebar and the
+/// menus read too.
 @MainActor @Observable
 final class ChangesModel {
     enum Phase { case loading, notRepository, ready }
 
-    let root: URL
-    private(set) var status = GitStatus.empty
-    private(set) var phase = Phase.loading
-    private(set) var refreshError: String?
+    let state: GitWorktreeState
+    var root: URL { state.root }
     var actionError: String? {
         didSet { updateRetention() }
     }
     var selection: ChangeID?
     private let git = GitClient()
-    private var generation = 0
 
     /// Kept outside the view so switching inspector tabs does not lose a half-written message, and
     /// in `CommitMessageDrafts` rather than in the model so switching worktrees does not either.
@@ -36,19 +37,15 @@ final class ChangesModel {
         get { CommitMessageDrafts.shared.draft(for: root) }
         set { CommitMessageDrafts.shared.set(newValue, for: root) }
     }
-    private(set) var activity: Activity? {
+    /// Set while the operation in `state` is one this model started, which is the one whose error
+    /// it has to deliver.
+    @ObservationIgnored private var runsOperation = false {
         didSet { updateRetention() }
     }
     /// Bumped when a push or pull lands, so its arrow can fly off before the label changes.
     private(set) var syncCompletion = SyncCompletion(count: 0, direction: .up)
     /// Bumped when a commit lands, for the commit button's checkmark.
     private(set) var commitCompletions = 0
-    private(set) var remotes: [String] = []
-    private(set) var pullRequestLookup: PullRequestLookup?
-    private let searchPATH: @MainActor () async -> String
-    private var gitHubTask: Task<GitHubClient?, Never>?
-    private var lookupGeneration = 0
-    private var lookupBranch: String?
     /// The newest git command started from here: a stage, unstage or discard, and the git part of a
     /// commit, push, pull or fetch. Each one waits for the one before, since two git processes
     /// writing the index at once make the second fail on index.lock.
@@ -63,30 +60,38 @@ final class ChangesModel {
     /// Set when the worktree is gone. Git may still be running for it, and what that ends with
     /// must not put the model back in the store for the next worktree at the same path to find.
     @ObservationIgnored fileprivate var isRetired = false
-    /// The folder this model was made for, see `ChangesModelStore.model(for:searchPATH:)`.
+    /// The folder this model was made for, see `ChangesModelStore.model(for:)`.
     @ObservationIgnored fileprivate let folder: FolderIdentity?
 #if DEBUG
     /// Set on preview samples, which have no repository behind them and must never run git.
     @ObservationIgnored fileprivate var isPreviewSample = false
 #endif
 
-    enum Activity: Equatable {
-        case commit, push, pull, fetch
+    typealias Activity = GitOperation
+
+    init(state: GitWorktreeState) {
+        self.state = state
+        folder = FolderIdentity(of: state.root)
     }
 
-    init(root: URL, searchPATH: @escaping @MainActor () async -> String) {
-        self.root = root
-        self.searchPATH = searchPATH
-        folder = FolderIdentity(of: root)
+    /// What the tab lists. Empty until the first read.
+    var status: GitStatus { state.status ?? .empty }
+
+    var phase: Phase {
+        if state.status != nil { return .ready }
+        return state.isRepository == false ? .notRepository : .loading
     }
+
+    var refreshError: String? { state.refreshError }
+
+    /// Whatever runs in the worktree, also when the Project menu or the palette started it.
+    var activity: Activity? { state.operation }
 
     var commitControl: CommitControl {
         CommitControl(status: status, message: message, isBusy: activity != nil)
     }
 
-    var syncState: SyncState {
-        SyncState(status: status, remotes: remotes, isBusy: activity != nil)
-    }
+    var syncState: SyncState { state.syncState }
 
     /// While git still runs for this model, or it holds an error nobody dismissed, the store keeps
     /// it for the inspector to pick up again. Otherwise the inspector's reference is the only one.
@@ -95,7 +100,7 @@ final class ChangesModel {
         if isPreviewSample { return }
 #endif
         if isRetired { return }
-        if activity != nil || changesInFlight > 0 || actionError != nil {
+        if runsOperation || changesInFlight > 0 || actionError != nil {
             ChangesModelStore.shared.keep(self)
         } else {
             ChangesModelStore.shared.release(self)
@@ -106,43 +111,28 @@ final class ChangesModel {
         PrimaryAction(commit: commitControl, sync: syncState)
     }
 
-    /// The current branch's pull request. A result for another branch says nothing about this one.
-    var pullRequest: GitPullRequest? {
-        guard let branch = status.branch, let lookup = pullRequestLookup, lookup.branch == branch,
-              case .found(let pullRequest) = lookup.outcome else { return nil }
-        return pullRequest
-    }
+    /// The current branch's pull request, see `GitWorktreeState.pullRequest`.
+    var pullRequest: GitPullRequest? { state.pullRequest }
 
+    /// Reads into the shared state, so the sidebar row moves with the list. With a status already
+    /// on screen a failed read keeps the list, and without one the tab shows that loading failed,
+    /// see `ChangesTab.content`.
     func refresh() async {
 #if DEBUG
         if isPreviewSample { return }
 #endif
-        // Periodic, activation and post-action refreshes can overlap; only the newest may write.
-        generation += 1
-        let current = generation
-        do {
-            let status = try await git.status(in: root)
-            guard current == generation else { return }
-            update(status: status, phase: .ready, refreshError: nil)
-        } catch {
-            let isRepository = await git.isRepository(root)
-            guard current == generation else { return }
-            if isRepository {
-                // `phase` stays as it was: with a status already on screen the list remains, and
-                // without one the tab shows that loading failed, see `ChangesTab.content`.
-                if refreshError != error.localizedDescription { refreshError = error.localizedDescription }
-            } else {
-                update(status: .empty, phase: .notRepository, refreshError: nil)
-            }
-        }
+        await state.refresh()
     }
 
-    /// Observation fires on every assignment, equal or not, and this runs on a 3 second poll; writing
-    /// only what changed keeps an idle tree from rebuilding the whole Changes list each time.
-    private func update(status: GitStatus, phase: Phase, refreshError: String?) {
-        if self.status != status { self.status = status }
-        if self.phase != phase { self.phase = phase }
-        if self.refreshError != refreshError { self.refreshError = refreshError }
+    /// The remotes and the branch's pull request, which change slowly. Driven by tab appearance,
+    /// app activation and branch or upstream changes; the poll leaves the remotes alone while the
+    /// branch has an upstream. An answer younger than half a minute is not asked again, the same
+    /// as when the app comes forward.
+    func refreshRemoteInfo() async {
+#if DEBUG
+        if isPreviewSample { return }
+#endif
+        await state.refresh(GitRefreshRequest(readsRemotes: true, pullRequestAge: .seconds(30)))
     }
 
     func stage(_ change: GitFileChange) {
@@ -309,7 +299,8 @@ final class ChangesModel {
     func push() {
         guard syncState.canPush else { return }
         run(.push) { [git, root] in try await git.push(in: root) } onSuccess: { [self] in
-            await sendOffArrow(.up) { await refreshRemoteInfo() }
+            // A push can create the remote branch a pull request is opened from.
+            await sendOffArrow(.up) { await state.refresh(GitRefreshRequest(readsRemotes: true, pullRequestAge: .zero)) }
         }
     }
 
@@ -334,65 +325,18 @@ final class ChangesModel {
         run(.fetch) { [git, root] in try await git.fetch(in: root, userInitiated: true) } onSuccess: {}
     }
 
-    /// Network and process work that changes slowly: the remote list and the branch's pull request.
-    /// Driven by tab appearance, app activation and branch or upstream changes, never the status poll.
-    func refreshRemoteInfo() async {
-#if DEBUG
-        if isPreviewSample { return }
-#endif
-        async let pullRequest: Void = lookUpPullRequest()
-        let remotes = await git.remoteNames(in: root)
-        if self.remotes != remotes { self.remotes = remotes }
-        await pullRequest
-    }
-
-    private func resolveGitHub() async -> GitHubClient? {
-        if gitHubTask == nil {
-            let searchPATH = searchPATH
-            gitHubTask = Task { GitHubClient(searchPATH: await searchPATH()) }
-        }
-        let client = await gitHubTask?.value
-        // A missing gh is retried next time, since the user may install it while the app runs.
-        if client == nil { gitHubTask = nil }
-        return client
-    }
-
-    private func lookUpPullRequest() async {
-        guard let client = await resolveGitHub(), let branch = status.branch else { return }
-        // One lookup per branch at a time; a switch to another branch supersedes the old one.
-        guard lookupBranch != branch else { return }
-        lookupGeneration += 1
-        let current = lookupGeneration
-        lookupBranch = branch
-        defer { if current == lookupGeneration { lookupBranch = nil } }
-        let outcome: PullRequestLookup.Outcome
-        do {
-            outcome = try await client.pullRequest(in: root).map { .found($0) } ?? .none
-        } catch is CancellationError {
-            // The tab went off screen and took gh down with it. That says nothing about the pull
-            // request, so what was known stays until the next lookup.
-            return
-        } catch {
-            // Not signed in or not a GitHub remote: the control just stays away instead of nagging.
-            // A pull request already found stays, though: a dropped connection says nothing about it.
-            if let known = pullRequestLookup, known.branch == branch, case .found = known.outcome { return }
-            outcome = .unavailable
-        }
-        guard current == lookupGeneration, status.branch == branch else { return }
-        pullRequestLookup = PullRequestLookup(branch: branch, outcome: outcome)
-    }
-
-    /// One action at a time; the checks and the work share a single task so nothing can interleave.
+    /// One action at a time per worktree, counting those started from the menus; the checks and
+    /// the work share a single task so nothing can interleave.
     private func run(
         _ activity: Activity,
         work: @escaping @Sendable () async throws -> Void,
         onSuccess: @escaping () async -> Void
     ) {
-        guard self.activity == nil else { return }
 #if DEBUG
         if isPreviewSample { return }
 #endif
-        self.activity = activity
+        guard state.begin(activity) else { return }
+        runsOperation = true
         actionError = nil
         let previous = pendingChange
         let outcome = Task { () -> (any Error)? in
@@ -418,7 +362,8 @@ final class ChangesModel {
             // Refresh before going idle: the other order briefly offers the action that just ran again,
             // which after a push would also bring the sent-off arrow back for a moment.
             await refresh()
-            self.activity = nil
+            state.end(activity)
+            runsOperation = false
         }
     }
 
@@ -472,14 +417,15 @@ final class ChangesModelStore {
 
     private var kept: [String: ChangesModel] = [:]
 
-    func model(for root: URL, searchPATH: @escaping @MainActor () async -> String) -> ChangesModel {
+    func model(for state: GitWorktreeState) -> ChangesModel {
+        let root = state.root
         if let model = kept[root.pathKey] {
             // The path alone does not make it the same worktree: one that was removed, whether
             // or not anyone said so, can have a successor in the same place.
-            if let folder = FolderIdentity(of: root), folder == model.folder { return model }
+            if model.state === state, let folder = FolderIdentity(of: root), folder == model.folder { return model }
             forget(root)
         }
-        return ChangesModel(root: root, searchPATH: searchPATH)
+        return ChangesModel(state: state)
     }
 
     /// For a worktree that was removed. Its path can be given to a new worktree, which would
@@ -622,7 +568,6 @@ struct ChangesTab: View {
     @Bindable var model: ChangesModel
     let actions: InspectorActions
     @Binding var focusCommitMessage: Bool
-    var knownPullRequest: GitPullRequest? = nil
     @State private var showsStaged = true
     @State private var showsUnstaged = true
     @State private var discardRequest: DiscardRequest?
@@ -653,7 +598,6 @@ struct ChangesTab: View {
         .task { await model.refreshRemoteInfo() }
         .onChange(of: model.status.branch) { refreshRemoteInfo() }
         .onChange(of: model.status.upstream) { refreshRemoteInfo() }
-        .onChange(of: knownPullRequest) { refreshRemoteInfo() }
         .onAppActivation(perform: refreshRemoteInfo)
         .confirmationDialog(
             discardRequest?.title ?? "",
@@ -1065,17 +1009,20 @@ extension ChangesModel {
         refreshError: String? = nil,
         actionError: String? = nil
     ) -> ChangesModel {
-        let model = ChangesModel(root: PreviewSamples.root, searchPATH: { "" })
+        let state = GitWorktreeState.preview(
+            root: PreviewSamples.root,
+            status: phase == .ready ? status : nil,
+            isRepository: phase == .notRepository ? false : phase == .ready ? true : nil,
+            refreshError: refreshError,
+            remotes: hasRemote ? ["origin"] : [],
+            pullRequest: pullRequest.flatMap { pullRequest in
+                status.branch.map { PullRequestLookup(branch: $0, pullRequest: pullRequest, checkedAt: .now) }
+            },
+            operation: activity
+        )
+        let model = ChangesModel(state: state)
         model.isPreviewSample = true
-        model.status = status
-        model.phase = phase
         model.message = message
-        model.activity = activity
-        model.remotes = hasRemote ? ["origin"] : []
-        if let pullRequest, let branch = status.branch {
-            model.pullRequestLookup = PullRequestLookup(branch: branch, outcome: .found(pullRequest))
-        }
-        model.refreshError = refreshError
         model.actionError = actionError
         return model
     }
