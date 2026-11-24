@@ -78,7 +78,16 @@ public enum SessionPeek {
         in island: Island,
         relevantSession: (Worktree) -> Session.ID?
     ) -> [Target] {
-        island.projects.filter(\.isExpanded).flatMap(\.worktrees).flatMap { worktree -> [Target] in
+        targets(in: island.projects.filter(\.isExpanded).flatMap(\.worktrees), relevantSession: relevantSession)
+    }
+
+    /// The stops of whatever rows the sidebar lists, in its order. The "Needs Me" list has rows
+    /// from every island and ignores collapsed projects, so the caller says which rows are shown.
+    public static func targets(
+        in worktrees: [Worktree],
+        relevantSession: (Worktree) -> Session.ID?
+    ) -> [Target] {
+        worktrees.flatMap { worktree -> [Target] in
             if worktree.sessions.count > 1 {
                 return worktree.sessions.map { Target(worktreeID: worktree.id, sessionID: $0.id) }
             }

@@ -11,6 +11,7 @@ struct SidebarProjectHeader: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @State private var isConfirmingRemoval = false
+    @State private var isDropTargeted = false
 
     var body: some View {
         let summary = attentionSummary(of: project, activities: model.activities)
@@ -38,13 +39,38 @@ struct SidebarProjectHeader: View {
         .padding(.leading, SidebarWorktreeRow.headerAlignmentInset)
         .contentShape(.rect)
         .onHover { isHovered = $0 }
-        .animation(Motion.hover, value: isHovered)
-        .animation(.smooth, value: summary)
-        .accessibilityElement(children: .contain)
-        .accessibilityValue(project.isExpanded ? "" : summary.accessibilityDescription)
-        // VoiceOver can't hover, so it gets the add button as an action instead.
-        .accessibilityAction(named: "Add Worktree") { model.addWorktreeProjectID = project.id }
+        .animation(reduceMotion ? nil : Motion.hover, value: isHovered)
+        .animation(reduceMotion ? nil : .smooth, value: summary)
         .contextMenu { menu }
+        // Projects are put in order by dragging one header onto another.
+        .draggable(ProjectDragItem(id: project.id))
+        .dropDestination(for: ProjectDragItem.self) { items, _ in
+            guard let item = items.first else { return false }
+            return model.moveProject(item.id, onto: project.id)
+        } isTargeted: { isDropTargeted = $0 }
+        .background {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: Chrome.controlRadius, style: .continuous)
+                    .fill(model.tint(of: project).color.opacity(0.15))
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(Motion.hover, value: isDropTargeted)
+        .accessibilityElement(children: .contain)
+        .accessibilityValue(showsCollapsedSignal ? summary.accessibilityDescription : "")
+        .accessibilityActions {
+            // VoiceOver can't hover, so it gets the add button as an action instead.
+            if canAddWorktree {
+                Button("Add Worktree") { model.addWorktreeProjectID = project.id }
+            }
+            // Only the moves that can happen; a disabled action is just noise in the rotor.
+            if model.canMoveProject(project.id, by: -1) {
+                Button("Move Up") { model.moveProject(project.id, by: -1) }
+            }
+            if model.canMoveProject(project.id, by: 1) {
+                Button("Move Down") { model.moveProject(project.id, by: 1) }
+            }
+        }
         .confirmationDialog("Remove the project \(project.name)?", isPresented: $isConfirmingRemoval) {
             Button("Remove Project", role: .destructive) { model.removeProject(project) }
         } message: {
@@ -52,15 +78,19 @@ struct SidebarProjectHeader: View {
         }
     }
 
+    /// The sheet needs git and the repository's folder; without either it could only fail.
+    private var canAddWorktree: Bool {
+        model.isGitAvailable && !model.isPrimaryCheckoutMissing(of: project)
+    }
+
     private var removalMessage: String {
-        let sessions = project.worktrees.flatMap(\.sessions)
-        let working = sessions.count { model.activity(for: $0.id).hasWorkInFlight }
-        let closing = switch working {
-        case 0: sessions.isEmpty ? "" : " and its sessions are closed"
-        case 1: " and its sessions are closed, including an agent that is still running"
-        default: " and its sessions are closed, including \(working) agents that are still running"
-        }
-        return "The project is removed from Archipel\(closing). Nothing is deleted from disk."
+        model.removalMessage(for: project)
+    }
+
+    /// The "Needs Me" list ignores collapsing and lists the project's waiting rows right below this
+    /// header, so a summary of hidden rows would only repeat them.
+    private var showsCollapsedSignal: Bool {
+        !project.isExpanded && !model.showsOnlyNeedsMe
     }
 
     /// Both states stay in the tree, stacked in one slot and cross-faded, so the project name does
@@ -71,7 +101,7 @@ struct SidebarProjectHeader: View {
                 .opacity(isHovered ? 0 : 1)
             Button("Add Worktree", systemImage: "plus") { model.addWorktreeProjectID = project.id }
                 // Also while hidden: full keyboard access would otherwise stop on a button nobody can see.
-                .disabled(!model.isGitAvailable || !isHovered)
+                .disabled(!canAddWorktree || !isHovered)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
                 // Drawn like the disclosure chevron beside it: same gray, same stroke weight, and a
@@ -91,7 +121,7 @@ struct SidebarProjectHeader: View {
     @ViewBuilder
     private func collapsedSignal(summary: AttentionSummary) -> some View {
         // Expanded, the rows say all of this themselves.
-        if !project.isExpanded {
+        if showsCollapsedSignal {
             if let signal = summary.dominant {
                 SidebarAttentionBadge(signal: signal)
             } else if project.worktrees.count > 1 {
@@ -106,10 +136,19 @@ struct SidebarProjectHeader: View {
         }
     }
 
+    /// Dragging a header onto another does the same; these work without a pointer.
+    @ViewBuilder
+    private var orderButtons: some View {
+        Button("Move Up", systemImage: "arrow.up") { model.moveProject(project.id, by: -1) }
+            .disabled(!model.canMoveProject(project.id, by: -1))
+        Button("Move Down", systemImage: "arrow.down") { model.moveProject(project.id, by: 1) }
+            .disabled(!model.canMoveProject(project.id, by: 1))
+    }
+
     @ViewBuilder
     private var menu: some View {
         Button("Add Worktree…", systemImage: "plus") { model.addWorktreeProjectID = project.id }
-            .disabled(!model.isGitAvailable)
+            .disabled(!canAddWorktree)
         if !project.dismissedWorktreePaths.isEmpty {
             Button("Show Dismissed Worktrees", systemImage: "eye") { model.restoreDismissedWorktrees(in: project.id) }
         }
@@ -119,8 +158,17 @@ struct SidebarProjectHeader: View {
         }
         Button("Project Settings…", systemImage: "gearshape") { model.openProjectSettings(project.id) }
         Divider()
-        FolderActions(folder: project.folderURL)
-        let others = model.workspace.islands.filter { $0.id != model.selectedIsland?.id }
+        let missingMain = project.worktrees.first { $0.isMain && model.missingWorktrees.contains($0.id) }
+        if let missingMain {
+            // The repository itself was moved, which is fixed here rather than by re-adding it.
+            Button("Locate Folder…", systemImage: "questionmark.folder") { model.locateFolder(of: missingMain.id) }
+        }
+        FolderActions(folder: project.folderURL, isMissing: missingMain != nil)
+        Divider()
+        orderButtons
+        // The project's own island, not the selected one: the "Needs Me" list shows projects of every island.
+        let home = model.workspace.island(containingProject: project.id)?.id
+        let others = model.workspace.islands.filter { $0.id != home }
         if !others.isEmpty {
             Divider()
             Menu("Move to Island", systemImage: "arrow.right.square") {

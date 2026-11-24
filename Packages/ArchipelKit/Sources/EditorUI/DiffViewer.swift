@@ -141,6 +141,19 @@ private struct DiffViewerContent: View {
                     Button("Open in Editor", action: openFile)
                 }
             }
+        case .tooLarge(let size):
+            ContentUnavailableView {
+                Label("File Too Large", systemImage: "doc.text.magnifyingglass")
+            } description: {
+                Text("This version of the file is \(size.formatted(.byteCount(style: .file))). Changes to files over \(DiffViewerModel.maximumFileSize.formatted(.byteCount(style: .file))) aren't shown.")
+            } actions: {
+                if model.fileExists {
+                    Button("Open in Default App") {
+                        NSWorkspace.shared.open(model.root.appending(path: model.path, directoryHint: .notDirectory))
+                    }
+                    .buttonStyle(.glass)
+                }
+            }
         case .failed(let message):
             ContentUnavailableView("Can't Show Changes", systemImage: "exclamationmark.triangle", description: Text(message))
         }
@@ -281,20 +294,33 @@ private struct DiffHeader: View {
     }
 }
 
+/// Thrown by a diff loader instead of loading a file over `DiffViewerModel.maximumFileSize`.
+struct DiffTooLargeError: Error, Equatable {
+    var size: Int64
+}
+
 @MainActor @Observable
 final class DiffViewerModel {
     enum Phase: Equatable {
         case loading, ready, noDifferences, binary, contentUnchanged, conflicted
+        /// The larger side of the comparison, in bytes, over `maximumFileSize`.
+        case tooLarge(Int64)
         case failed(String)
 
-        /// Whether `diff` describes what is on screen, so identical output can be skipped.
+        /// Whether `diff` describes what is on screen, so identical output can be skipped. Not for
+        /// a file over the limit: no diff was loaded, so `diff` is nil, and a file that goes back
+        /// to having no differences would compare equal to that and leave the placeholder up.
         var isSettled: Bool {
             switch self {
-            case .loading, .failed: false
+            case .loading, .failed, .tooLarge: false
             default: true
             }
         }
     }
+
+    /// The editor's limit: a file it would not open is not worth comparing either, and a whole-file
+    /// diff of one holds both versions several times over and is rebuilt on every poll.
+    static let maximumFileSize = TextBuffer.maximumTextSize
 
     let root: URL
     let path: String
@@ -317,7 +343,10 @@ final class DiffViewerModel {
         path: String,
         staged: Bool,
         loadDiff: @escaping @Sendable (_ path: String, _ staged: Bool, _ root: URL) async throws -> GitFileDiff? = { path, staged, root in
-            try await GitClient().fileDiff(path: path, staged: staged, in: root)
+            let git = GitClient()
+            let size = try await git.fileDiffSize(path: path, staged: staged, in: root)
+            if size > DiffViewerModel.maximumFileSize { throw DiffTooLargeError(size: size) }
+            return try await git.fileDiff(path: path, staged: staged, in: root)
         }
     ) {
         self.root = root
@@ -351,11 +380,33 @@ final class DiffViewerModel {
 
             let document = await Self.makeDocument(diff)
             guard current == generation else { return }
+            // A diff already on screen stays, highlighted, until the new one is highlighted too, so a
+            // refresh never flashes plain text. Only the first version shows before its colours.
+            var runs: (old: [HighlightRun], new: [HighlightRun])?
+            if self.document != nil, phase == .ready, let grammar {
+                // Nil when SwiftUI cancelled the refresh task (the app resigned active, the view went
+                // away) or highlighting failed. The document still goes up, and is highlighted by a
+                // task of its own like a first load: empty runs installed here would stay, since
+                // the next poll sees the same diff and stops.
+                runs = await Self.completeHighlightRuns(document, grammar: grammar)
+                guard current == generation else { return }
+            }
             settle(on: diff)
             self.document = document
             documentVersion += 1
             phase = .ready
-            highlight(document, version: documentVersion)
+            if let runs {
+                highlightTask?.cancel()
+                highlights = DiffHighlights(documentVersion: documentVersion, old: runs.old, new: runs.new)
+            } else {
+                highlight(document, version: documentVersion)
+            }
+        } catch let error as DiffTooLargeError {
+            guard current == generation else { return }
+            // Checked on every poll, so a file that keeps growing costs a size lookup and no diff.
+            guard phase != .tooLarge(error.size) else { return }
+            settle(on: nil)
+            show(.tooLarge(error.size))
         } catch {
             guard current == generation else { return }
             self.diff = nil
@@ -381,16 +432,43 @@ final class DiffViewerModel {
         self.phase = phase
     }
 
+    private var grammar: String? {
+        SourceLanguage.grammar(forFileName: (path as NSString).lastPathComponent)
+    }
+
     private func highlight(_ document: DiffDocument, version: Int) {
         highlightTask?.cancel()
-        guard let grammar = SourceLanguage.grammar(forFileName: (path as NSString).lastPathComponent) else { return }
+        guard let grammar else { return }
         highlightTask = Task { [weak self] in
-            async let old = SyntaxHighlighter.shared.runs(for: document.old.text, grammar: grammar)
-            async let new = SyntaxHighlighter.shared.runs(for: document.new.text, grammar: grammar)
-            let (oldRuns, newRuns) = await (old, new)
+            let runs = await Self.highlightRuns(document, grammar: grammar)
             guard let self, !Task.isCancelled, self.documentVersion == version else { return }
-            self.highlights = DiffHighlights(documentVersion: version, old: oldRuns ?? [], new: newRuns ?? [])
+            self.highlights = DiffHighlights(documentVersion: version, old: runs.old, new: runs.new)
         }
+    }
+
+    private static func highlightRuns(_ document: DiffDocument, grammar: String) async -> (old: [HighlightRun], new: [HighlightRun]) {
+        let (old, new) = await sideRuns(old: document.old.text, new: document.new.text, grammar: grammar)
+        return (old ?? [], new ?? [])
+    }
+
+    /// Nil unless both sides were highlighted, or were never going to be (empty or too large).
+    private static func completeHighlightRuns(_ document: DiffDocument, grammar: String) async -> (old: [HighlightRun], new: [HighlightRun])? {
+        let (oldText, newText) = (document.old.text, document.new.text)
+        let (old, new) = await sideRuns(old: oldText, new: newText, grammar: grammar)
+        if Task.isCancelled { return nil }
+        func highlightable(_ text: String) -> Bool {
+            let length = text.utf16.count
+            return length > 0 && length <= SyntaxHighlighter.maximumLength
+        }
+        if old == nil, highlightable(oldText) { return nil }
+        if new == nil, highlightable(newText) { return nil }
+        return (old ?? [], new ?? [])
+    }
+
+    private static func sideRuns(old oldText: String, new newText: String, grammar: String) async -> (old: [HighlightRun]?, new: [HighlightRun]?) {
+        async let old = SyntaxHighlighter.shared.runs(for: oldText, grammar: grammar)
+        async let new = SyntaxHighlighter.shared.runs(for: newText, grammar: grammar)
+        return await (old, new)
     }
 
     @concurrent
@@ -443,6 +521,14 @@ private func previewViewer(
 
 #Preview("Renamed Without Changes") {
     previewViewer(.success(PreviewSamples.renamedOnly), path: "Sources/Util/StringHelpers.swift", staged: true)
+}
+
+#Preview("Too Large") {
+    let model = DiffViewerModel(root: PreviewSamples.root, path: "logs/agent.log", staged: false) { _, _, _ in
+        throw DiffTooLargeError(size: 61_400_000)
+    }
+    return DiffViewerContent(model: model, review: nil, onOpenFile: { _ in })
+        .frame(width: 900, height: 520)
 }
 
 #Preview("Merge Conflict") {

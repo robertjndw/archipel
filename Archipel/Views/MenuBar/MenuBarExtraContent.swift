@@ -47,19 +47,18 @@ extension AppModel {
 
     private static func menuBarKind(of activity: SessionActivity) -> MenuBarEntry.Kind? {
         if activity.needsUser { return .needsYou }
-        switch activity.status {
-        case .working, .starting: return .working
-        case .finished where activity.unread: return .unread
-        default: return nil
-        }
+        // The same test the icon's working count uses: a finished turn whose subagents still run
+        // is not done, and listing it as finished under a working icon would contradict it.
+        if activity.showsProgress { return .working }
+        if activity.status == .finished, activity.unread { return .unread }
+        return nil
     }
 
     private static func menuBarDetail(of activity: SessionActivity) -> String {
         switch activity.status {
         case .needsAttention(.permission): "Needs your approval"
         case .needsAttention(.question): "Asked you a question"
-        case .working, .starting: "Working"
-        default: "Finished"
+        default: activity.showsProgress ? "Working" : "Finished"
         }
     }
 }

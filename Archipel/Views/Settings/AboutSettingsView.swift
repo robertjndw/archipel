@@ -56,7 +56,9 @@ struct AboutSettingsView: View {
                 Text("Updates")
             } footer: {
                 if !Updater.isEnabled {
-                    Text("Updates are turned off in debug builds.")
+                    Text(Updater.isDebugBuild
+                        ? "Updates are turned off in debug builds."
+                        : "This copy was built from source and does not update itself. Run the install script again to update it.")
                 }
             }
             .disabled(!Updater.isEnabled)

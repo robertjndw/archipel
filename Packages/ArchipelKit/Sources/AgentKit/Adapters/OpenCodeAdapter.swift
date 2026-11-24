@@ -29,19 +29,21 @@ public struct OpenCodeAdapter: AgentAdapter {
         )
     }
 
-    /// `opencode -s` creates the session when the id is new and resumes it when it exists.
+    /// `opencode --session` creates the session when the id is new and resumes it when it exists.
+    /// The id is attached to the option, so it can never be read as one itself.
     public func launchCommand(for context: LaunchContext) -> LaunchCommand {
         LaunchCommand(
             executable: executableName,
-            arguments: context.agentSessionID.map { ["-s", $0] } ?? [],
+            arguments: context.agentSessionID.flatMap { acceptsSessionID($0) ? ["--session=\($0)"] : nil } ?? [],
             environment: Self.environment(context)
         )
     }
 
     public func resumeCommand(for context: LaunchContext, agentSessionID: String) -> LaunchCommand? {
-        LaunchCommand(
+        guard acceptsSessionID(agentSessionID) else { return nil }
+        return LaunchCommand(
             executable: executableName,
-            arguments: ["-s", agentSessionID],
+            arguments: ["--session=\(agentSessionID)"],
             environment: Self.environment(context)
         )
     }
@@ -49,6 +51,14 @@ public struct OpenCodeAdapter: AgentAdapter {
     /// OpenCode wants ids of at most 32 characters starting with `ses`; a bare UUID is refused.
     public func makePresetSessionID() -> String {
         Self.sessionIDPrefix + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "").prefix(28)
+    }
+
+    /// `ses_` and then letters and digits. OpenCode's own are 30 characters long.
+    public func acceptsSessionID(_ id: String) -> Bool {
+        id.hasPrefix(Self.sessionIDPrefix)
+            && id.count > Self.sessionIDPrefix.count
+            && id.dropFirst(Self.sessionIDPrefix.count).allSatisfy { $0 != "-" && $0 != "_" }
+            && AgentSessionID.isPlainWord(id, maxLength: 64)
     }
 
     /// The terminal title is "OpenCode" until the conversation has a name, then "OC | <name>".
@@ -64,7 +74,7 @@ public struct OpenCodeAdapter: AgentAdapter {
     public func decodeHook(source: String, payload: [String: Any], receivedAt date: Date) -> DecodedHook? {
         DecodedHook(
             event: Self.event(payload),
-            agentSessionID: HookDecoder.nonEmptyString(payload["opencodeSessionID"])
+            agentSessionID: sessionID(payload["opencodeSessionID"])
         )
     }
 

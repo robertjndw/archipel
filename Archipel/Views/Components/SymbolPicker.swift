@@ -65,6 +65,12 @@ struct SymbolPicker: View {
                 .textFieldStyle(.plain)
                 .labelsHidden()
                 .lineLimit(1)
+                // Return after typing a search means "this one". Without a handler of its own the
+                // field passes the key on to the sheet's default button, which saves and closes
+                // before any symbol was picked.
+                .onSubmit {
+                    if !query.isEmpty, let first = results.first { selection = first }
+                }
             if !query.isEmpty {
                 Button("Clear Search", systemImage: "xmark.circle.fill") { query = "" }
                     .labelStyle(.iconOnly)

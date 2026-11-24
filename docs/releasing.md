@@ -19,13 +19,13 @@ There are two channels in that one appcast:
 
 | GitHub release | Tag example     | Appcast channel | Who gets it                                  |
 | -------------- | --------------- | --------------- | -------------------------------------------- |
-| Prerelease     | `v0.3.0-beta.1` | `beta`          | Users with "Include beta versions" turned on |
+| Prerelease     | `v0.3.0-beta.1` | `beta`          | Users with the Beta update channel selected |
 | Release        | `v0.3.0`        | none (stable)   | Everyone                                     |
 
 The workflow refuses a prerelease without a `-suffix` and a release with one.
 The app turns beta updates on by default when its own version has a suffix, so
 anyone who installs a beta DMG stays on the beta channel until they switch it
-off in Settings > General > Updates.
+off under Settings > About > Update channel.
 
 ## Cutting a release
 
@@ -53,6 +53,11 @@ To build the same DMG locally:
 ```sh
 ./scripts/build-dmg.sh 0.2.0      # writes .build/dmg/Archipel-0.2.0.dmg
 ```
+
+Without a second argument the build number is 2. A build number of 1 would
+mark the copy as built from source and turn its updates off, and 2 is low
+enough that the copy offers to update to the latest release. Pass a higher
+number as the second argument to try a copy that is newer than the releases.
 
 This needs [uv](https://docs.astral.sh/uv/) (`brew install uv`) for
 `dmgbuild`. The window layout is in `scripts/dmg/settings.py`, and the
@@ -219,8 +224,11 @@ still lists as a preview. The `macos-26` images only have Xcode 26, which
 can't build for the macOS 27 deployment target. Once a `macos-27` image is
 generally available, switch `runs-on` to it.
 
-## Debug builds
+## Debug and source builds
 
-Sparkle is not started in Debug builds. They carry build number 1, so every
-release would look newer and Sparkle would offer to replace the build you are
-working on. Build a DMG with `scripts/build-dmg.sh` to try updating locally.
+Sparkle is not started in Debug builds, nor in builds that still carry the
+placeholder build number 1 (anything not built by the release pipeline, such as
+`scripts/install.sh`). Every release would look newer and Sparkle would offer
+to replace the build you are working on. Settings > About says which of the two
+it is. To try updating locally, build a DMG with `scripts/build-dmg.sh`, whose
+build number defaults to 2 so updates stay on.

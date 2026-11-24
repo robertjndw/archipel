@@ -59,13 +59,13 @@ private struct TabDropDelegate: DropDelegate {
 
     private var acceptsPaste: Bool { model.dropTargetSession(of: tab) != nil }
 
+    /// Files and text both end up as a paste, so both need a terminal that is still running.
     func validateDrop(info: DropInfo) -> Bool {
-        if info.hasItemsConforming(to: [.fileURL]) { return acceptsPaste }
-        return info.hasItemsConforming(to: [.plainText])
+        acceptsPaste && info.hasItemsConforming(to: Self.types)
     }
 
     func dropEntered(info: DropInfo) {
-        if info.hasItemsConforming(to: [.fileURL]) { isTargeted = acceptsPaste }
+        isTargeted = validateDrop(info: info)
         // Also for tabs that won't take the drop, so you can switch to one and drop into its
         // content instead.
         springLoad(true)
@@ -93,7 +93,7 @@ private struct TabDropDelegate: DropDelegate {
             return true
         }
         let texts = info.itemProviders(for: [.plainText])
-        guard !texts.isEmpty else { return false }
+        guard !texts.isEmpty, acceptsPaste else { return false }
         Task {
             var strings: [String] = []
             for provider in texts {

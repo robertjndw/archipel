@@ -15,9 +15,9 @@ struct CodexHookDecodingTests {
     }
 
     @Test func codexUnknownType() throws {
-        let result = try decode(#"{"type": "approval-requested", "thread-id": "t"}"#)
+        let result = try decode(#"{"type": "approval-requested", "thread-id": "\#(thread)"}"#)
         #expect(result.event == nil)
-        #expect(result.agentSessionID == "t")
+        #expect(result.agentSessionID == thread)
     }
 
     @Test func lifecycleIsClaudesOnly() throws {
@@ -28,12 +28,13 @@ struct CodexHookDecodingTests {
         try #require(CodexAdapter().decodeHook(source: "codex-hooks", payload: payload(json), receivedAt: .now))
     }
 
-    private let common = #""session_id": "sess-1", "transcript_path": "/t.jsonl", "cwd": "/w", "model": "gpt-5", "permission_mode": "default""#
+    private let thread = "0199a213-81c0-7800-8aa1-bbab2a035a53"
+    private let common = #""session_id": "0199a213-81c0-7800-8aa1-bbab2a035a53", "transcript_path": "/t.jsonl", "cwd": "/w", "model": "gpt-5", "permission_mode": "default""#
 
     @Test func sessionStart() throws {
         let result = try decodeHooks(#"{\#(common), "hook_event_name": "SessionStart", "source": "startup"}"#)
         #expect(result.event == .sessionStarted)
-        #expect(result.agentSessionID == "sess-1")
+        #expect(result.agentSessionID == thread)
         #expect(result.lifecycle == nil)
     }
 
@@ -51,7 +52,11 @@ struct CodexHookDecodingTests {
 
     @Test func permissionRequestNamesTheTool() throws {
         let result = try decodeHooks(#"{\#(common), "hook_event_name": "PermissionRequest", "turn_id": "t1", "tool_name": "Bash", "tool_input": {"command": "rm x", "description": "d"}}"#)
-        #expect(result.event == .attentionRequested(.permission, message: "Bash"))
+        #expect(result.event == .attentionRequested(.permission, message: "Bash: rm x"))
+
+        // A subagent's request says which one asked, and Codex passes a command as its argv.
+        let nested = try decodeHooks(#"{\#(common), "hook_event_name": "PermissionRequest", "agent_id": "a1", "tool_name": "shell", "tool_input": {"command": ["git", "push"]}}"#)
+        #expect(nested.event == .attentionRequested(.permission, message: "shell: git push", subagent: "a1"))
     }
 
     @Test func stopFinishesTheTurn() throws {
@@ -69,9 +74,9 @@ struct CodexHookDecodingTests {
     }
 
     @Test func sessionEndCarriesNoEventButKeepsTheSession() throws {
-        let result = try decodeHooks(#"{"session_id": "sess-1", "hook_event_name": "SessionEnd", "reason": "exit"}"#)
+        let result = try decodeHooks(#"{\#(common), "hook_event_name": "SessionEnd", "reason": "exit"}"#)
         #expect(result.event == nil)
-        #expect(result.agentSessionID == "sess-1")
+        #expect(result.agentSessionID == thread)
     }
 
     @Test func routesBySource() {

@@ -5,6 +5,16 @@ import Foundation
 /// the next character outside single quotes. No expansion of any kind happens.
 public enum ArgumentSplitter {
     public static func split(_ text: String) -> [String] {
+        parse(text).words
+    }
+
+    /// False for an unterminated quote or a trailing backslash. `split` still returns what was
+    /// typed so far, so this is the only way to tell such input from a deliberate one.
+    public static func isWellFormed(_ text: String) -> Bool {
+        parse(text).isWellFormed
+    }
+
+    private static func parse(_ text: String) -> (words: [String], isWellFormed: Bool) {
         var words: [String] = []
         var current = ""
         // A quoted empty string ("") is still a word, so track it apart from `current`.
@@ -35,6 +45,6 @@ public enum ArgumentSplitter {
         }
         // An unterminated quote or trailing backslash keeps what was typed so far.
         if hasWord { words.append(current) }
-        return words
+        return (words, quote == nil && !escaping)
     }
 }

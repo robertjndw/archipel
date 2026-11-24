@@ -126,6 +126,8 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
         case missing
         case unreadable(String)
         case tooLarge(Int64)
+        /// Text whose longest line is this many UTF-16 units, over `maximumLineLength`.
+        case lineTooLong(Int)
         case binary
     }
 
@@ -134,6 +136,11 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
     }
 
     nonisolated static let maximumTextSize: Int64 = 5_000_000
+    /// The editor does not wrap, so TextKit lays out a whole line at once, on the main thread, each
+    /// time a view shows it. A minified bundle on one line would hang every tab switch. Well above
+    /// the few thousand characters of a long line in ordinary source or a lock file. Counted in
+    /// UTF-16 units, the characters TextKit lays out, so CJK text is not refused at a third of it.
+    nonisolated static let maximumLineLength = 50_000
 
     /// The path the file was first opened by that a tab still shows, for showing and for
     /// `FileDocumentStore.dirtyURLs`.
@@ -149,6 +156,11 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
     /// Set when the file changed on disk while the buffer had unsaved edits.
     private(set) var conflict: Conflict?
     var saveError: String?
+    /// The last save failed because the text no longer fits the file's legacy encoding, which only
+    /// saving in another encoding gets out of.
+    private(set) var saveFailedOnEncoding = false
+    /// Bumped by every save the conflict refuses, so the conflict bar can draw the eye to itself.
+    private(set) var refusedSaveCount = 0
     /// Bumped on every change on disk, for views that reload themselves (Quick Look).
     private(set) var revision = 0
     /// Markdown shown rendered instead of as source. Kept on the buffer so it survives tab switches.
@@ -232,6 +244,9 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
         case .text(let text, let format):
             if state == .text {
                 if text == savedText {
+                    // Only the line endings, BOM or encoding changed. Taking them is what keeps the
+                    // next save from quietly turning an agent's CRLF-to-LF rewrite back.
+                    self.format = format
                     conflict = nil
                     pendingDiskText = nil
                     return
@@ -303,12 +318,25 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
 
     // MARK: Saving
 
-    func save() throws {
+    /// `encoding` overrides the file's own for this save and every later one, once it succeeds.
+    func save(encoding: (encoding: String.Encoding, hasBOM: Bool)? = nil) throws {
         guard state == .text, isDirty || conflict != nil else { return }
-        try checkForExternalChange()
+        do {
+            try checkForExternalChange()
+        } catch {
+            refusedSaveCount += 1
+            throw error
+        }
         do {
             let text = textStorage.string
-            let data = try format.encode(text)
+            // Applied only after the external-change check, which can adopt the format a rewrite
+            // on disk chose, so an encoding the user picked is not undone by a touch of the file.
+            var written = format
+            if let encoding {
+                written.encoding = encoding.encoding
+                written.hasBOM = encoding.hasBOM
+            }
+            let data = try written.encode(text)
             // Write through a symlink to its target rather than replacing the link with a file. The
             // file can have become a link since it was opened.
             let target = fileURL.resolvingSymlinksInPath()
@@ -317,6 +345,7 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
             if let permissions {
                 try? FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: target.path)
             }
+            format = written
             savedText = text
             // Recording what we just wrote is what keeps our own watcher from calling it a conflict.
             fingerprint = FileFingerprint(fileURL)
@@ -325,11 +354,19 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
             conflict = nil
             pendingDiskText = nil
             saveError = nil
+            saveFailedOnEncoding = false
             updateDirty()
         } catch {
             saveError = error.localizedDescription
+            saveFailedOnEncoding = error is TextFileFormat.EncodingError
             throw error
         }
+    }
+
+    /// For text that no longer fits a legacy encoding. Line endings stay as they are, and no BOM is
+    /// added: a UTF-8 BOM trips up more tools than it helps.
+    func saveAsUTF8() throws {
+        try save(encoding: (.utf8, false))
     }
 
     /// The watcher only runs while a view shows the file, so a save from a hidden tab, Save All or
@@ -354,18 +391,24 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
             if !current.exists {
                 pendingDiskText = nil
                 conflict = .deleted
-            } else if disk?.text == savedText {
-                // Touched or rewritten with the same contents: nothing would be lost.
+            } else if let disk, disk.text == savedText {
+                // Touched or rewritten with the same contents: nothing would be lost, as long as the
+                // save keeps whatever line endings or encoding the rewrite chose.
+                format = disk.format
                 pendingDiskText = nil
                 conflict = nil
             } else {
-                pendingDiskText = disk
+                // A version the editor would refuse to open is no text to offer for Reload; without
+                // one, Reload reads the file again and shows why it can't be edited.
+                pendingDiskText = disk.flatMap { TextSniffer.longestLineLength($0.text) <= Self.maximumLineLength ? $0 : nil }
                 conflict = .changed
             }
         }
         if let conflict { throw SaveConflictError(fileName: name, conflict: conflict) }
     }
 
+    /// No long-line refusal here: the text is compared with what the buffer saved, and a long line
+    /// the user saved themselves has to compare equal.
     private nonisolated static func readText(_ url: URL, fingerprint: FileFingerprint) -> (text: String, format: TextFileFormat)? {
         guard !fingerprint.isDirectory, fingerprint.size <= maximumTextSize, let data = try? Data(contentsOf: url) else { return nil }
         return TextSniffer.decodeWithFormat(data)
@@ -413,6 +456,8 @@ final class TextBuffer: NSObject, NSTextStorageDelegate {
             return (.other(.unreadable(error.localizedDescription)), fingerprint)
         }
         guard let decoded = TextSniffer.decodeWithFormat(data) else { return (.other(.binary), fingerprint) }
+        let longest = TextSniffer.longestLineLength(decoded.text)
+        if longest > maximumLineLength { return (.other(.lineTooLong(longest)), fingerprint) }
         return (.text(decoded.text, decoded.format), fingerprint)
     }
 
@@ -469,7 +514,8 @@ extension TextBuffer {
         state: State = .text,
         edit: String? = nil,
         conflict: Conflict? = nil,
-        saveError: String? = nil
+        saveError: String? = nil,
+        saveFailedOnEncoding: Bool = false
     ) -> TextBuffer {
         let buffer = TextBuffer(url: url) { _ in }
         buffer.isPreviewSample = true
@@ -480,6 +526,7 @@ extension TextBuffer {
         }
         buffer.conflict = conflict
         buffer.saveError = saveError
+        buffer.saveFailedOnEncoding = saveFailedOnEncoding
         return buffer
     }
 }

@@ -45,6 +45,32 @@ enum TextSniffer {
         return (text, format)
     }
 
+    /// The longest line in UTF-16 units, the length TextKit lays out. Counted from the UTF-8 bytes,
+    /// which a native string stores contiguously: a lead byte is one unit, or two for a 4-byte
+    /// sequence (a surrogate pair), and continuation bytes add nothing. Splits on LF and CR alone,
+    /// like the editor's line endings.
+    static func longestLineLength(_ text: String) -> Int {
+        var text = text
+        return text.withUTF8 { bytes in
+            var longest = 0
+            var current = 0
+            for byte in bytes {
+                switch byte {
+                case 0x0A, 0x0D:
+                    longest = max(longest, current)
+                    current = 0
+                case 0x80...0xBF:
+                    break
+                case 0xF0...:
+                    current += 2
+                default:
+                    current += 1
+                }
+            }
+            return max(longest, current)
+        }
+    }
+
     private static func unicodeBOM(_ data: Data) -> (String.Encoding, Int)? {
         let bytes = Array(data.prefix(3))
         if bytes.starts(with: [0xEF, 0xBB, 0xBF]) { return (.utf8, 3) }

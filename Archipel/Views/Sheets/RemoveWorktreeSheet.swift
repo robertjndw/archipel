@@ -33,6 +33,15 @@ struct RemoveWorktreeSheet: View {
                 ? "An agent is working in this worktree. Removing it stops that agent."
                 : "\(busy) agents are working in this worktree. Removing it stops them.")
         }
+        let idle = worktree.sessions.count - busy
+        if idle > 0 {
+            // "Other" only reads right after the line about the busy ones.
+            let other = busy > 0 ? "other " : ""
+            warnings.append(idle == 1 ? "Its \(other)session is closed too." : "Its \(idle) \(other)sessions are closed too.")
+        }
+        if deletesFromDisk, worktree.branch == nil {
+            warnings.append("This worktree is on a detached HEAD. Commits made here are not on any branch, and are only reachable through the reflog once the folder is deleted.")
+        }
         let unsaved = model.unsavedDocuments(under: worktree.path).count
         if unsaved > 0 {
             // What `AppModel.removeWorktree` does with them: edits to files that are deleted or
@@ -91,6 +100,7 @@ struct RemoveWorktreeSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .untinted()
+                        .disabled(isWorking)
                 }
                 ToolbarItem(placement: .confirmationAction) { confirmButton }
                 if isWorking {
@@ -98,6 +108,8 @@ struct RemoveWorktreeSheet: View {
                 }
             }
         }
+        // Closing mid-removal would lose the outcome, such as a branch that was kept.
+        .interactiveDismissDisabled(isWorking)
         .task { await loadStatus() }
     }
 
@@ -139,7 +151,7 @@ struct RemoveWorktreeSheet: View {
                 if !deleteFolder {
                     Text("The folder and branch stay on disk. You can add the worktree back from Add Worktree.")
                 } else if worktree.branch != nil {
-                    Text("A branch with commits that are not merged is kept.")
+                    Text("The branch is kept unless git finds it fully merged, which includes being pushed to its upstream.")
                 }
             }
         }
@@ -162,7 +174,7 @@ struct RemoveWorktreeSheet: View {
     private var note: String? {
         switch outcome {
         case .keptUnmerged(let branch):
-            "The worktree was removed. The branch \(branch) was kept because it has commits that are not merged."
+            "The worktree was removed. The branch \(branch) was kept because it has commits that are not merged or pushed."
         case .failed(let branch, let message):
             "The worktree was removed, but the branch \(branch) could not be deleted: \(message)"
         default:

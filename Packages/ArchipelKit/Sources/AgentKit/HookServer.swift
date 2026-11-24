@@ -33,6 +33,8 @@ public struct HookMessage: Equatable, Sendable {
 
     /// Context window fill, from Claude's status line. Never set together with an event.
     public var context: SessionContext?
+    /// The file the agent writes the conversation to, when the payload names it.
+    public var transcriptPath: String?
 
     public init(
         sessionID: UUID,
@@ -40,6 +42,7 @@ public struct HookMessage: Equatable, Sendable {
         agentSessionID: String?,
         usage: ProviderUsage? = nil,
         context: SessionContext? = nil,
+        transcriptPath: String? = nil,
         origin: HookOrigin = .launch,
         source: String? = nil,
         lifecycle: HookLifecycle? = nil,
@@ -50,6 +53,7 @@ public struct HookMessage: Equatable, Sendable {
         self.agentSessionID = agentSessionID
         self.usage = usage
         self.context = context
+        self.transcriptPath = transcriptPath
         self.origin = origin
         self.source = source
         self.lifecycle = lifecycle
@@ -278,6 +282,7 @@ public final class HookServer: Sendable {
             agentSessionID: decoded.agentSessionID,
             usage: decoded.usage,
             context: decoded.context,
+            transcriptPath: decoded.transcriptPath,
             origin: origin,
             source: source,
             lifecycle: decoded.lifecycle,

@@ -28,6 +28,40 @@ extension Worktree {
             panes[p].selectedTabID = panes[p].tabs.first?.id
         }
         if !panes.contains(where: { $0.id == focusedPaneID }) { focusedPaneID = panes[0].id }
+        // A share only means something next to the others, so a pane that lost its neighbours'
+        // shares (a hand-edited file, a pane rebuilt by undo) takes everyone back to equal widths.
+        if !panes.allSatisfy({ $0.widthShare.map { $0.isFinite && $0 > 0 } ?? false }) { resetPaneWidths() }
+    }
+
+    mutating func resetPaneWidths() {
+        for p in panes.indices where panes[p].widthShare != nil { panes[p].widthShare = nil }
+    }
+
+    /// Each pane's fraction of the width in pane order, adding up to 1. Equal fractions while no
+    /// divider has been dragged since the panes last changed.
+    public var paneWidthShares: [Double] {
+        let stored = panes.compactMap(\.widthShare)
+        let total = stored.reduce(0, +)
+        guard stored.count == panes.count, total > 0 else {
+            return panes.map { _ in 1 / Double(max(panes.count, 1)) }
+        }
+        // Written already adding up to 1; only a file edited by hand needs the division.
+        return abs(total - 1) < 1e-9 ? stored : stored.map { $0 / total }
+    }
+
+    /// Ignored unless there is one positive share per pane.
+    mutating func setPaneWidthShares(_ shares: [Double]) {
+        let total = shares.reduce(0, +)
+        guard shares.count == panes.count, shares.allSatisfy({ $0.isFinite && $0 > 0 }) else { return }
+        for p in panes.indices { panes[p].widthShare = shares[p] / total }
+    }
+
+    /// The pane `offset` places after the focused one, wrapping around. Nil with a single pane,
+    /// which has nowhere to go.
+    public func paneID(adjacentToFocused offset: Int) -> Pane.ID? {
+        guard panes.count > 1, let current = focusedPaneIndex else { return nil }
+        let count = panes.count
+        return panes[((current + offset) % count + count) % count].id
     }
 
     private var focusedPaneIndex: Int? {

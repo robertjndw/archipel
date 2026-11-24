@@ -33,7 +33,11 @@ public struct SubagentRoster: Equatable, Sendable {
             lastSeen[id] = nil
         case .launched, .sessionStarted, .processExited, .agentLeft:
             lastSeen = [:]
-        case .promptSubmitted, .activity, .attentionRequested, .turnFinished, .terminalNotification, .bell:
+        case .turnInterrupted:
+            // An interrupt stops the subagents the turn was waiting on, and their stops are not
+            // reported. One that runs in the background shows up again with its next tool call.
+            lastSeen = [:]
+        case .promptSubmitted, .activity, .attentionRequested, .attentionReminder, .turnFinished, .terminalNotification, .bell:
             break
         }
     }

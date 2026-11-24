@@ -5,6 +5,8 @@
 #
 #   ./scripts/build-dmg.sh <version> [build-number]
 #
+# The build number defaults to 2. The release workflow passes its run number.
+#
 # Signing depends on the environment:
 #   SIGNING_IDENTITY  e.g. "Developer ID Application". Unset means an ad-hoc
 #                     signature, which Gatekeeper blocks on other Macs until
@@ -19,7 +21,10 @@
 set -euo pipefail
 
 version="${1:?usage: build-dmg.sh <version> [build-number]}"
-build="${2:-1}"
+# Not 1: the app treats build number 1 as a copy built from source and turns
+# updates off, while a local DMG is how updating is tried out. 2 is low enough
+# for Sparkle to offer the latest release.
+build="${2:-2}"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="${OUTPUT_DIR:-$root/.build/dmg}"

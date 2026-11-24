@@ -64,9 +64,15 @@ public enum UsageDecoder {
             usedTokens: max(used, 0),
             windowSize: size,
             usedPercent: min(max(percent, 0), 100),
-            transcriptPath: (payload["transcript_path"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+            transcriptPath: claudeTranscriptPath(payload),
             model: ((model?["display_name"] as? String) ?? (model?["id"] as? String)).flatMap { $0.isEmpty ? nil : $0 }
         )
+    }
+
+    /// Where Claude keeps the conversation, from its status line input or any of its hooks. Known
+    /// from the first of them, unlike the context, which only exists once there was a reply.
+    public static func claudeTranscriptPath(_ payload: [String: Any]) -> String? {
+        HookDecoder.nonEmptyString(payload["transcript_path"])
     }
 
     // Int(exactly:) because the plain conversion traps on NaN, infinity and anything out of range.

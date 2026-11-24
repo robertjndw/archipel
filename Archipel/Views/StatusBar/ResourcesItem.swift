@@ -384,6 +384,7 @@ private struct LeftoversRows: View {
     @Environment(AppModel.self) private var model
     let leftovers: [ResourceMonitor.Leftover]
     @Binding var isExpanded: Bool
+    @State private var confirmingQuitAll = false
 
     var body: some View {
         let count = leftovers.reduce(0) { $0 + $1.usage.processes.count }
@@ -394,15 +395,28 @@ private struct LeftoversRows: View {
                         .foregroundStyle(.orange)
                     Text(count == 1 ? "1 process left running" : "\(count) processes left running")
                         .fontWeight(.medium)
-                    Button("Quit All") {
-                        model.resources.quit(leftovers.flatMap { $0.usage.processes.map(\.id) })
+                    Button("Quit All") { confirmingQuitAll = true }
+                        .controlSize(.mini)
+                    Button("Ignore All") {
+                        model.resources.ignore(leftovers.flatMap { $0.usage.processes.map(\.id) })
                     }
                     .controlSize(.mini)
+                    .help("Keep them running and stop warning about them")
                 }
             } metrics: {
                 MetricPair(cpu: leftovers.reduce(0) { $0 + $1.usage.cpu }, memory: leftovers.reduce(0) { $0 + $1.usage.memory })
             }
             .help("Still running after the tab that started them closed")
+            .confirmationDialog(
+                count == 1 ? "Quit 1 process?" : "Quit \(count) processes?",
+                isPresented: $confirmingQuitAll
+            ) {
+                Button("Quit", role: .destructive) {
+                    model.resources.quit(leftovers.flatMap { $0.usage.processes.map(\.id) })
+                }
+            } message: {
+                Text("They are asked to stop, and killed if they do not.")
+            }
             if isExpanded {
                 ForEach(leftovers) { leftover in
                     ResourceRow(level: 1) {
@@ -414,7 +428,8 @@ private struct LeftoversRows: View {
                             .foregroundStyle(.secondary)
                     }
                     ForEach(leftover.usage.processes) { process in
-                        ProcessRowView(row: process, level: 2, confirmsQuit: false, owner: leftover.origin)
+                        ProcessRowView(row: process, level: 2, confirmsQuit: false, owner: leftover.origin,
+                                       onIgnore: { model.resources.ignore([process.id]) })
                     }
                 }
             }
@@ -429,6 +444,8 @@ private struct ProcessRowView: View {
     let level: Int
     let confirmsQuit: Bool
     let owner: String
+    /// Set for leftovers, which can be kept running instead of quit.
+    var onIgnore: (() -> Void)?
     @State private var isHovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirming = false
@@ -448,6 +465,11 @@ private struct ProcessRowView: View {
                         .foregroundStyle(.orange)
                         .help("Above \(Int(ResourceMonitor.cpuWarning))% CPU for over \(Int(ResourceMonitor.cpuWarningDuration / 60)) minutes")
                 }
+                if let onIgnore, isHovered {
+                    Button("Ignore", action: onIgnore)
+                        .controlSize(.mini)
+                        .help("Keep \(row.label) running and stop warning about it")
+                }
             }
         } metrics: {
             MetricPair(cpu: row.cpu, memory: row.memory)
@@ -466,6 +488,9 @@ private struct ProcessRowView: View {
             .accessibilityLabel("Quit \(row.label)")
         }
         .onHover { hovering in withAnimation(reduceMotion ? nil : Motion.hover) { isHovered = hovering } }
+        .contextMenu {
+            if let onIgnore { Button("Ignore", action: onIgnore) }
+        }
         .confirmationDialog("Quit \(row.label)?", isPresented: $confirming) {
             Button("Quit", role: .destructive) { model.resources.quit([row.id]) }
         } message: {

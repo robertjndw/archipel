@@ -278,6 +278,7 @@ struct PaneTabBar: View {
     private func tabMenu(_ tab: ArchipelCore.Tab) -> some View {
         Button("Split Right", systemImage: "rectangle.split.2x1") { model.split(tab: tab.id) }
             .disabled(pane.tabs.count < 2)
+        movesToPane(tab)
         if tab.isPreview {
             Button("Keep Open", systemImage: "pin") { model.pin(tab: tab.id) }
         }
@@ -300,6 +301,17 @@ struct PaneTabBar: View {
                 Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(url) }
             }
             Button("Open in Default App", systemImage: "arrow.up.forward.app") { NSWorkspace.shared.open(url) }
+            Button("Copy Path", systemImage: "document.on.document") { model.copyToPasteboard(url.path) }
+        }
+        if case .diff(let path, _) = tab.content {
+            let url = worktree.path.appending(path: path)
+            Divider()
+            Button("Open File", systemImage: "doc.text") { model.openFile(url, preview: false) }
+                // A deleted file has nothing to open or reveal.
+                .disabled(!FileManager.default.fileExists(atPath: url.path))
+            Button("Show in Finder", systemImage: "folder") { model.revealInFinder(url) }
+                .disabled(!FileManager.default.fileExists(atPath: url.path))
+            Button("Copy Path", systemImage: "document.on.document") { model.copyToPasteboard(url.path) }
         }
         if case .web(let url) = tab.content {
             Divider()
@@ -308,6 +320,29 @@ struct PaneTabBar: View {
         }
         Divider()
         Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
+        let others = pane.tabs.filter { $0.id != tab.id }
+        let right = pane.tabs.drop { $0.id != tab.id }.dropFirst()
+        Button("Close Other Tabs") { model.close(tabs: others.map(\.id)) }
+            .disabled(others.isEmpty)
+        Button("Close Tabs to the Right") { model.close(tabs: right.map(\.id)) }
+            .disabled(right.isEmpty)
+    }
+
+    /// One button when there is a single other pane, a submenu when there are several.
+    @ViewBuilder
+    private func movesToPane(_ tab: ArchipelCore.Tab) -> some View {
+        let others = worktree.panes.enumerated().filter { $0.element.id != pane.id }
+        if others.count == 1, let other = others.first {
+            Button("Move to Other Pane", systemImage: "rectangle.righthalf.inset.filled.arrow.right") {
+                model.move(tab: tab.id, toPane: other.element.id)
+            }
+        } else if others.count > 1 {
+            Menu("Move to Pane", systemImage: "rectangle.righthalf.inset.filled.arrow.right") {
+                ForEach(others, id: \.element.id) { index, other in
+                    Button("Pane \(index + 1)") { model.move(tab: tab.id, toPane: other.id) }
+                }
+            }
+        }
     }
 }
 
@@ -467,6 +502,7 @@ private struct TabButtonContent: View, Equatable {
         // button shows up on hover, so XCUITest and VoiceOver clicks closed the tab.
         .accessibilityActivationPoint(.center)
         .accessibilityAction(.default) { model.select(tab: tab.id) }
+        .accessibilityAction(named: "Close Tab") { model.close(tab: tab.id) }
     }
 
     private var title: some View {
@@ -534,13 +570,19 @@ private struct TabButtonContent: View, Equatable {
                 }
             }
             .modifier(SwapEffect(isShown: !isHovered, reduceMotion: reduceMotion))
-            Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .imageScale(.small)
-                .modifier(SwapEffect(isShown: isHovered, reduceMotion: reduceMotion))
-                .onHover { isOverClose = $0 }
+            Button { model.close(tab: tab.id) } label: {
+                Image(systemName: "xmark")
+                    .imageScale(.small)
+                    // The whole slot is the target, not just the glyph, so a click a little off
+                    // does not select the tab instead.
+                    .frame(width: Self.iconSlot, height: Chrome.controlHeight)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Close Tab")
+            .modifier(SwapEffect(isShown: isHovered, reduceMotion: reduceMotion))
+            .onHover { isOverClose = $0 }
         }
         .frame(width: Self.iconSlot)
     }

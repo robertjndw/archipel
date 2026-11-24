@@ -17,7 +17,8 @@ enum MarkdownHTML {
     }
 
     /// `highlights` holds runs for the blocks `codeBlocks` returned, by their index there. A block
-    /// without runs is shown plain.
+    /// without runs is shown plain. In a task that has been cancelled it stops early and returns
+    /// what it has, which the caller is expected to throw away.
     static func render(_ markdown: String, highlights: [Int: [HighlightRun]] = [:]) -> String {
         var renderer = Renderer(highlights: highlights)
         return renderer.visit(parse(markdown))
@@ -105,6 +106,9 @@ private struct Renderer: MarkupVisitor {
     /// Counts the blocks with a language, in the same order as `CodeBlockCollector`.
     private var codeBlockIndex = 0
     private var usedSlugs: [String: Int] = [:]
+    /// What the document's raw HTML has opened so far. A `<div align="center">` is meant to stay
+    /// open across the Markdown that follows it, so this lives as long as the render.
+    private var openElements = HTMLSanitizer.OpenElements()
 
     init(highlights: [Int: [HighlightRun]]) {
         self.highlights = highlights
@@ -112,8 +116,20 @@ private struct Renderer: MarkupVisitor {
 
     private mutating func children(of markup: Markup) -> String {
         var html = ""
-        for child in markup.children { html += visit(child) }
+        for child in markup.children {
+            // A newer revision of the buffer has replaced this one; a long document should not
+            // be rendered to the end for nobody.
+            if Task.isCancelled { break }
+            html += visit(child)
+        }
         return html
+    }
+
+    /// The inline content of a paragraph, heading or cell. A link that raw HTML opened in it
+    /// ends with it: left open, the browser would carry it into every block that follows and
+    /// make the rest of the document one click target.
+    private mutating func inlineChildren(of markup: Markup) -> String {
+        children(of: markup) + openElements.closeAll("a")
     }
 
     private func escape(_ text: some StringProtocol) -> String { MarkdownHTML.escape(text) }
@@ -128,10 +144,10 @@ private struct Renderer: MarkupVisitor {
         let count = usedSlugs[base, default: 0]
         usedSlugs[base] = count + 1
         let slug = count == 0 ? base : "\(base)-\(count)"
-        return "<h\(heading.level) id=\"\(escape(slug))\">\(children(of: heading))</h\(heading.level)>\n"
+        return "<h\(heading.level) id=\"\(escape(slug))\">\(inlineChildren(of: heading))</h\(heading.level)>\n"
     }
 
-    mutating func visitParagraph(_ paragraph: Paragraph) -> String { "<p>\(children(of: paragraph))</p>\n" }
+    mutating func visitParagraph(_ paragraph: Paragraph) -> String { "<p>\(inlineChildren(of: paragraph))</p>\n" }
 
     mutating func visitBlockQuote(_ blockQuote: BlockQuote) -> String { "<blockquote>\n\(children(of: blockQuote))</blockquote>\n" }
 
@@ -147,7 +163,10 @@ private struct Renderer: MarkupVisitor {
         return "<pre><code class=\"language-\(escape(language))\">\(body)</code></pre>\n"
     }
 
-    mutating func visitHTMLBlock(_ html: HTMLBlock) -> String { html.rawHTML }
+    mutating func visitHTMLBlock(_ html: HTMLBlock) -> String {
+        // Other elements may stay open for the blocks that follow. A link may not, see `inlineChildren`.
+        HTMLSanitizer.sanitize(html.rawHTML, open: &openElements) + openElements.closeAll("a")
+    }
 
     mutating func visitOrderedList(_ orderedList: OrderedList) -> String {
         let start = orderedList.startIndex == 1 ? "" : " start=\"\(orderedList.startIndex)\""
@@ -179,13 +198,14 @@ private struct Renderer: MarkupVisitor {
                     case .center: "center"
                     case .right: "right"
                     }
-                    attributes += " style=\"text-align: \(value)\""
+                    // Not a style attribute: the preview's Content Security Policy turns those off.
+                    attributes += " align=\"\(value)\""
                 }
                 if cell.colspan > 1 { attributes += " colspan=\"\(cell.colspan)\"" }
                 if cell.rowspan > 1 { attributes += " rowspan=\"\(cell.rowspan)\"" }
                 // A spanned-over cell is still in the tree, with a span of zero.
                 guard cell.colspan > 0, cell.rowspan > 0 else { continue }
-                html += "<\(tag)\(attributes)>\(renderer.children(of: cell))</\(tag)>"
+                html += "<\(tag)\(attributes)>\(renderer.inlineChildren(of: cell))</\(tag)>"
             }
         }
         var html = "<table>\n<thead>\n<tr>"
@@ -215,7 +235,9 @@ private struct Renderer: MarkupVisitor {
 
     mutating func visitSymbolLink(_ symbolLink: SymbolLink) -> String { "<code>\(escape(symbolLink.destination ?? ""))</code>" }
 
-    mutating func visitInlineHTML(_ inlineHTML: InlineHTML) -> String { inlineHTML.rawHTML }
+    mutating func visitInlineHTML(_ inlineHTML: InlineHTML) -> String {
+        HTMLSanitizer.sanitize(inlineHTML.rawHTML, open: &openElements)
+    }
 
     mutating func visitSoftBreak(_ softBreak: SoftBreak) -> String { "\n" }
 
@@ -223,11 +245,17 @@ private struct Renderer: MarkupVisitor {
 
     mutating func visitLink(_ link: Link) -> String {
         let title = link.title.map { " title=\"\(escape($0))\"" } ?? ""
-        return "<a href=\"\(escape(link.destination ?? ""))\"\(title)>\(children(of: link))</a>"
+        let destination = link.destination ?? ""
+        // An unsafe destination leaves the text as a link that leads nowhere.
+        let href = HTMLSanitizer.isSafeLinkDestination(destination) ? " href=\"\(escape(destination))\"" : ""
+        return "<a\(href)\(title)>\(children(of: link))</a>"
     }
 
     mutating func visitImage(_ image: Image) -> String {
         let title = image.title.map { " title=\"\(escape($0))\"" } ?? ""
-        return "<img src=\"\(escape(image.source ?? ""))\" alt=\"\(escape(image.plainText))\"\(title)>"
+        let source = image.source ?? ""
+        // The same rule as for an `<img>` written in HTML. Without a source the alt text shows.
+        let src = HTMLSanitizer.isSafeImageSource(source) ? " src=\"\(escape(source))\"" : ""
+        return "<img\(src) alt=\"\(escape(image.plainText))\"\(title)>"
     }
 }

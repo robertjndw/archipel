@@ -77,7 +77,8 @@ struct StatusGlyph: View {
             }
         }
         .frame(width: 18)
-        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+        // Opacity only: scaling a spinner by a fractional amount crashes AppKit's layout, see `statusGlowLanding`.
+        .transition(.opacity)
     }
 
     /// Bounces once when it appears or the reason changes, which is what draws the eye to a row in a

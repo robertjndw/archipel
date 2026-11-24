@@ -77,6 +77,19 @@ struct RootView: View {
         .sheet(isPresented: $model.isCreatingIsland) {
             IslandEditor(mode: .create)
         }
+        .sheet(item: $model.islandBeingEdited) { island in
+            IslandEditor(mode: .edit(island))
+        }
+        .confirmationDialog("Delete the island \(model.islandAwaitingDeletion?.name ?? "")?", item: $model.islandAwaitingDeletion) { island in
+            Button("Delete Island", role: .destructive) { model.removeIsland(island.id) }
+        } message: { island in
+            Text(model.deletionMessage(for: island))
+        }
+        .confirmationDialog("Remove the project \(model.projectAwaitingRemoval?.name ?? "")?", item: $model.projectAwaitingRemoval) { project in
+            Button("Remove Project", role: .destructive) { model.removeProject(project) }
+        } message: { project in
+            Text(model.removalMessage(for: project))
+        }
         .renameAlert($model.renameRequest)
         .alert("Archipel ran into a problem", item: $model.problem) { _ in
             Button("OK") {}

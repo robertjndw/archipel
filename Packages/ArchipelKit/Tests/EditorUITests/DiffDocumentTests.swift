@@ -66,6 +66,19 @@ struct DiffDocumentTests {
         #expect(DiffDocument.emphasis("abc", "xyz") == (nil, nil))
     }
 
+    @Test func emphasisIsSkippedWhenLinesShareLittleMoreThanTheirFrame() {
+        // Only the indentation in common.
+        #expect(DiffDocument.emphasis("        return cached", "        let value = compute()") == (nil, nil))
+        // Indentation and a trailing brace.
+        #expect(DiffDocument.emphasis("    if ready { start() }", "    while waiting { poll() }") == (nil, nil))
+        // Indentation is not content: a line that keeps only its indentation shares nothing.
+        #expect(DiffDocument.emphasis("        a = 1", "        b = 2") == (nil, nil))
+        // A small change inside a line keeps its emphasis.
+        #expect(DiffDocument.emphasis("    if a == b {", "    if a != b {") == (9..<10, 9..<10))
+        // So does an insertion, where one side has no middle at all.
+        #expect(DiffDocument.emphasis("foo()", "foo(bar, baz, qux)").1 == 4..<17)
+    }
+
     @Test func foldsLongUnchangedRuns() {
         var lines = (1...20).map { GitDiffLine(.context, "\($0)") }
         lines.insert(GitDiffLine(.added, "new"), at: 10)

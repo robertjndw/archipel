@@ -39,13 +39,16 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     private nonisolated static let tokenKey = "token"
     private nonisolated static let summaryIdentifier = "archipel.summary"
     private var dockBadgeCount = 0
-    /// The token of each session's newest notification. Anything else, or anything posted before the
-    /// session's state last changed, is stale and must not be answered on the agent's behalf.
-    private var tokens: [Session.ID: String] = [:]
+    /// The token of each session's newest notification, with the request that notification
+    /// described. Anything else, or anything posted before the session's state or request last
+    /// changed, is stale and must not be answered on the agent's behalf.
+    private var tokens: [Session.ID: (token: String, request: SessionActivity.PendingRequest?)] = [:]
     /// Sessions that may still have a banner in Notification Center. `clear` runs on every selection
     /// change, and without this each of those would be a round trip to the notification daemon.
     private var delivered: Set<Session.ID> = []
     private var hasRequestedAuthorization = false
+    /// The sessions the summary notification speaks for, while it may still be around.
+    private var summaryCoverage = SummaryCoverage()
 
     func start() {
         center.delegate = self
@@ -66,6 +69,15 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         // its answer would stick to the test build.
         #if !UITESTS
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        #endif
+    }
+
+    /// For the button in Settings, where the user asked for the dialog themselves. Before the
+    /// first notification the app is not listed in System Settings, so that pane cannot grant it.
+    func requestAuthorization() async {
+        hasRequestedAuthorization = true
+        #if !UITESTS
+        _ = try? await center.requestAuthorization(options: [.alert, .sound])
         #endif
     }
 
@@ -109,13 +121,14 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         body: String?,
         playsSound: Bool,
         status: SessionStatus,
+        request: SessionActivity.PendingRequest?,
         category: Category?
     ) {
         // Not every session that notifies is an agent's: a setup script or dev server that exits
         // gets here without the question ever having been asked.
         requestAuthorizationIfNeeded()
         let token = UUID().uuidString
-        tokens[sessionID] = token
+        tokens[sessionID] = (token, request)
         delivered.insert(sessionID)
         let content = UNMutableNotificationContent()
         content.title = title
@@ -135,19 +148,25 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// The one notification that stands in for everything held back while the user was busy.
-    /// Tapping it opens `sessionID`.
-    func postSummary(title: String, body: String, sessionID: Session.ID, playsSound: Bool) {
+    /// Tapping it opens `sessionID`. It stays until every session in `covering` has been cleared.
+    func postSummary(title: String, body: String, sessionID: Session.ID, covering: Set<Session.ID>, playsSound: Bool) {
         requestAuthorizationIfNeeded()
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         if playsSound { content.sound = .default }
         content.userInfo = [Self.sessionKey: sessionID.uuidString]
+        summaryCoverage = SummaryCoverage(covering.union([sessionID]))
         center.add(UNNotificationRequest(identifier: Self.summaryIdentifier, content: content, trigger: nil))
     }
 
     func clear(sessionID: Session.ID) {
         tokens[sessionID] = nil
+        // The summary counts several sessions, so it is only out of date once the user has dealt
+        // with the last of them.
+        if summaryCoverage.clear(sessionID) {
+            center.removeDeliveredNotifications(withIdentifiers: [Self.summaryIdentifier])
+        }
         guard delivered.remove(sessionID) != nil else { return }
         center.removeDeliveredNotifications(withIdentifiers: [sessionID.uuidString])
     }
@@ -158,7 +177,14 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func isCurrent(_ response: Response) -> Bool {
-        tokens[response.sessionID] == response.token
+        tokens[response.sessionID]?.token == response.token
+    }
+
+    /// The request the notification behind `response` described, or nil when it described none
+    /// or is no longer the session's current one.
+    func request(answeredBy response: Response) -> SessionActivity.PendingRequest? {
+        guard let entry = tokens[response.sessionID], entry.token == response.token else { return nil }
+        return entry.request
     }
 
     /// Called on every hook event, and each badge update is a round trip to the Dock.
@@ -199,6 +225,8 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+        // In the list too, so the buttons of a banner that showed while Archipel was in front can
+        // still be found in Notification Center afterwards.
+        [.banner, .list, .sound]
     }
 }

@@ -8,19 +8,25 @@ import UISupport
 public struct FileEditor: View {
     private let url: URL
     private let store: FileDocumentStore
+    private let root: URL?
     private let onOpenLink: (URL) -> Void
 
+    /// `root` is the repository or worktree the file belongs to. A Markdown preview loads images
+    /// from inside it only, or from the file's own folder when it is left out.
     /// `onOpenLink` gets the links clicked in a Markdown preview: file URLs for relative links,
-    /// anything else as written. Leave it out to open them in their default app.
-    public init(url: URL, store: FileDocumentStore, onOpenLink: ((URL) -> Void)? = nil) {
+    /// anything else as written. The Markdown may come from a repository nobody has read, so do
+    /// not pass every scheme on to the system; see `PreviewLinkPolicy`. Leave it out to open
+    /// web and mail links and to show linked files in Finder.
+    public init(url: URL, store: FileDocumentStore, root: URL? = nil, onOpenLink: ((URL) -> Void)? = nil) {
         self.url = url
         self.store = store
-        self.onOpenLink = onOpenLink ?? { NSWorkspace.shared.open($0) }
+        self.root = root
+        self.onOpenLink = onOpenLink ?? { PreviewLinkPolicy.openByDefault($0) }
     }
 
     public var body: some View {
         // A new identity per file drops the old watcher and text view; the buffer lives on in the store.
-        FileEditorContent(buffer: store.buffer(for: url), store: store, onOpenLink: onOpenLink)
+        FileEditorContent(buffer: store.buffer(for: url), store: store, root: root, onOpenLink: onOpenLink)
             .id(url.standardizedFileURL)
     }
 }
@@ -28,7 +34,8 @@ public struct FileEditor: View {
 private struct FileEditorContent: View {
     let buffer: TextBuffer
     let store: FileDocumentStore
-    var onOpenLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    var root: URL?
+    var onOpenLink: (URL) -> Void = { PreviewLinkPolicy.openByDefault($0) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,7 +49,11 @@ private struct FileEditorContent: View {
                     Divider()
                 }
                 if let error = buffer.saveError {
-                    SaveErrorBar(message: error) { buffer.saveError = nil }
+                    SaveErrorBar(
+                        message: error,
+                        // A failed attempt shows its own error in this bar.
+                        saveAsUTF8: buffer.saveFailedOnEncoding ? { try? buffer.saveAsUTF8() } : nil
+                    ) { buffer.saveError = nil }
                     Divider()
                 }
             }
@@ -64,7 +75,7 @@ private struct FileEditorContent: View {
             Color.clear
         case .text:
             if buffer.isMarkdown, buffer.showsPreview {
-                MarkdownPreview(buffer: buffer, onOpenLink: onOpenLink)
+                MarkdownPreview(buffer: buffer, root: root, onOpenLink: onOpenLink)
             } else {
                 CodeTextView(buffer: buffer)
             }
@@ -86,6 +97,14 @@ private struct FileEditorContent: View {
             } actions: {
                 openInDefaultApp
             }
+        case .lineTooLong(let length):
+            ContentUnavailableView {
+                Label("Lines Too Long", systemImage: "text.alignleft")
+            } description: {
+                Text("\(buffer.name) has a line of \(length.formatted()) characters, probably minified. Files with lines over \(TextBuffer.maximumLineLength.formatted()) characters open in their default app.")
+            } actions: {
+                openInDefaultApp
+            }
         case .binary:
             ContentUnavailableView {
                 Label("No Preview Available", systemImage: "doc.questionmark")
@@ -98,7 +117,11 @@ private struct FileEditorContent: View {
     }
 
     private var openInDefaultApp: some View {
-        Button("Open in Default App") { NSWorkspace.shared.open(buffer.fileURL) }
+        // A script, an executable or an app bundle would run rather than open, and the file may
+        // come from a clone nobody has read. Those are shown in Finder, and the button says so.
+        Button(ExternalFileOpen.runsCodeWhenOpened(buffer.fileURL) ? "Show in Finder" : "Open in Default App") {
+            ExternalFileOpen.openOrReveal(buffer.fileURL)
+        }
             .buttonStyle(.glass)
     }
 }
@@ -141,7 +164,8 @@ private struct ConflictBar: View {
     let buffer: TextBuffer
 
     var body: some View {
-        InlineBar(systemImage: "exclamationmark.triangle.fill", tint: .orange) {
+        // A save the conflict refused would otherwise do nothing visible at all.
+        InlineBar(systemImage: "exclamationmark.triangle.fill", tint: .orange, attention: buffer.refusedSaveCount) {
             Text(conflict == .deleted ? "This file was deleted on disk." : "This file changed on disk.")
         } actions: {
             Button(conflict == .deleted ? "Discard My Edits" : "Reload") { buffer.discardChanges() }
@@ -156,6 +180,7 @@ private struct ConflictBar: View {
 
 private struct SaveErrorBar: View {
     let message: String
+    var saveAsUTF8: (() -> Void)?
     let dismiss: () -> Void
 
     var body: some View {
@@ -163,6 +188,11 @@ private struct SaveErrorBar: View {
             Text("Couldn't save: \(message)")
                 .textSelection(.enabled)
         } actions: {
+            if let saveAsUTF8 {
+                Button("Save as UTF-8", action: saveAsUTF8)
+                    .buttonStyle(.glass)
+                    .help("Save the file in UTF-8, which can hold every character")
+            }
             Button("Dismiss", systemImage: "xmark", action: dismiss)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
@@ -174,13 +204,26 @@ private struct SaveErrorBar: View {
 private struct InlineBar<Message: View, Actions: View>: View {
     let systemImage: String
     let tint: Color
+    /// Each change wiggles the symbol once.
+    var attention = 0
     @ViewBuilder let message: Message
     @ViewBuilder let actions: Actions
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(systemImage: String, tint: Color, attention: Int = 0, @ViewBuilder message: () -> Message, @ViewBuilder actions: () -> Actions) {
+        self.systemImage = systemImage
+        self.tint = tint
+        self.attention = attention
+        self.message = message()
+        self.actions = actions()
+    }
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: systemImage)
                 .foregroundStyle(tint)
+                // Keyed to a constant under Reduce Motion; the beep that comes with it still tells.
+                .symbolEffect(.wiggle, value: reduceMotion ? 0 : attention)
                 .accessibilityHidden(true)
             message
                 .lineLimit(2)
@@ -240,8 +283,23 @@ private func previewEditor(_ buffer: TextBuffer) -> some View {
     ))
 }
 
+#Preview("Can't Encode") {
+    let buffer = TextBuffer.previewSample(
+        url: PreviewSamples.url("legacy.txt"),
+        text: "caf\u{e9}\n",
+        edit: "\u{1F600}",
+        saveError: TextFileFormat.EncodingError(encoding: .windowsCP1252).localizedDescription,
+        saveFailedOnEncoding: true
+    )
+    return previewEditor(buffer)
+}
+
 #Preview("Too Large") {
     previewEditor(.previewSample(url: PreviewSamples.url("data/events.log"), state: .tooLarge(48_200_000)))
+}
+
+#Preview("Lines Too Long") {
+    previewEditor(.previewSample(url: PreviewSamples.url("dist/bundle.min.js"), state: .lineTooLong(1_840_000)))
 }
 
 #Preview("Binary") {

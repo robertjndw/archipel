@@ -171,6 +171,53 @@ final class IslandTests: ArchipelUITestCase {
         waitUntil("the deletion is saved") { try sandbox.savedWorkspace().islands.map(\.name) == ["Personal"] }
     }
 
+    func testMovingAnIslandChangesItsPlaceAndShortcut() throws {
+        let alpha = try sandbox.makeRepository(named: "alpha")
+        let beta = try sandbox.makeRepository(named: "beta")
+        try launch(with: islandWorkspace([("Personal", [alpha]), ("Work", [beta])]))
+
+        assertExists(mainWindow.buttons["Work"], "Both islands should be in the switcher.")
+        mainWindow.buttons["Work"].rightClick()
+        chooseContextMenu("Move Left")
+        waitUntil("the new order is saved") { try sandbox.savedWorkspace().islands.map(\.name) == ["Work", "Personal"] }
+
+        chooseMenu("Islands", "Personal")
+        assertExists(sidebarProject("alpha"), "Personal should still open.")
+        app.typeKey("1", modifierFlags: .control)
+        assertExists(sidebarProject("beta"), "⌃1 should follow the island that is now first.")
+    }
+
+    func testMovingAProjectDownWithinItsIsland() throws {
+        let alpha = try sandbox.makeRepository(named: "alpha")
+        let beta = try sandbox.makeRepository(named: "beta")
+        try launch(with: islandWorkspace([("Personal", [alpha, beta])]))
+
+        sidebarProject("alpha").rightClick()
+        chooseContextMenu("Move Down")
+        waitUntil("the new order is saved") {
+            try sandbox.savedWorkspace().islands.map { $0.projects.map(\.name) } == [["beta", "alpha"]]
+        }
+    }
+
+    func testMovingAProjectUpStopsAtTheTop() throws {
+        let alpha = try sandbox.makeRepository(named: "alpha")
+        let beta = try sandbox.makeRepository(named: "beta")
+        let gamma = try sandbox.makeRepository(named: "gamma")
+        try launch(with: islandWorkspace([("Personal", [alpha, beta, gamma])]))
+
+        assertExists(sidebarProject("gamma"), "All seeded projects should be listed.")
+        sidebarProject("gamma").rightClick()
+        chooseContextMenu("Move Up")
+        waitUntil("the new order is saved") {
+            try sandbox.savedWorkspace().islands.map { $0.projects.map(\.name) } == [["alpha", "gamma", "beta"]]
+        }
+
+        sidebarProject("alpha").rightClick()
+        XCTAssertEqual(shownMenuItem("Move Up")?.isEnabled, false, "The first project has nowhere to move up to.")
+        XCTAssertEqual(shownMenuItem("Move Down")?.isEnabled, true, "The first project can still move down.")
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
     func testTheLastIslandCannotBeDeleted() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         try launch(with: repository.workspace())

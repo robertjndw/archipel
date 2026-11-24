@@ -53,6 +53,22 @@ struct SessionPeekTests {
         ])
     }
 
+    @Test func targetsOfAFilteredListOnlyHaveItsRows() {
+        let single = makeWorktree("single", sessions: [a])
+        let multi = makeWorktree("multi", sessions: [b, c])
+        let unlisted = makeWorktree("unlisted", sessions: [makeSession()])
+        // The rows as a filtered list shows them, from any island and in its order.
+        let targets = SessionPeek.targets(in: [multi, single]) { $0.sessions.first?.id }
+        #expect(targets == [
+            .init(worktreeID: multi.id, sessionID: b.id),
+            .init(worktreeID: multi.id, sessionID: c.id),
+            .init(worktreeID: single.id, sessionID: a.id),
+        ])
+        #expect(!targets.contains { $0.worktreeID == unlisted.id })
+        // Stepping past the last row stays on it instead of reaching a worktree without a row.
+        #expect(SessionPeek.step(from: targets[2], by: 1, in: targets) == targets[2])
+    }
+
     @Test func stepClampsAndRecoversFromAMissingTarget() {
         let w1 = UUID(), w2 = UUID()
         let targets = [

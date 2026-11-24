@@ -1,5 +1,6 @@
 import AppKit
 import ArchipelCore
+import EditorUI
 
 // Structural changes (closing and moving tabs, removing a worktree whose folder stays, renames) go on
 // the main window's undo manager, which is what Edit > Undo reaches when focus is on a terminal, the
@@ -52,14 +53,18 @@ extension AppModel {
 
     /// Only for a worktree whose folder stayed on disk and whose git record was left alone. Anything
     /// git removed cannot be brought back by putting the row back.
-    func registerRestore(_ removed: RemovedWorktree) {
-        registerUndo("Remove Worktree") { $0.restore(removed) }
+    /// `comments` are the worktree's review comments as they were when it went. The status poll
+    /// forgets them once the worktree is gone, so the undo carries its own copy.
+    func registerRestore(_ removed: RemovedWorktree, comments: [ReviewComment] = []) {
+        registerUndo("Remove Worktree") { $0.restore(removed, comments: comments) }
     }
 
-    private func restore(_ removed: RemovedWorktree) {
+    private func restore(_ removed: RemovedWorktree, comments: [ReviewComment]) {
         var restored = false
         changingSelection { restored = $0.restore(removed) }
         guard restored else { return NSSound.beep() }
+        // Adding a comment that is still there replaces it, so this is safe before the poll ran too.
+        for comment in comments { reviewComments.add(comment, in: removed.worktree.path) }
         refreshBranches()
         refreshWorktreeDiscovery()
         registerUndo("Remove Worktree") { $0.removeKeepingFolder(removed.worktree.id) }
@@ -67,10 +72,11 @@ extension AppModel {
 
     private func removeKeepingFolder(_ id: Worktree.ID) {
         guard let removal = workspace.removal(ofWorktree: id) else { return NSSound.beep() }
+        let comments = reviewComments.comments(in: removal.worktree.path)
         changingSelection { $0.removeWorktree(id: id, dismiss: true) }
         missingWorktrees.remove(id)
         refreshWorktreeDiscovery()
-        registerRestore(removal)
+        registerRestore(removal, comments: comments)
     }
 
     // MARK: Renames

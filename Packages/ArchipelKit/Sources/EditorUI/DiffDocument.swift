@@ -149,9 +149,13 @@ struct DiffDocument: Equatable, Sendable {
         unified += unifiedRemoved + unifiedAdded
     }
 
+    /// Above this share of a line's content changed on both sides, the emphasis covers nearly the
+    /// whole line and only adds noise.
+    static let maximumEmphasisShare = 0.6
+
     /// The changed middle of a modified pair: everything between the longest common prefix and suffix,
-    /// trimmed on grapheme boundaries. Nil when the lines share nothing, since emphasising the whole
-    /// line again would only add noise.
+    /// trimmed on grapheme boundaries. Nil when the lines share nothing, or little more than their
+    /// indentation and a closing brace, since emphasising the whole line again would only add noise.
     static func emphasis(_ old: String, _ new: String) -> (Range<Int>?, Range<Int>?) {
         if old == new { return (nil, nil) }
         let oldCharacters = Array(old)
@@ -166,6 +170,17 @@ struct DiffDocument: Equatable, Sendable {
             suffix += 1
         }
         if prefix == 0 && suffix == 0 { return (nil, nil) }
+
+        /// How much of the line's content, without its surrounding whitespace, is in the middle.
+        func changedShare(_ characters: [Character]) -> Double {
+            let content = characters.count
+                - characters.prefix { $0.isWhitespace }.count
+                - characters.reversed().prefix { $0.isWhitespace }.count
+            return content > 0 ? Double(characters.count - prefix - suffix) / Double(content) : 1
+        }
+        if changedShare(oldCharacters) > maximumEmphasisShare, changedShare(newCharacters) > maximumEmphasisShare {
+            return (nil, nil)
+        }
 
         func utf16Range(_ characters: [Character]) -> Range<Int>? {
             let start = characters[..<prefix].reduce(0) { $0 + $1.utf16.count }
@@ -185,8 +200,10 @@ enum DiffDisplayItem: Equatable, Sendable {
 enum DiffFolding {
     /// Keeps `context` unchanged rows around every change and folds longer unchanged runs.
     /// Runs shorter than `minimumFold` stay visible: a fold that hides two lines saves nothing.
-    static func items(for rows: [DiffRow], context: Int = 3, minimumFold: Int = 4) -> [DiffDisplayItem] {
+    /// `keeping` names rows that stay visible whatever the rule says, such as ones the user unfolded.
+    static func items(for rows: [DiffRow], context: Int = 3, minimumFold: Int = 4, keeping: Set<Int> = []) -> [DiffDisplayItem] {
         var visible = [Bool](repeating: false, count: rows.count)
+        for index in keeping where visible.indices.contains(index) { visible[index] = true }
         for (index, row) in rows.enumerated() where row.isChange {
             for neighbour in max(0, index - context)...min(rows.count - 1, index + context) {
                 visible[neighbour] = true
@@ -222,5 +239,76 @@ enum DiffFolding {
         var items = items
         items.replaceSubrange(index...index, with: range.map(DiffDisplayItem.row))
         return items
+    }
+
+    // MARK: Across refreshes
+
+    /// The unchanged lines the user has unfolded, by their place on the old side. The old side is the
+    /// index or HEAD, which stays put while an agent rewrites the working tree, so these still name
+    /// the same lines in the next version of the diff.
+    static func unfoldedLines(_ items: [DiffDisplayItem], rows: [DiffRow], document: DiffDocument) -> Set<DiffUnchangedLine> {
+        let shownByDefault = Set(Self.items(for: rows).compactMap(\.row))
+        var lines: Set<DiffUnchangedLine> = []
+        for item in items {
+            guard let rowIndex = item.row, !shownByDefault.contains(rowIndex),
+                  let line = DiffUnchangedLine(rows[rowIndex], in: document) else { continue }
+            lines.insert(line)
+        }
+        return lines
+    }
+
+    /// The rows of `document` that show one of `lines`, for `items(for:keeping:)`.
+    static func rows(showing lines: Set<DiffUnchangedLine>, in rows: [DiffRow], document: DiffDocument) -> Set<Int> {
+        guard !lines.isEmpty else { return [] }
+        return Set(rows.indices.filter { DiffUnchangedLine(rows[$0], in: document).map(lines.contains) ?? false })
+    }
+
+    /// What sits at a display item, in terms that outlive the layout: a line number on the old side
+    /// when the row has one, since that side stays put, else on the new side.
+    static func anchor(at item: Int, in items: [DiffDisplayItem], rows: [DiffRow], document: DiffDocument) -> DiffLineAnchor? {
+        guard items.indices.contains(item) else { return nil }
+        let rowIndex = switch items[item] {
+        case .row(let rowIndex): rowIndex
+        case .fold(let range): range.lowerBound
+        }
+        let row = rows[rowIndex]
+        if let old = row.old { return DiffLineAnchor(side: .old, line: document.old.numbers[old]) }
+        if let new = row.new { return DiffLineAnchor(side: .new, line: document.new.numbers[new]) }
+        return nil
+    }
+
+    /// The display item that shows `anchor`, or the fold that hides it.
+    static func item(showing anchor: DiffLineAnchor, in items: [DiffDisplayItem], rows: [DiffRow], document: DiffDocument) -> Int? {
+        func shows(_ rowIndex: Int) -> Bool {
+            let row = rows[rowIndex]
+            switch anchor.side {
+            case .old: return row.old.map { document.old.numbers[$0] == anchor.line } ?? false
+            case .new: return row.old == nil && row.new.map { document.new.numbers[$0] == anchor.line } ?? false
+            }
+        }
+        return items.firstIndex { item in
+            switch item {
+            case .row(let rowIndex): shows(rowIndex)
+            case .fold(let range): range.contains(where: shows)
+            }
+        }
+    }
+}
+
+/// An unchanged line, by its number and text on the old side.
+struct DiffUnchangedLine: Hashable, Sendable {
+    var oldLine: Int
+    var text: String
+
+    init?(_ row: DiffRow, in document: DiffDocument) {
+        guard row.kind == .context, let old = row.old else { return nil }
+        oldLine = document.old.numbers[old]
+        text = document.old.lines[old]
+    }
+}
+
+extension DiffDisplayItem {
+    var row: Int? {
+        if case .row(let index) = self { index } else { nil }
     }
 }

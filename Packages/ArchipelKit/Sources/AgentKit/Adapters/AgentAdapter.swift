@@ -32,6 +32,9 @@ public protocol AgentAdapter: Sendable {
     func attentionReason(forTerminalNotification body: String) -> AttentionReason?
     /// A fresh conversation id for `SessionIDStrategy.presetByApp`, in whatever shape the agent accepts.
     func makePresetSessionID() -> String
+    /// Whether `id` has the shape of this agent's conversation ids. Asked before an id from a hook
+    /// is kept and again before one goes on a command line; see `AgentSessionID`.
+    func acceptsSessionID(_ id: String) -> Bool
     /// The conversation's name inside the title the agent sets on its terminal, or nil when the
     /// title says nothing about it. The title is shown as is, minus leading status glyphs.
     func conversationTitle(fromTerminalTitle title: String) -> String?
@@ -41,10 +44,19 @@ extension AgentAdapter {
     public var executableToLocate: String { executableName }
     public var fallbackHookSources: Set<String> { [] }
 
-    /// Nil when the agent cannot resume or no agent session id is known yet; start fresh then.
+    /// Nil when the agent cannot resume, no agent session id is known yet or the one that was
+    /// saved does not look like an id; start fresh then.
     public func resumeCommand(for context: LaunchContext) -> LaunchCommand? {
-        guard let agentSessionID = context.agentSessionID else { return nil }
+        guard let agentSessionID = context.agentSessionID, acceptsSessionID(agentSessionID) else { return nil }
         return resumeCommand(for: context, agentSessionID: agentSessionID)
+    }
+
+    public func acceptsSessionID(_ id: String) -> Bool { AgentSessionID.isPlainWord(id) }
+
+    /// The conversation id in a hook payload, or nil when the value is not one this agent could
+    /// have produced.
+    func sessionID(_ value: Any?) -> String? {
+        HookDecoder.nonEmptyString(value).flatMap { acceptsSessionID($0) ? $0 : nil }
     }
 
     public func decodeHook(source: String, payload: [String: Any], receivedAt date: Date) -> DecodedHook? { nil }

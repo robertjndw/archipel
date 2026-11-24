@@ -69,9 +69,14 @@ final class ResourceMonitor {
     /// The processes of a closed tab get SIGHUP and usually exit within a second. Only what is
     /// still around after this is reported.
     private static let leftoverGrace: TimeInterval = 5
+    /// How long a dead terminal may still claim processes by its Unix session id.
+    private static let sessionIDLifetime: TimeInterval = 30
 
     @ObservationIgnored private var tracked: [Session.ID: Tracked] = [:]
     @ObservationIgnored private var closed: [Closed] = []
+    /// Leftovers the user chose to keep running. Identified like the kill path does, by pid and
+    /// start time, so a reused pid is not covered. Dropped once the process is gone.
+    @ObservationIgnored private var ignored: Set<ProcessIdentity> = []
     @ObservationIgnored private var labels: [ProcessIdentity: String] = [:]
     @ObservationIgnored private var cpuMeter = CPUMeter()
     @ObservationIgnored private var load = SustainedLoad()
@@ -90,6 +95,9 @@ final class ResourceMonitor {
         var origin: String
         var unixSessionID: Int32?
         var members: Set<ProcessIdentity> = []
+        /// When the terminal's child was first seen gone. The tab stays open, but its session id
+        /// can be reused once the last process of the session is gone.
+        var exitedAt: Date?
     }
 
     private struct Closed {
@@ -132,6 +140,21 @@ final class ResourceMonitor {
         }
     }
 
+    /// The processes currently attributed to each terminal, including the shell and its wrapper.
+    var processIDs: [Session.ID: [Int32]] {
+        tracked.mapValues { $0.members.map(\.pid) }
+    }
+
+    /// Stops warning about these leftovers for as long as they live.
+    func ignore(_ identities: [ProcessIdentity]) {
+        guard !identities.isEmpty else { return }
+        ignored.formUnion(identities)
+        Task { [weak self] in
+            guard let self, let sources = self.sources else { return }
+            await self.scan(sources())
+        }
+    }
+
     // MARK: Scanning
 
     private func scan(_ sources: [Session.ID: Source]) async {
@@ -155,13 +178,21 @@ final class ResourceMonitor {
             tracked[id]?.origin = source.origin
             tracked[id]?.worktreeID = source.worktreeID
             tracked[id]?.worktreeName = source.worktreeName
-            if tracked[id]?.unixSessionID == nil, let pid = source.terminal.foregroundProcessID {
+            if source.terminal.hasExited {
+                if tracked[id]?.exitedAt == nil { tracked[id]?.exitedAt = now }
+                if let exitedAt = tracked[id]?.exitedAt, now.timeIntervalSince(exitedAt) > Self.sessionIDLifetime {
+                    tracked[id]?.unixSessionID = nil
+                }
+            } else {
+                tracked[id]?.exitedAt = nil
+            }
+            if tracked[id]?.unixSessionID == nil, tracked[id]?.exitedAt == nil, let pid = source.terminal.foregroundProcessID {
                 let sid = getsid(pid)
                 if sid > 1 { tracked[id]?.unixSessionID = sid }
             }
         }
         closed.removeAll { $0.members.isEmpty && now.timeIntervalSince($0.closedAt) > Self.leftoverGrace }
-        for index in closed.indices where now.timeIntervalSince(closed[index].closedAt) > 30 {
+        for index in closed.indices where now.timeIntervalSince(closed[index].closedAt) > Self.sessionIDLifetime {
             closed[index].unixSessionID = nil
         }
 
@@ -212,14 +243,16 @@ final class ResourceMonitor {
         for index in closed.indices {
             let members = sample.attribution[.closed(closed[index].id)] ?? []
             closed[index].members = members
-            guard now.timeIntervalSince(closed[index].closedAt) >= Self.leftoverGrace, !members.isEmpty else { continue }
+            let shown = members.subtracting(ignored)
+            guard now.timeIntervalSince(closed[index].closedAt) >= Self.leftoverGrace, !shown.isEmpty else { continue }
             nextLeftovers.append(Leftover(
                 id: closed[index].id,
                 origin: closed[index].origin,
-                usage: usage(of: members, unixSessionID: nil, foregroundGroup: nil)
+                usage: usage(of: shown, unixSessionID: nil, foregroundGroup: nil)
             ))
         }
         closed.removeAll { $0.members.isEmpty }
+        ignored.formIntersection(closed.reduce(into: Set<ProcessIdentity>()) { $0.formUnion($1.members) })
 
         let ownPID = ProcessIdentity(pid: getpid(), startTime: sample.ownStartTime)
         var nextApp = Usage()

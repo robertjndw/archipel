@@ -96,7 +96,8 @@ final class ManualAgentTests: ArchipelUITestCase {
         let started = try XCTUnwrap(waitForStub(stub))
         waitUntil("the sidebar shows Claude", timeout: Self.scanTimeout) { self.claudeIcon.exists }
 
-        // Only a session with a turn in flight asks, so an idle Claude would close without a word.
+        // An idle Claude asks too, as any command running in a shell does. With a turn in flight
+        // the dialog says so, and names Claude as what stops.
         try stub.progressOn()
         waitUntil("the progress report makes the window show Claude working") { self.agentsStatus == "1 agent working" }
 

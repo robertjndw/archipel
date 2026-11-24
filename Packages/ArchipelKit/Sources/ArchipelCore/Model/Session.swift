@@ -61,4 +61,19 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         if let agentTitle, !agentTitle.isEmpty { return agentTitle }
         return title
     }
+
+    /// The title of a new session of an agent, numbered among `siblings`, that agent's sessions in
+    /// the same worktree: the first gets `base` alone, later ones the lowest number none of them
+    /// holds, so closing a tab frees its number instead of a later one being handed out twice.
+    /// A session the user renamed holds no number.
+    public static func numberedTitle(_ base: String, among siblings: [Session]) -> String {
+        let taken = Set(siblings.lazy.filter { !$0.hasCustomTitle }.map { session -> Int in
+            guard let space = session.title.lastIndex(of: " "),
+                  let number = Int(session.title[session.title.index(after: space)...]), number > 1
+            else { return 1 }
+            return number
+        })
+        let number = (1...).first { !taken.contains($0) } ?? 1
+        return number == 1 ? base : "\(base) \(number)"
+    }
 }

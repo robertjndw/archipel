@@ -121,7 +121,8 @@ extension AppModel {
             return
         }
         terminal.sendText(ReviewPrompt.text(for: comments))
-        reviewComments.removeAll(in: pending.root)
+        // Only pasted, not submitted: an Esc in the agent would lose them, so they stay restorable.
+        reviewComments.markSent(in: pending.root)
         // Selecting swapped tabs; the terminal view only accepts focus once SwiftUI has put it in the window.
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(80))

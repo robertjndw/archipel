@@ -282,6 +282,117 @@ final class WorktreeTests: ArchipelUITestCase {
         XCTAssertEqual(try repository.branches.sorted(), ["feature", "main"])
     }
 
+    func testAWorktreeWhoseFolderIsGoneOffersToLocateIt() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let feature = try repository.addWorktree(branch: "feature", in: sandbox.worktreesRoot)
+        try FileManager.default.removeItem(at: feature.path)
+        try launch(with: repository.workspace(linkedWorktrees: [feature]))
+
+        assertExists(mainWindow.staticTexts["Folder missing"], "A worktree without its folder should say so.")
+        sidebarWorktree("feature").rightClick()
+        let locate = app.menuItems["Locate Folder…"]
+        waitUntil("the context menu offers Locate Folder") { locate.isHittable }
+        XCTAssertTrue(locate.isEnabled)
+        let finder = app.menuItems.matching(NSPredicate(format: "title == %@", "Show in Finder"))
+            .allElementsBoundByIndex.first(where: \.isHittable)
+        XCTAssertEqual(finder?.isEnabled, false, "There is no folder to show.")
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
+    func testLocatingAMissingWorktreeRefusesAnUnrelatedRepository() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let feature = try repository.addWorktree(branch: "feature", in: sandbox.worktreesRoot)
+        try FileManager.default.removeItem(at: feature.path)
+        let unrelated = try sandbox.makeRepository(named: "unrelated")
+        try launch(with: repository.workspace(linkedWorktrees: [feature]))
+
+        assertExists(mainWindow.staticTexts["Folder missing"], "A worktree without its folder should say so.")
+        sidebarWorktree("feature").rightClick()
+        chooseContextMenu("Locate Folder…")
+        // The panel's confirm button carries the prompt the app gave it.
+        let locate = dialogButton("Locate")
+        assertExists(locate, "Locate Folder… should open a folder picker.")
+        // Go to Folder, as in ProjectTests: the one way to name a folder without clicking through
+        // whatever the panel shows on this machine.
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let goToField = app.sheets.textFields.element(boundBy: 0)
+        assertExists(goToField, "The open panel did not show its Go to Folder field.")
+        app.typeText(unrelated.url.path)
+        app.typeKey(.return, modifierFlags: [])
+        waitUntil("the panel accepts the folder") { locate.isEnabled }
+        locate.click()
+
+        let refusal = staticText(containing: "unrelated is not a linked git worktree")
+        assertExists(refusal, "A folder that is not the worktree should be refused with the reason.")
+        // OK is the alert's default button.
+        app.typeKey(.return, modifierFlags: [])
+        assertGone(refusal, "OK should close the alert.")
+        assertExists(mainWindow.staticTexts["Folder missing"], "The worktree should still be missing its folder.")
+        XCTAssertEqual(try sandbox.savedWorkspace().allWorktrees.map(\.path.path), [repository.url.path, feature.path.path],
+                       "The worktree must keep the folder it had.")
+    }
+
+    func testRemovingPickedWorktreesLeavesNoPickBehind() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let first = try repository.addWorktree(branch: "first", in: sandbox.worktreesRoot)
+        let second = try repository.addWorktree(branch: "second", in: sandbox.worktreesRoot)
+        let third = try repository.addWorktree(branch: "third", in: sandbox.worktreesRoot)
+        try launch(with: repository.workspace(linkedWorktrees: [first, second, third]))
+
+        sidebarWorktree("main").click()
+        XCUIElement.perform(withKeyModifiers: .shift) { sidebarWorktree("second").click() }
+        chooseMenu("Project", "Remove 2 Worktrees…")
+        assertExists(sheet.buttons["Remove"], "Removing several worktrees should ask once.")
+        sheet.buttons["Remove"].click()
+        assertGone(sidebarWorktree("first"), "The first picked worktree should leave the sidebar.")
+        assertGone(sidebarWorktree("second"), "The second picked worktree should leave the sidebar.")
+
+        // The primary checkout is all that is left of the pick, and one row is no batch.
+        sidebarWorktree("main").rightClick()
+        XCTAssertNotNil(shownMenuItem("Primary Checkout Can't Be Removed"), "The row should have its own menu back.")
+        XCTAssertFalse(menuShows("Copy Paths"), "The batch menu should be gone with the batch.")
+        app.typeKey(.escape, modifierFlags: [])
+
+        // Removed picks that come back must not bring the batch back with them.
+        undo()
+        let restored = [sidebarWorktree("first"), sidebarWorktree("second")]
+        waitUntil("undo brings a removed worktree back") { restored.contains(where: \.exists) }
+        let row = try XCTUnwrap(restored.first(where: \.exists))
+        row.rightClick()
+        XCTAssertNotNil(shownMenuItem("Remove Worktree…"), "A restored row should have its own menu.")
+        XCTAssertFalse(menuShows("Copy Paths"), "A restored row should not be part of a batch.")
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
+    func testSwitchingToABranchThatOnlyExistsOnTheRemoteTracksIt() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let remote = try sandbox.makeRemote(for: repository)
+        let elsewhere = try sandbox.clone(remote, named: "elsewhere")
+        try elsewhere.git("switch", "--quiet", "-c", "from-elsewhere")
+        let pushed = try elsewhere.commit("other.txt", "from elsewhere\n", message: "start from-elsewhere")
+        try elsewhere.git("push", "--quiet", "--set-upstream", "origin", "from-elsewhere")
+        try repository.git("fetch", "--quiet")
+        try launch(with: repository.workspace())
+
+        chooseMenu("Project", "Switch Branch…")
+        assertExists(branchField, "The Switch Branch sheet did not come up.")
+        app.typeText("from-elsewhere")
+        let row = sheet.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "origin/from-elsewhere")).element(boundBy: 0)
+        assertExists(row, "The remote branch should be offered.")
+        // A name the remote has means that branch, not a new one off main.
+        XCTAssertFalse(sheet.buttons["Create Branch “from-elsewhere”"].exists, "Typing a remote branch's name must not offer to create it.")
+        let confirm = sheet.buttons["Switch"]
+        waitUntil("the remote branch can be switched to") { confirm.isEnabled }
+        confirm.click()
+
+        assertGone(sheet, "The sheet should close after the switch.")
+        waitUntil("the repository is on the remote branch") { try repository.currentBranch == "from-elsewhere" }
+        XCTAssertEqual(try repository.upstream(of: "from-elsewhere"), "origin/from-elsewhere", "The new branch should track the remote one.")
+        XCTAssertEqual(try repository.sha(of: "HEAD"), pushed, "The branch should start where the remote one is.")
+        XCTAssertEqual(try repository.branches.sorted(), ["from-elsewhere", "main"], "No other branch should be made.")
+        assertExists(sidebarWorktree("from-elsewhere"), "The sidebar should show the branch that is checked out now.")
+    }
+
     func testThePrimaryCheckoutCannotBeRemoved() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         try launch(with: repository.workspace())
