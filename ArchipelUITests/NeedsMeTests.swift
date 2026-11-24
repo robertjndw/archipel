@@ -8,6 +8,9 @@ final class NeedsMeTests: ArchipelUITestCase {
     }
 
     func testFilterListsTheWaitingWorktreeOfAnotherIslandAndOpensIt() throws {
+        // Opening the waiting session starts its agent. Without one to run the session would exit,
+        // and an exit nobody has looked at is listed by the filter like a request.
+        _ = try sandbox.installAgentStub(named: "claude")
         let alpha = try sandbox.makeRepository(named: "alpha")
         let beta = try sandbox.makeRepository(named: "beta")
         let waiting = Session.claude()
