@@ -27,11 +27,16 @@ public struct Pane: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var tabs: [Tab]
     public var selectedTabID: Tab.ID?
+    /// The pane's part of the worktree's width, as a fraction of 1. Nil until a divider is dragged,
+    /// and again whenever a pane is added or closed, which gives every pane the same width. Either
+    /// all panes of a worktree have one or none does; read them through `Worktree.paneWidthShares`.
+    public var widthShare: Double?
 
-    public init(id: UUID = UUID(), tabs: [Tab] = [], selectedTabID: Tab.ID? = nil) {
+    public init(id: UUID = UUID(), tabs: [Tab] = [], selectedTabID: Tab.ID? = nil, widthShare: Double? = nil) {
         self.id = id
         self.tabs = tabs
         self.selectedTabID = selectedTabID
+        self.widthShare = widthShare
     }
 
     /// The stored selection if it exists, otherwise the first tab.

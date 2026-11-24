@@ -28,6 +28,10 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
     /// Standardized paths of worktrees the user took out of the sidebar or declined, so detection
     /// stops suggesting them. They can still be added by hand from the Add Worktree sheet.
     public var dismissedWorktreePaths: Set<String>
+    /// The repository's root commits, noted while its folder is there. Once the folder is gone they
+    /// are what tells a moved copy of this repository from another one that happens to have the
+    /// same branches. Nil until first seen, and for a folder that is not a repository.
+    public var rootCommits: [String]?
 
     public init(
         id: UUID = UUID(),
@@ -40,7 +44,8 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
         icon: ProjectIcon = .automatic,
         worktreesDirectory: URL? = nil,
         baseBranch: String? = nil,
-        dismissedWorktreePaths: Set<String> = []
+        dismissedWorktreePaths: Set<String> = [],
+        rootCommits: [String]? = nil
     ) {
         self.id = id
         self.name = name
@@ -53,6 +58,7 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
         self.worktreesDirectory = worktreesDirectory
         self.baseBranch = baseBranch
         self.dismissedWorktreePaths = dismissedWorktreePaths
+        self.rootCommits = rootCommits
     }
 
     public init(from decoder: any Decoder) throws {
@@ -68,6 +74,7 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
         worktreesDirectory = try c.decodeIfPresent(URL.self, forKey: .worktreesDirectory)
         baseBranch = try c.decodeIfPresent(String.self, forKey: .baseBranch)
         dismissedWorktreePaths = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedWorktreePaths) ?? []
+        rootCommits = try c.decodeIfPresent([String].self, forKey: .rootCommits)
     }
 
     /// The key detection and dismissal compare by, so `/a/b` and `/a/b/` are the same worktree.

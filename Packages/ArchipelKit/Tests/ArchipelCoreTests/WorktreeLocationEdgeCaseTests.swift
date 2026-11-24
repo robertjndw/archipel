@@ -121,6 +121,46 @@ struct WorktreeLocationEdgeCaseTests {
         #expect(WorktreeLocation.movedWorktree(from: base.appending(path: "gone")) == nil)
     }
 
+    @Test func registrationsTellWhereAWorktreeWasAndWhatARepositoryHas() throws {
+        let base = URL(fileURLWithPath: realpath(NSTemporaryDirectory(), nil).map { String(cString: $0) } ?? NSTemporaryDirectory())
+            .appending(path: "ArchipelLocate-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let repo = base.appending(path: "repo", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+        func git(_ arguments: String...) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-C", repo.path, "-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"] + arguments
+            process.environment = ["GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin"]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            #expect(process.terminationStatus == 0, "git \(arguments.joined(separator: " "))")
+        }
+        try git("init", "-q", "-b", "main")
+        try git("commit", "-q", "--allow-empty", "-m", "init")
+        let feature = base.appending(path: "feature", directoryHint: .isDirectory)
+        try git("worktree", "add", "-q", "-b", "feature", feature.path)
+
+        let moved = base.appending(path: "elsewhere/feature", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: moved.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: feature, to: moved)
+        // Until it is repaired, the registration still names the folder it was made in.
+        #expect(WorktreeLocation.recordedFolder(ofWorktreeAt: moved).map { WorktreeLocation.isSameFolder($0, feature) } == true)
+        #expect(WorktreeLocation.recordedFolder(ofWorktreeAt: repo) == nil)
+        #expect(WorktreeLocation.recordedFolder(ofWorktreeAt: base) == nil)
+
+        // The main checkout still lists the worktree where it was made, wherever the checkout goes.
+        let movedRepo = base.appending(path: "renamed-repo", directoryHint: .isDirectory)
+        try FileManager.default.moveItem(at: repo, to: movedRepo)
+        let registered = WorktreeLocation.registeredWorktreeFolders(ofRepositoryAt: movedRepo)
+        #expect(registered.count == 1)
+        #expect(registered.first.map { WorktreeLocation.isSameFolder($0, feature) } == true)
+        #expect(WorktreeLocation.registeredWorktreeFolders(ofRepositoryAt: moved).isEmpty)
+    }
+
     @Test func provablyGoneNormalizesThePathFirst() {
         func gone(_ path: String, existing: Set<String>) -> Bool {
             WorktreeLocation.isProvablyGone(URL(fileURLWithPath: path)) { existing.contains($0) }

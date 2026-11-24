@@ -117,4 +117,59 @@ struct WorktreeLocationTests {
         let plain = Project(name: "app", folderURL: URL(fileURLWithPath: "/work/app"))
         #expect(WorktreeLocation.defaultParentFolder(for: plain, defaultRoot: root, among: [custom, plain]).path == "/tmp/worktrees/app")
     }
+
+    // MARK: Locating a moved primary checkout
+
+    private func match(
+        registered: Bool? = nil,
+        recorded: [String]? = nil,
+        candidate: [String]? = nil,
+        branch: String? = "main",
+        branches: [String]? = ["main"]
+    ) -> WorktreeLocation.PrimaryCheckoutMatch {
+        WorktreeLocation.primaryCheckoutMatch(
+            linkedWorktreesRegistered: registered,
+            recordedRoots: recorded,
+            candidateRoots: candidate,
+            branch: branch,
+            candidateBranches: branches
+        )
+    }
+
+    @Test func anotherCloneWithTheSameBranchIsNotAcceptedOnItsBranchAlone() {
+        // Another repository that also has `main` is the usual wrong pick.
+        #expect(match(recorded: ["aaa"], candidate: ["bbb"]) == .differentHistory)
+        #expect(match() == .unverified)
+        #expect(match(recorded: nil, candidate: ["bbb"]) == .unverified)
+        #expect(match(recorded: [], candidate: ["bbb"]) == .unverified)
+        #expect(match(recorded: ["aaa"], candidate: nil) == .unverified)
+    }
+
+    @Test func sharedRootCommitIsTheSameRepository() {
+        #expect(match(recorded: ["aaa"], candidate: ["aaa"]) == .same)
+        // An unrelated history merged in since adds a root, and the branch may be gone by now.
+        #expect(match(recorded: ["aaa"], candidate: ["aaa", "ccc"], branches: ["trunk"]) == .same)
+    }
+
+    @Test func linkedWorktreesDecideBeforeAnythingElse() {
+        #expect(match(registered: true, recorded: ["aaa"], candidate: ["bbb"]) == .same)
+        #expect(match(registered: false, recorded: ["aaa"], candidate: ["aaa"]) == .worktreesNotRegistered)
+    }
+
+    @Test func missingBranchRulesOutWithoutRoots() {
+        #expect(match(branches: ["trunk"]) == .missingBranch("main"))
+        #expect(match(branch: nil, branches: ["trunk"]) == .unverified)
+        #expect(match(branches: nil) == .unverified)
+    }
+
+    @Test func projectsSavedBeforeRootCommitsStillLoad() throws {
+        let saved = #"{"id":"6F3E1E5C-8C4B-4D5F-9C1A-2B3C4D5E6F70","name":"app","folderURL":"file:///code/app","worktrees":[]}"#
+        let project = try JSONDecoder().decode(Project.self, from: Data(saved.utf8))
+        #expect(project.rootCommits == nil)
+
+        var noted = project
+        noted.rootCommits = ["aaa"]
+        let roundTripped = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(noted))
+        #expect(roundTripped.rootCommits == ["aaa"])
+    }
 }
