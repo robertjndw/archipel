@@ -196,8 +196,10 @@ public struct WorktreeRowContent: Equatable, Sendable {
     }
 
     /// A message is shown while the agent waits for the user, and after a finished turn until the user
-    /// has looked at it. Once read, the row falls back to the quieter metadata line.
+    /// has looked at it. Once read, the row falls back to the quieter metadata line. An unread exit
+    /// needs the user too, but what the agent last said is not what there is to see.
     static func messageWorthShowing(_ activity: SessionActivity) -> String? {
+        if case .exited = activity.status { return nil }
         guard activity.needsMe,
               let message = activity.lastMessage
         else { return nil }

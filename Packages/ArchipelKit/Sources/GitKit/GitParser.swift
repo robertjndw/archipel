@@ -66,11 +66,7 @@ enum GitParser {
     }
 
     static func summary(_ output: String) -> GitSummary {
-        let status = status(output)
-        let paths = Set((status.staged + status.unstaged).map(\.path))
-        return GitSummary(branch: status.branch, upstream: status.upstream, ahead: status.ahead,
-                          behind: status.behind, changedFiles: paths.count, goneUpstream: status.goneUpstream,
-                          pendingUpstream: status.pendingUpstream)
+        GitSummary(status(output))
     }
 
     /// Parses NUL-separated `ls-files -z` output.

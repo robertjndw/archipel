@@ -804,8 +804,7 @@ enum PanePreviews {
         var activities = PreviewFixtures.activities
         activities[serverSessionID] = SessionActivity(status: .working)
         let model = AppModel(preview: workspace, activities: activities)
-        model.gitSummaries = PreviewFixtures.gitSummaries
-        model.pullRequests = PreviewFixtures.pullRequests
+        model.showGitForPreview(PreviewFixtures.gitSummaries, pullRequests: PreviewFixtures.pullRequests)
         model.usage = PreviewFixtures.usage
         model.devServers.showForPreview([serverSessionID: [
             DevServerLink(url: URL(string: "http://localhost:8080")!)!,

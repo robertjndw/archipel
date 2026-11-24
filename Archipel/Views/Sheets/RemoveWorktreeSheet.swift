@@ -12,7 +12,8 @@ struct RemoveWorktreeSheet: View {
 
     @State private var deleteFolder = false
     @State private var deleteBranch = false
-    @State private var changeCount: Int?
+    /// Stands in for the count the store has, in previews of folders that do not exist.
+    @State private var previewChangeCount: Int?
     @State private var isWorking = false
     @State private var failure: String?
     @State private var outcome: AppModel.BranchRemoval?
@@ -23,6 +24,12 @@ struct RemoveWorktreeSheet: View {
     @State private var isUnavailable = false
     private var deletesFromDisk: Bool { deleteFolder && !isMissing }
     private var lostChanges: Int { deletesFromDisk ? changeCount ?? 0 : 0 }
+    /// The count the sidebar row shows, from the same state; `loadStatus()` brings it up to date.
+    private var changeCount: Int? {
+        if let previewChangeCount { return previewChangeCount }
+        guard !isMissing else { return nil }
+        return model.gitState(for: worktree.id)?.summary?.changedFiles
+    }
 
     /// Removing closes the worktree's sessions and tabs whether or not the folder is deleted.
     private var warnings: [String] {
@@ -185,8 +192,8 @@ struct RemoveWorktreeSheet: View {
     private func loadStatus() async {
         isUnavailable = isMissing && !AppModel.isDeletedWorktree(worktree.path)
         // Without git there is nothing to count, and asking would bring up the system's offer to install it.
-        guard !isMissing, model.isGitAvailable, let status = try? await model.git.status(in: worktree.path) else { return }
-        changeCount = Set((status.staged + status.unstaged).map(\.path)).count
+        guard !isMissing, model.isGitAvailable else { return }
+        await model.gitState(for: worktree.id)?.refresh()
     }
 
     private func remove() async {
@@ -223,7 +230,7 @@ extension RemoveWorktreeSheet {
         self.worktree = worktree
         _deleteFolder = State(initialValue: deleteFolder)
         _deleteBranch = State(initialValue: deleteBranch)
-        _changeCount = State(initialValue: changeCount)
+        _previewChangeCount = State(initialValue: changeCount)
         _outcome = State(initialValue: outcome)
     }
 }

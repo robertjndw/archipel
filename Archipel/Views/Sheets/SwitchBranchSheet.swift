@@ -117,7 +117,7 @@ struct SwitchBranchSheet: View {
                 ? "An agent is working in this worktree. Its files change under it when you switch."
                 : "\(busy) agents are working in this worktree. Their files change under them when you switch.")
         }
-        let changed = model.gitSummaries[worktree.id]?.changedFiles ?? 0
+        let changed = model.gitState(for: worktree.id)?.summary?.changedFiles ?? 0
         if changed > 0 {
             warnings.append(changed == 1
                 ? "The uncommitted change comes along to the new branch. Git refuses the switch if it would be overwritten."

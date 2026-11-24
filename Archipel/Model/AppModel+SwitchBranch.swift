@@ -26,11 +26,15 @@ extension AppModel {
             try Task.checkCancellation()
         }
         // Bumped on both sides of the checkout: a branch name read while it runs can be either one.
+        // The same goes for a status read, whose counts and pull request belong to its branch.
+        let state = gitState(for: id)
         branchGenerations[id, default: 0] += 1
+        state?.invalidatePendingReads()
         try await git.switchBranch(to: target, in: worktree.path)
         // Ask git instead of guessing from the target, e.g. `.remote("origin/x")` ends up on `x`.
         let branch = await git.currentBranch(in: worktree.path)
         branchGenerations[id, default: 0] += 1
+        state?.invalidatePendingReads()
         mutate { $0.updateWorktree(id: id) { $0.branch = branch } }
         // The old branch's counts and pull request would otherwise linger until the next poll.
         refreshGitStatus(of: [id], lookingUpPullRequests: true, minimumPullRequestAge: .zero)

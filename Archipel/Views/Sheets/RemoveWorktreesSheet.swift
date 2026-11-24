@@ -15,8 +15,6 @@ struct RemoveWorktreesSheet: View {
     @State private var included: Set<Worktree.ID>
     @State private var deleteFolders = false
     @State private var deleteBranches = false
-    /// Uncommitted changes per worktree, for the ones whose folder could be asked.
-    @State private var changeCounts: [Worktree.ID: Int] = [:]
     @State private var progress: Int?
     /// What is left to tell once the removals ran: branches git kept, worktrees it refused to remove.
     @State private var notes: [String]?
@@ -31,7 +29,13 @@ struct RemoveWorktreesSheet: View {
     private func isMissing(_ worktree: Worktree) -> Bool { model.missingWorktrees.contains(worktree.id) }
     private func deletesFromDisk(_ worktree: Worktree) -> Bool { deleteFolders && !isMissing(worktree) }
     private func lostChanges(in worktree: Worktree) -> Int {
-        deletesFromDisk(worktree) ? changeCounts[worktree.id] ?? 0 : 0
+        deletesFromDisk(worktree) ? changeCount(of: worktree) ?? 0 : 0
+    }
+
+    /// The count the sidebar row shows, from the same state; `loadStatus()` brings it up to date.
+    private func changeCount(of worktree: Worktree) -> Int? {
+        guard !isMissing(worktree) else { return nil }
+        return model.gitState(for: worktree.id)?.summary?.changedFiles
     }
 
     private var withLostChanges: Int { chosen.count { lostChanges(in: $0) > 0 } }
@@ -188,7 +192,7 @@ struct RemoveWorktreesSheet: View {
         if spansProjects, let project = model.project(ofWorktree: worktree.id) { details.append(project.name) }
         if isMissing(worktree) {
             details.append("Folder missing")
-        } else if let count = changeCounts[worktree.id], count > 0 {
+        } else if let count = changeCount(of: worktree), count > 0 {
             let changes = count == 1 ? "1 uncommitted change" : "\(count) uncommitted changes"
             details.append(lostChanges(in: worktree) > 0 ? "\(changes) will be lost" : changes)
         }
@@ -261,8 +265,7 @@ struct RemoveWorktreesSheet: View {
     private func loadStatus() async {
         guard model.isGitAvailable else { return }
         for worktree in worktrees where !isMissing(worktree) {
-            guard let status = try? await model.git.status(in: worktree.path) else { continue }
-            changeCounts[worktree.id] = Set((status.staged + status.unstaged).map(\.path)).count
+            await model.gitState(for: worktree.id)?.refresh()
         }
     }
 
@@ -337,14 +340,18 @@ extension PullRequestBadge.State {
         path: PreviewFixtures.root.appending(path: "orbit-worktrees/bump-deps", directoryHint: .isDirectory),
         branch: "chore/bump-deps"
     )
-    model.gitSummaries[merged.id] = GitSummary(branch: "chore/bump-deps", upstream: "origin/chore/bump-deps", ahead: 0, behind: 0, changedFiles: 0)
-    model.pullRequests[merged.id] = PullRequestLookup(
-        branch: "chore/bump-deps",
-        pullRequest: GitPullRequest(
-            number: 117, url: URL(string: "https://github.com/example/orbit/pull/117")!,
-            title: "Bump dependencies", state: .merged, isDraft: false
-        ),
-        checkedAt: .now
+    model.showGitForPreview(
+        merged.id,
+        root: merged.path,
+        summary: GitSummary(branch: "chore/bump-deps", upstream: "origin/chore/bump-deps", ahead: 0, behind: 0, changedFiles: 0),
+        pullRequest: PullRequestLookup(
+            branch: "chore/bump-deps",
+            pullRequest: GitPullRequest(
+                number: 117, url: URL(string: "https://github.com/example/orbit/pull/117")!,
+                title: "Bump dependencies", state: .merged, isDraft: false
+            ),
+            checkedAt: .now
+        )
     )
     return RemoveWorktreesSheet(worktrees: [merged, PreviewFixtures.featureWorktree, PreviewFixtures.fixWorktree])
         .environment(model)

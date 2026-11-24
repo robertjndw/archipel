@@ -100,17 +100,26 @@ public struct GitStatus: Equatable, Sendable {
     }
 
     public static let empty = GitStatus(branch: nil, staged: [], unstaged: [])
+
+    /// The one count of uncommitted changes that every place showing a number uses: the sidebar,
+    /// the switch-branch warning and the remove sheets. Distinct paths, so a file that is both
+    /// staged and modified again counts once, and untracked files one by one, the way the Changes
+    /// tab lists them. Counting an untracked folder as one entry, as plain `git status` reports it,
+    /// would make the sidebar say 1 where the tab lists 12 files.
+    public var changedFiles: Int {
+        Set((staged + unstaged).lazy.map(\.path)).count
+    }
 }
 
-/// What a sidebar row needs about a worktree, cheap enough to poll for many of them.
+/// What a sidebar row needs about a worktree, derived from a `GitStatus`.
 public struct GitSummary: Equatable, Sendable {
     public var branch: String?
     public var upstream: String?
     public var ahead: Int
     public var behind: Int
-    /// Distinct paths, so a file that is both staged and modified again counts once.
+    /// See `GitStatus.changedFiles`.
     public var changedFiles: Int
-    /// Not part of `summary(in:)`, which is one status call; callers that want it ask `diffStat(in:)`.
+    /// Not part of the status; `GitWorktreeState` asks `diffStat(in:)` for it now and then.
     public var diffStat: GitDiffStat?
     /// See `GitStatus.goneUpstream`.
     public var goneUpstream: String?
@@ -135,6 +144,19 @@ public struct GitSummary: Equatable, Sendable {
         self.diffStat = diffStat
         self.goneUpstream = goneUpstream
         self.pendingUpstream = pendingUpstream
+    }
+
+    public init(_ status: GitStatus, diffStat: GitDiffStat? = nil) {
+        self.init(
+            branch: status.branch,
+            upstream: status.upstream,
+            ahead: status.ahead,
+            behind: status.behind,
+            changedFiles: status.changedFiles,
+            diffStat: diffStat,
+            goneUpstream: status.goneUpstream,
+            pendingUpstream: status.pendingUpstream
+        )
     }
 }
 

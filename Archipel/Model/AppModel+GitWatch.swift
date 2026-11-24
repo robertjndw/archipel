@@ -118,13 +118,13 @@ extension AppModel {
         let links = await worktreeLinks(of: project.worktrees)
         // The project may have gone, or lost worktrees, while the links were read.
         guard let project = workspace.project(id: projectID) else { return }
-        let onScreen = Set(gitStatusTargetsOnScreen)
+        let onScreen = Set(gitStatusTargets)
         let worktrees = project.worktrees.map { worktree in
             GitWatchedWorktree(
                 id: worktree.id,
                 link: links[worktree.id] ?? .unknown,
                 branch: worktree.branch,
-                upstream: gitSummaries[worktree.id]?.upstream,
+                upstream: gitStates.existingState(for: worktree.id)?.status?.upstream,
                 isOnScreen: onScreen.contains(worktree.id)
             )
         }
@@ -158,14 +158,6 @@ extension AppModel {
         }
         refreshGitStatus(of: fetched, lookingUpPullRequests: false)
         lookUpPullRequestsAfterPush(pushed)
-    }
-
-    /// The worktrees the status poll covers; see `refreshGitStatus(lookingUpPullRequests:)`.
-    private var gitStatusTargetsOnScreen: [Worktree.ID] {
-        let selected = workspace.selectedWorktreeID
-        return (selectedIsland?.projects ?? []).flatMap { project in
-            project.worktrees.lazy.map(\.id).filter { project.isExpanded || $0 == selected }
-        }
     }
 
     /// Read from disk once per worktree and path, off the main thread: the folder may be on a slow
@@ -224,7 +216,7 @@ extension AppModel {
                 for wait in PullRequestFollowUp.waits {
                     try? await Task.sleep(for: wait)
                     guard !Task.isCancelled, let self else { return }
-                    let lookup = self.pullRequests[id]
+                    let lookup = self.gitStates.existingState(for: id)?.pullRequestLookup
                     guard PullRequestFollowUp.continues(
                         pushedBranch: branch,
                         currentBranch: self.workspace.worktree(id: id)?.branch,

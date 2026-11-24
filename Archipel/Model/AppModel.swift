@@ -125,9 +125,6 @@ final class AppModel {
     var islandBeingEdited: Island?
     var islandAwaitingDeletion: Island?
     var projectAwaitingRemoval: Project?
-    /// The push, pull or fetch running per worktree for the Project menu and the palette, which
-    /// offer one at a time. See AppModel+Sync.
-    var syncsInFlight: [Worktree.ID: SyncAction] = [:]
     let settings: AppSettings
     let devServers = DevServerMonitor()
     let resources = ResourceMonitor()
@@ -176,14 +173,9 @@ final class AppModel {
     @ObservationIgnored var interruptionWatches: [Session.ID: InterruptionWatch] = [:]
     @ObservationIgnored var foregroundChecks: [Session.ID: Task<Void, Never>] = [:]
 
-    /// Transient repository state for the sidebar rows of the selected island.
-    var gitSummaries: [Worktree.ID: GitSummary] = [:]
-    /// Worktrees without an upstream whose repository has a remote all the same, which is what
-    /// tells a branch that can be published from one that has nowhere to go.
-    var worktreesWithRemote: Set<Worktree.ID> = []
-    /// The ones among them where a push knows which remote to publish to, see `GitClient.publishRemote`.
-    var worktreesWithPublishRemote: Set<Worktree.ID> = []
-    var pullRequests: [Worktree.ID: PullRequestLookup] = [:]
+    /// What git says about each worktree, and the push, pull, fetch or commit running in it. The one
+    /// place the sidebar, the menus, the sheets and the Changes tab read it from; see AppModel+GitStatus.
+    @ObservationIgnored lazy var gitStates = makeGitStates()
     /// Everything `git worktree list` reported per project at the last refresh. Suggestions are
     /// derived from it on read, so adding or dismissing one updates the sidebar without a git call.
     var gitWorktrees: [Project.ID: [GitWorktreeEntry]] = [:]
@@ -379,7 +371,7 @@ final class AppModel {
     #if DEBUG
     /// For SwiftUI previews. Starts no terminal engine, hook socket, notifier, monitors or git
     /// refreshes and never saves, so a preview can't touch the real workspace file or take the socket
-    /// from a running Archipel. Set `gitSummaries`, `usage` etc. on the result when a preview needs them.
+    /// from a running Archipel. Use `showGitForPreview`, set `usage` etc. on the result when a preview needs them.
     init(
         preview workspace: Workspace,
         activities: [Session.ID: SessionActivity] = [:],
@@ -733,7 +725,10 @@ final class AppModel {
         // Observers fire on every write, equal or not, and this runs on every selection change.
         if activities[id]?.unread == true { activities[id]?.markViewed() }
         notifier.clear(sessionID: id)
-        refreshDockBadge()
+    }
+
+    func hasUnread(in worktree: Worktree) -> Bool {
+        worktree.sessions.contains { activities[$0.id]?.unread == true }
     }
 
     /// Clears the unread state of a worktree's sessions without opening them. Pending requests
@@ -1186,7 +1181,7 @@ final class AppModel {
         }
         pulsesAwaitingActivation = pulsesAwaitingActivation.filter { worktrees.contains($0.key) }
         branchGenerations = branchGenerations.filter { worktrees.contains($0.key) }
-        gitRefresh.diffStatCheckedAt = gitRefresh.diffStatCheckedAt.filter { worktrees.contains($0.key) }
+        gitStates.forget(except: worktrees)
         let projects = Set(workspace.islands.lazy.flatMap(\.projects).map(\.id))
         if !projectPulses.keys.allSatisfy(projects.contains) {
             projectPulses = projectPulses.filter { projects.contains($0.key) }
@@ -1492,14 +1487,10 @@ final class AppModel {
         activities[id] ?? SessionActivity()
     }
 
-    /// The one activity that best represents a worktree in the sidebar: a
-    /// session that needs the user wins over a working one, which wins over
-    /// an unread one.
+    /// The one activity that represents a worktree in the sidebar, ranked the way a collapsed
+    /// project and the menu bar rank theirs.
     func activity(for worktree: Worktree) -> SessionActivity? {
-        let all = worktree.sessions.compactMap { activities[$0.id] }
-        return all.first(where: \.needsUser)
-            ?? all.first(where: \.showsProgress)
-            ?? all.first(where: \.unread)
+        mostPressingSession(of: worktree.sessions, activities: activities).flatMap { activities[$0] }
     }
 
     var hasWorkingSessions: Bool {
@@ -1733,7 +1724,6 @@ final class AppModel {
             forgetContext(of: id)
         }
         notifier.clear(sessionID: id)
-        refreshDockBadge()
     }
 
     private func receive(_ message: HookMessage) {
@@ -1835,7 +1825,6 @@ final class AppModel {
         if activity.unread, !viewed, worthABanner {
             notify(session: session, activity: activity)
         }
-        refreshDockBadge()
         if statusChanged {
             sessionStatusChanged(id, from: before.status, to: activity.status)
         }
@@ -1907,7 +1896,6 @@ final class AppModel {
         if activity.needsUser, let session = workspace.session(id: id), !isBeingViewed(id) {
             notify(session: session, activity: activity)
         }
-        refreshDockBadge()
         if activity.status != before { sessionStatusChanged(id, from: before, to: activity.status) }
     }
 
@@ -1919,6 +1907,8 @@ final class AppModel {
         dockAttentionRequest = NSApp.requestUserAttention(.informationalRequest)
     }
 
+    /// Follows `workspaceAttention`, which calls this when it changes. The one other caller is the
+    /// setting that turns the badge on and off.
     func refreshDockBadge() {
         notifier.setDockBadge(settings.showsDockBadge ? workspaceAttention.needsAttention : 0)
     }
@@ -1936,6 +1926,7 @@ final class AppModel {
         if total != workspaceAttention {
             if total.needsAttention > workspaceAttention.needsAttention { SidebarTips.agentWaited() }
             workspaceAttention = total
+            refreshDockBadge()
         }
     }
 

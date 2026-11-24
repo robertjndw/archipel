@@ -75,8 +75,7 @@ extension AppModel {
     /// transcript is.
     private func mayBeInterrupted(_ id: Session.ID) -> Bool {
         guard workspace.session(id: id)?.agent == .claude, interruptionWatches[id]?.transcriptPath != nil else { return false }
-        let status = activity(for: id).status
-        return status == .working || status.needsUser
+        return activity(for: id).status.isMidTurn
     }
 
     /// True when there is nothing left to look for.

@@ -22,6 +22,12 @@ public enum SessionStatus: Equatable, Sendable {
         if case .needsAttention = self { return true }
         return false
     }
+
+    /// A turn is running or blocked on an answer. Leaving this state is what ends a turn, and it is
+    /// the only state an interruption can come from.
+    public var isMidTurn: Bool {
+        self == .working || needsUser
+    }
 }
 
 /// Everything the app learns about a running session, from either channel:

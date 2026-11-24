@@ -13,40 +13,37 @@ enum SyncAction {
         case .fetch: "The fetch failed."
         }
     }
+
+    var operation: GitOperation {
+        switch self {
+        case .push: .push
+        case .pull: .pull
+        case .fetch: .fetch
+        }
+    }
 }
 
-/// Push, pull and fetch without the inspector. Same git calls as the Changes panel, so the rules are
-/// the same too: a push publishes a branch that has no upstream yet, and a pull only fast-forwards.
+/// Push, pull and fetch without the inspector. Same git calls and the same `GitSyncState` rule as
+/// the Changes panel: a push publishes a branch that has no upstream yet, and a pull only
+/// fast-forwards. The worktree's `GitWorktreeState` holds the one running operation, so a push from
+/// here and one from the panel never overlap and each shows the other's progress.
 extension AppModel {
-    /// False while the worktree is already syncing, without git, for a folder that is not a
-    /// repository as far as the last status poll could tell, and when the action could only fail:
-    /// nothing to pull from, nowhere to publish to, no remote to fetch. The Changes tab's sync menu
-    /// draws the same lines, except that this Push stays available with nothing ahead.
-    ///
-    /// A branch whose upstream was deleted has `upstream` nil in its summary, so it cannot be
-    /// pulled. It is not pushed from here either: that state is what a merged pull request leaves
-    /// behind, and a push would put the branch back on the remote, for every such worktree of a
-    /// batch at once. Publishing it again on purpose is in the Changes tab's sync menu.
-    /// "Nowhere to publish to" includes several remotes with none named origin, where git would
-    /// have to guess.
+    /// False without git, before the first status read, while anything runs in the worktree, and
+    /// when the action could only fail. See `GitSyncState.canPush(from:)` for where this Push
+    /// differs from the Changes tab's on purpose.
     func canSync(_ action: SyncAction, _ id: Worktree.ID?) -> Bool {
-        guard let id, isGitAvailable, syncsInFlight[id] == nil, let summary = gitSummaries[id] else { return false }
-        let hasRemote = summary.upstream != nil || worktreesWithRemote.contains(id)
+        guard let id, isGitAvailable, let sync = gitState(for: id)?.syncState else { return false }
         switch action {
-        case .pull: return summary.branch != nil && summary.upstream != nil
-        case .push:
-            guard summary.branch != nil, summary.goneUpstream == nil else { return false }
-            return summary.upstream != nil || worktreesWithPublishRemote.contains(id)
-        case .fetch: return hasRemote
+        case .pull: return sync.canPull
+        case .push: return sync.canPush(from: .command)
+        case .fetch: return sync.canFetch
         }
     }
 
-    /// A push publishes a branch that has no upstream yet, and the menu should say so. Not one
-    /// whose upstream is gone: `canSync` keeps that item disabled, and it should not read as an
-    /// invitation to publish while it is.
+    /// A push publishes a branch that has no upstream yet, and the menu should say so.
     func pushPublishes(_ id: Worktree.ID?) -> Bool {
-        guard let summary = id.flatMap({ gitSummaries[$0] }) else { return false }
-        return summary.branch != nil && summary.upstream == nil && summary.goneUpstream == nil
+        guard let id else { return false }
+        return gitState(for: id)?.syncState.pushPublishes(from: .command) ?? false
     }
 
     func sync(_ action: SyncAction, worktree id: Worktree.ID) {
@@ -64,8 +61,9 @@ extension AppModel {
     }
 
     private func performSync(_ action: SyncAction, worktree id: Worktree.ID, namingIt: Bool = false) async {
-        guard let worktree = workspace.worktree(id: id), isGitAvailable, syncsInFlight[id] == nil else { return }
-        syncsInFlight[id] = action
+        guard let worktree = workspace.worktree(id: id), isGitAvailable, let state = gitState(for: id),
+              state.begin(action.operation)
+        else { return }
         var failure: String?
         do {
             switch action {
@@ -78,13 +76,15 @@ extension AppModel {
         } catch {
             failure = error.localizedDescription
         }
-        syncsInFlight[id] = nil
         if let failure {
             // In a batch the user has to be told which of the worktrees it was.
             problem = namingIt ? "\(action.failureTitle) \(worktree.displayName): \(failure)" : "\(action.failureTitle) \(failure)"
         }
         // Also after a failure: a rejected push or a refused pull has usually fetched, so the
         // counts moved anyway. A push can have created the pull request's branch on the remote.
-        refreshGitStatus(of: [id], lookingUpPullRequests: action == .push, minimumPullRequestAge: .zero)
+        // Before the operation ends, like in the Changes tab, so the action that just ran is not
+        // offered again for a moment on the old counts.
+        await state.refresh(GitRefreshRequest(readsRemotes: action == .push, pullRequestAge: action == .push ? .zero : nil))
+        state.end(action.operation)
     }
 }

@@ -178,9 +178,7 @@ struct RootView: View {
         @Bindable var model = model
         if model.isGitAvailable {
             InspectorView(
-                root: model.selectedWorktree?.path,
-                searchPATH: { await model.toolSearchPATH() },
-                knownPullRequest: { model.selectedWorktreePullRequest },
+                git: model.selectedWorktree.flatMap { model.gitState(for: $0.id) },
                 focusCommitMessage: $model.focusCommitMessageRequest,
                 onOpenFile: { url, preview in model.openFile(url, preview: preview) },
                 onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) },
