@@ -197,18 +197,7 @@ struct PaneTabBar: View {
             }
 
             TabRowControls {
-                Menu {
-                    NewSessionButtons(worktree: worktree.id, pane: pane.id)
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .toolbarGroupMenu()
-                // A borderless menu draws its label in the tint, which would make it the loudest
-                // thing in the row.
-                .tint(.secondary)
-                .help("New Session")
-                .accessibilityLabel("New Session")
-                .accessibilityIdentifier("pane.newSession")
+                NewSessionMenu(worktree: worktree.id, pane: pane.id)
 
                 if pane.id == worktree.panes.last?.id {
                     // Only once there is something to run. Setting a script up is rare and lives in
@@ -860,3 +849,26 @@ private func previewTabBars() -> some View {
     .environment(AppModel.preview())
 }
 #endif
+
+/// Its own view so a re-render of the tab bar doesn't rebuild the menu while it's open, which
+/// closes any open submenu. Moving the pointer out of the bar toward the presets submenu is
+/// already enough to re-render it.
+private struct NewSessionMenu: View {
+    let worktree: Worktree.ID
+    let pane: Pane.ID
+
+    var body: some View {
+        Menu {
+            NewSessionButtons(worktree: worktree, pane: pane)
+        } label: {
+            Image(systemName: "plus")
+        }
+        .toolbarGroupMenu()
+        // A borderless menu draws its label in the tint, which would make it the loudest
+        // thing in the row.
+        .tint(.secondary)
+        .help("New Session")
+        .accessibilityLabel("New Session")
+        .accessibilityIdentifier("pane.newSession")
+    }
+}
