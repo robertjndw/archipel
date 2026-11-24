@@ -135,9 +135,16 @@ extension ArchipelUITestCase {
         mainWindow.buttons.matching(identifier: "chat.restart").element(boundBy: 0)
     }
 
-    /// What an empty chat shows above the composer, read as one line.
+    /// What an empty chat shows above the composer.
     func chatWelcome(_ agentName: String) -> XCUIElement {
-        mainWindow.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Chat with \(agentName)")).element(boundBy: 0)
+        chatText("Chat with \(agentName)")
+    }
+
+    /// A line of the chat that is not a message. Plain text reports what it says as its value and
+    /// labelled elements as their label, so this takes either.
+    func chatText(_ text: String) -> XCUIElement {
+        mainWindow.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)).element(boundBy: 0)
     }
 
     /// The user's bubble reads as "You: " and the text.

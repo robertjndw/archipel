@@ -245,9 +245,7 @@ final class ChatTests: ArchipelUITestCase {
         sendChatPrompt("crash right now")
         let restart = chatRestartButton
         assertExists(restart, "A chat whose agent quit should offer Restart.")
-        let ending = mainWindow.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "OpenCode quit unexpectedly")).element(boundBy: 0)
-        assertExists(ending, "The chat should say that the agent quit.")
+        assertExists(chatText("OpenCode quit unexpectedly"), "The chat should say that the agent quit.")
         assertGone(chatComposer, "Nothing can be sent to an agent that is gone.")
         assertExists(chatUserMessage("crash right now"), "The transcript should stay after the agent quit.")
 
