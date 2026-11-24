@@ -41,21 +41,6 @@ struct SidebarProjectHeader: View {
         .onHover { isHovered = $0 }
         .animation(reduceMotion ? nil : Motion.hover, value: isHovered)
         .animation(reduceMotion ? nil : .smooth, value: summary)
-        .accessibilityElement(children: .contain)
-        .accessibilityValue(showsCollapsedSignal ? summary.accessibilityDescription : "")
-        .accessibilityActions {
-            // VoiceOver can't hover, so it gets the add button as an action instead.
-            if canAddWorktree {
-                Button("Add Worktree") { model.addWorktreeProjectID = project.id }
-            }
-            // Only the moves that can happen; a disabled action is just noise in the rotor.
-            if model.canMoveProject(project.id, by: -1) {
-                Button("Move Up") { model.moveProject(project.id, by: -1) }
-            }
-            if model.canMoveProject(project.id, by: 1) {
-                Button("Move Down") { model.moveProject(project.id, by: 1) }
-            }
-        }
         .contextMenu { menu }
         // Projects are put in order by dragging one header onto another.
         .draggable(ProjectDragItem(id: project.id))
@@ -71,6 +56,21 @@ struct SidebarProjectHeader: View {
             }
         }
         .animation(Motion.hover, value: isDropTargeted)
+        .accessibilityElement(children: .contain)
+        .accessibilityValue(showsCollapsedSignal ? summary.accessibilityDescription : "")
+        .accessibilityActions {
+            // VoiceOver can't hover, so it gets the add button as an action instead.
+            if canAddWorktree {
+                Button("Add Worktree") { model.addWorktreeProjectID = project.id }
+            }
+            // Only the moves that can happen; a disabled action is just noise in the rotor.
+            if model.canMoveProject(project.id, by: -1) {
+                Button("Move Up") { model.moveProject(project.id, by: -1) }
+            }
+            if model.canMoveProject(project.id, by: 1) {
+                Button("Move Down") { model.moveProject(project.id, by: 1) }
+            }
+        }
         .confirmationDialog("Remove the project \(project.name)?", isPresented: $isConfirmingRemoval) {
             Button("Remove Project", role: .destructive) { model.removeProject(project) }
         } message: {
