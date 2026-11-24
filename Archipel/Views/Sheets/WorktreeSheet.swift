@@ -33,6 +33,9 @@ struct WorktreeSheet: View {
     /// Where a new branch starts when the project names no base branch. Nil means HEAD.
     @State private var remoteDefaultBranch: String?
     @State private var failure: String?
+    /// Why the branch list could not be read. Kept apart from `failure`, which the next keystroke
+    /// clears, because the list stays wrong until a reload works.
+    @State private var loadFailure: String?
     /// Set when the chosen branch is held by a worktree whose folder is missing, which the user
     /// has to confirm was deleted before its registration is dropped. Keeps the row that was
     /// chosen, since the list can re-rank while the question is up.
@@ -60,7 +63,7 @@ struct WorktreeSheet: View {
                     results(rows: rows)
                 } footer: {
                     // Replaces the hint instead of adding a row, so the sheet height stays about the same.
-                    if let failure {
+                    if let failure = failure ?? loadFailure {
                         Label(failure, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
                     } else {
@@ -247,7 +250,7 @@ struct WorktreeSheet: View {
     private func canAdd(_ selected: Suggestion?) -> Bool {
         switch selected?.kind {
         case nil: false
-        case .create: !createNameInvalid
+        case .create: !createNameInvalid && loadFailure == nil
         default: true
         }
     }
@@ -261,7 +264,8 @@ struct WorktreeSheet: View {
     /// existing, with or without the configured prefix: someone who types its name means that
     /// branch, not a new and unrelated one off the base.
     private var createName: String? {
-        guard let name = model.newBranchName(fromTyped: query), !allBranches.contains(name) else { return nil }
+        // Until the branches are known, a name that exists would be offered as a new branch.
+        guard isLoaded, let name = model.newBranchName(fromTyped: query), !allBranches.contains(name) else { return nil }
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return remoteOnlyNames.contains(name) || remoteOnlyNames.contains(typed) ? nil : name
     }
@@ -333,7 +337,7 @@ struct WorktreeSheet: View {
         defer { isLoaded = true }
         // Every call below would bring up the system's install dialog.
         guard model.isGitAvailable else {
-            failure = AppModel.gitMissingMessage
+            loadFailure = AppModel.gitMissingMessage
             return
         }
         isRepository = await model.git.isRepository(project.folderURL)
@@ -342,8 +346,9 @@ struct WorktreeSheet: View {
         do {
             try await loadBranches()
             worktrees = try await model.availableWorktrees(for: project)
+            loadFailure = nil
         } catch {
-            failure = error.localizedDescription
+            loadFailure = error.localizedDescription
         }
     }
 
@@ -354,10 +359,13 @@ struct WorktreeSheet: View {
         let remote = try await model.git.remoteBranches(in: project.folderURL).filter { branch in
             Self.localName(ofRemoteBranch: branch).map { !localNames.contains($0) } ?? false
         }
+        // The list re-ranks with the branches, so the row is followed by identity, not by index.
+        let kept = selectedSuggestion?.id
         allBranches = localNames
         branches = local.filter { !checkedOut.contains($0) }
         remoteBranches = remote
         remoteOnlyNames = Set(remote.compactMap(Self.localName(ofRemoteBranch:)))
+        if let kept, let index = suggestions.firstIndex(where: { $0.id == kept }) { selection = index }
     }
 
     /// Checked while typing, so a bad name shows up in the list instead of as a git error after Return.
@@ -370,7 +378,12 @@ struct WorktreeSheet: View {
         try? await Task.sleep(for: .milliseconds(250))
         guard !Task.isCancelled else { return }
         // Picks up branches made in a terminal while the sheet is open, which turns the create row into a match.
-        try? await loadBranches()
+        do {
+            try await loadBranches()
+            loadFailure = nil
+        } catch {
+            loadFailure = error.localizedDescription
+        }
         let isValid = await model.git.isValidBranchName(name, in: project.folderURL)
         guard !Task.isCancelled else { return }
         createNameInvalid = !isValid

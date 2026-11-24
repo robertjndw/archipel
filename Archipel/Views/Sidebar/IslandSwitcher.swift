@@ -102,10 +102,7 @@ struct IslandSwitcher: View {
         ) { island in
             Button("Delete Island", role: .destructive) { model.removeIsland(island.id) }
         } message: { island in
-            let count = island.projects.count
-            Text(count == 1
-                ? "Its project is removed from Archipel and its sessions are closed. Nothing is deleted from disk."
-                : "Its \(count) projects are removed from Archipel and their sessions are closed. Nothing is deleted from disk.")
+            Text(model.deletionMessage(for: island))
         }
     }
 
@@ -120,6 +117,9 @@ struct IslandSwitcher: View {
                     pulse: isTemplate ? nil : model.islandPulses[island.id],
                     shortcutIndex: index < 9 ? index + 1 : nil
                 ) {
+                    // Felt here, not on every switch: shortcuts and jumps are not under the trackpad,
+                    // and a swipe has its own tick at halfway.
+                    if island.id != selectedID { Haptics.levelChange() }
                     model.select(island: island.id)
                 }
                 if isTemplate {
@@ -128,10 +128,42 @@ struct IslandSwitcher: View {
                     button
                         .id(island.id)
                         .contextMenu { menu(for: island) }
+                        .accessibilityActions { orderActions(for: island) }
+                }
+            }
+            // Dragging an island along the strip reorders it, which is also what ⌃1 to ⌃9 follow.
+            .reorderable()
+        }
+        // The stand-in rows only measure and place the highlight; they never take a drag.
+        .reorderContainer(for: Island.self, isEnabled: !isTemplate && islands.count > 1) { difference in
+            for id in difference.sources {
+                switch difference.destination.position {
+                case .before(let target): model.moveIsland(id, before: target)
+                case .end: model.moveIsland(id, before: nil)
                 }
             }
         }
         .padding(2)
+    }
+
+    /// Dragging does the same; these work without a pointer.
+    @ViewBuilder
+    private func orderButtons(for island: Island) -> some View {
+        Button("Move Left", systemImage: "arrow.left") { model.moveIsland(island.id, by: -1) }
+            .disabled(!model.canMoveIsland(island.id, by: -1))
+        Button("Move Right", systemImage: "arrow.right") { model.moveIsland(island.id, by: 1) }
+            .disabled(!model.canMoveIsland(island.id, by: 1))
+    }
+
+    /// Only the moves that can happen; a disabled action is just noise in the rotor.
+    @ViewBuilder
+    private func orderActions(for island: Island) -> some View {
+        if model.canMoveIsland(island.id, by: -1) {
+            Button("Move Left") { model.moveIsland(island.id, by: -1) }
+        }
+        if model.canMoveIsland(island.id, by: 1) {
+            Button("Move Right") { model.moveIsland(island.id, by: 1) }
+        }
     }
 
     /// The fill under the island the sidebar is heading to.
@@ -169,6 +201,10 @@ struct IslandSwitcher: View {
     private func menu(for island: Island) -> some View {
         Button("Edit Island…", systemImage: "pencil") { editor = .edit(island) }
         Button("New Island…", systemImage: "plus") { editor = .create }
+        if model.workspace.islands.count > 1 {
+            Divider()
+            orderButtons(for: island)
+        }
         Divider()
         // The ellipsis promises a confirmation, which an empty island does not get.
         Button(island.projects.isEmpty ? "Delete Island" : "Delete Island…", systemImage: "trash", role: .destructive) {
@@ -253,7 +289,7 @@ private struct IslandButton: View {
             .contentShape(.capsule)
         }
         .buttonStyle(.plain)
-        .animation(.smooth, value: summary)
+        .animation(reduceMotion ? nil : .smooth, value: summary)
         .onChange(of: isSelected) {
             if isSelected && !reduceMotion { arrivals += 1 }
         }
@@ -278,15 +314,20 @@ private struct IslandButton: View {
 struct StatusDot: View {
     let summary: AttentionSummary
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
     var body: some View {
         ZStack {
             if let color {
-                Circle()
+                // A square for waiting when color alone must not tell the two states apart.
+                let shape = differentiateWithoutColor && isWaiting
+                    ? AnyShape(.rect(cornerRadius: 1.5))
+                    : AnyShape(.circle)
+                shape
                     .fill(color)
                     .frame(width: 6, height: 6)
                     .background {
-                        Circle()
+                        shape
                             .fill(Chrome.windowSurface)
                             .padding(-1.5)
                     }
@@ -295,6 +336,10 @@ struct StatusDot: View {
         }
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: color)
         .accessibilityHidden(true)
+    }
+
+    private var isWaiting: Bool {
+        if case .needsAttention = summary.dominant { true } else { false }
     }
 
     private var color: Color? {

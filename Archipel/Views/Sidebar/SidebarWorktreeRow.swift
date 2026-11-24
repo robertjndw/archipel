@@ -75,7 +75,7 @@ struct SidebarWorktreeRow: View {
         .help(hiddenMessage ?? "")
         .opacity(isMissing ? 0.6 : 1)
         .onHover { isHovered = $0 }
-        .animation(.snappy(duration: 0.2), value: content.trailing)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: content.trailing)
         .statusGlow(model.statusPulses[worktree.id])
     }
 
@@ -172,6 +172,7 @@ struct SidebarWorktreeRow: View {
                     model.newSession(in: worktree.id, agent: model.defaultAgent)
                 }
                 .help("New \(model.defaultAgent.displayName) Session")
+                .disabled(isMissing)
                 Menu("More", systemImage: "ellipsis") {
                     SidebarWorktreeMenu(worktree: worktree, removing: $removing)
                 }
@@ -304,6 +305,7 @@ struct SidebarSessionRow: View {
     let content: SessionRowContent
     let isInSelectedWorktree: Bool
     @Binding var renaming: RenameTarget?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sidebarDensity) private var density
 
     var body: some View {
@@ -333,8 +335,8 @@ struct SidebarSessionRow: View {
                 }
             }
             .frame(height: density.sessionRowHeight)
-            .animation(.snappy(duration: 0.25), value: content.activity.subagents.count)
-            .animation(.snappy(duration: 0.25), value: content.activity.backgroundTasks)
+            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: content.activity.subagents.count)
+            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: content.activity.backgroundTasks)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -361,18 +363,27 @@ struct SidebarWorktreeMenu: View {
     @Binding var removing: Worktree?
 
     var body: some View {
+        // Sessions, scripts and the folder actions all need the folder to be there.
+        let isMissing = model.missingWorktrees.contains(worktree.id)
+        if isMissing {
+            Button("Locate Folder…", systemImage: "questionmark.folder") { model.locateFolder(of: worktree.id) }
+            Divider()
+        }
         NewSessionButtons(worktree: worktree.id)
+            .disabled(isMissing)
         Divider()
         let project = model.project(ofWorktree: worktree.id)
         Button("Run", systemImage: "play") { model.runProject(in: worktree.id) }
+            .disabled(isMissing)
         if project?.scripts.setupCommand != nil {
             Button("Run Setup Script", systemImage: "wrench.and.screwdriver") { model.startScript(.setup, in: worktree.id) }
+                .disabled(isMissing)
         }
         Divider()
-        FolderActions(folder: worktree.path)
+        FolderActions(folder: worktree.path, isMissing: isMissing)
         if worktree.branch != nil || model.gitSummaries[worktree.id] != nil {
             Button("Switch Branch…", systemImage: "arrow.triangle.swap") { model.switchBranchWorktreeID = worktree.id }
-                .disabled(!model.isGitAvailable || model.missingWorktrees.contains(worktree.id))
+                .disabled(!model.isGitAvailable || isMissing)
         }
         if let branch = worktree.branch {
             Button("Copy Branch Name", systemImage: "arrow.triangle.branch") { model.copyToPasteboard(branch) }
@@ -401,11 +412,18 @@ struct SidebarBatchMenu: View {
         let ids = worktrees.map(\.id)
         let pullable = ids.count { model.canSync(.pull, $0) }
         let pushable = ids.count { model.canSync(.push, $0) }
-        Button(pullable > 0 ? "Pull \(pullable) Worktrees" : "Pull", systemImage: "arrow.down") { model.sync(.pull, worktrees: ids) }
-            .disabled(pullable == 0)
-        Button(pushable > 0 ? "Push \(pushable) Worktrees" : "Push", systemImage: "arrow.up") { model.sync(.push, worktrees: ids) }
-            .disabled(pushable == 0)
-        Divider()
+        // Left out rather than disabled when they would act on nothing, so no count reads "0".
+        if pullable > 0 {
+            Button(pullable == 1 ? "Pull 1 Worktree" : "Pull \(pullable) Worktrees", systemImage: "arrow.down") {
+                model.sync(.pull, worktrees: ids)
+            }
+        }
+        if pushable > 0 {
+            Button(pushable == 1 ? "Push 1 Worktree" : "Push \(pushable) Worktrees", systemImage: "arrow.up") {
+                model.sync(.push, worktrees: ids)
+            }
+        }
+        if pullable > 0 || pushable > 0 { Divider() }
         Button("Show in Finder", systemImage: "folder") { model.revealInFinder(worktrees.map(\.path)) }
         Button("Copy Paths", systemImage: "document.on.document") {
             model.copyToPasteboard(worktrees.map(\.path.path).joined(separator: "\n"))
@@ -422,12 +440,13 @@ struct SidebarBatchMenu: View {
                 for id in ids { model.markRead(worktree: id) }
             }
         }
-        Divider()
         let removable = worktrees.filter { !$0.isMain }
-        Button(removable.count == 1 ? "Remove Worktree…" : "Remove \(removable.count) Worktrees…", systemImage: "minus.circle") {
-            model.requestRemoval(of: removable)
+        if !removable.isEmpty {
+            Divider()
+            Button(removable.count == 1 ? "Remove Worktree…" : "Remove \(removable.count) Worktrees…", systemImage: "minus.circle") {
+                model.requestRemoval(of: removable)
+            }
         }
-        .disabled(removable.isEmpty)
     }
 }
 

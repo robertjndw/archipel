@@ -2,8 +2,16 @@ import AppKit
 import SwiftUI
 
 struct WorktreeSettingsView: View {
+    private enum EditorChoice: Hashable {
+        case automatic
+        case editor(String)
+        case other
+    }
+
     @Environment(AppModel.self) private var model
     @State private var isChoosingFolder = false
+    /// Why the application picked with Other… was refused, until a choice that works is made.
+    @State private var editorProblem: String?
 
     var body: some View {
         @Bindable var settings = model.settings
@@ -15,6 +23,10 @@ struct WorktreeSettingsView: View {
                 TextField(text: $settings.branchPrefix, prompt: Text("yourname/")) {
                     Text("Branch prefix")
                     Text("Added in front of new branch names, unless the name you type already contains a slash.")
+                    if !AppModel.isValidBranchPrefix(settings.branchPrefix) {
+                        Text("Not a valid branch prefix, so it is not used. Avoid spaces and ~ ^ : ? * [ \\, and don't start with a dash.")
+                            .foregroundStyle(.red)
+                    }
                 }
                 .autocorrectionDisabled()
 
@@ -25,25 +37,48 @@ struct WorktreeSettingsView: View {
             }
 
             Section {
-                Picker(selection: $settings.externalEditorBundleID) {
-                    if let first = installed.first {
+                Picker(selection: Binding<EditorChoice>(
+                    get: { settings.externalEditorBundleID.map(EditorChoice.editor) ?? .automatic },
+                    set: { choice in
+                        switch choice {
+                        case .automatic:
+                            settings.externalEditorBundleID = nil
+                            editorProblem = nil
+                        case .editor(let id):
+                            settings.externalEditorBundleID = id
+                            editorProblem = nil
+                        case .other:
+                            model.chooseOtherEditor { editorProblem = $0 }
+                        }
+                    }
+                )) {
+                    if let first = installed.first(where: \.isKnown) {
                         Label { Text("Automatic (\(first.name))") } icon: { Image(nsImage: .menuIcon(forFile: first.url.path)) }
-                            .tag(String?.none)
+                            .tag(EditorChoice.automatic)
                         Divider()
                     } else {
-                        Text("None Installed").tag(String?.none)
+                        Text("Automatic (None Installed)").tag(EditorChoice.automatic)
                     }
                     ForEach(installed) { editor in
                         Label { Text(editor.name) } icon: { Image(nsImage: .menuIcon(forFile: editor.url.path)) }
-                            .tag(Optional(editor.bundleID))
+                            .tag(EditorChoice.editor(editor.bundleID))
                     }
+                    // A choice whose app was removed still has to show up, or the control looks empty.
+                    if let id = settings.externalEditorBundleID, !installed.contains(where: { $0.bundleID == id }) {
+                        Text("\(ExternalEditor.name(forBundleID: id)) (Not Installed)").tag(EditorChoice.editor(id))
+                    }
+                    Divider()
+                    Text("Other…").tag(EditorChoice.other)
                 } label: {
                     Text("Open in editor")
                     Text(installed.isEmpty
-                        ? "Install an editor such as Visual Studio Code, Cursor or Zed to open worktrees from Archipel."
+                        ? "Install an editor such as Visual Studio Code, Cursor or Zed, or pick another application."
                         : "Used by Open in Editor (⇧⌘E) and the context menus.")
+                    if let editorProblem {
+                        Text(editorProblem)
+                            .foregroundStyle(.red)
+                    }
                 }
-                .disabled(installed.isEmpty)
             }
         }
         .formStyle(.grouped)

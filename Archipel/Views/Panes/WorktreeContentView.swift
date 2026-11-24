@@ -24,7 +24,11 @@ struct WorktreeContentView: View {
                             paneView(pane, in: worktree, style: style)
                                 .frame(minWidth: minimumPaneWidth, maxWidth: .infinity, maxHeight: .infinity)
                                 .ignoresSafeArea(.container, edges: .top)
-                                .centersSplitDivider(enabled: pane.id == worktree.panes.first?.id)
+                                .centersSplitDivider(
+                                    enabled: pane.id == worktree.panes.first?.id,
+                                    panes: worktree.panes.map(\.id),
+                                    shares: worktree.paneWidthShares
+                                ) { model.setPaneWidthShares($0, in: worktree.id) }
                                 .hidesSplitDivider(style == .comfortable)
                         }
                     }
@@ -32,6 +36,8 @@ struct WorktreeContentView: View {
                     PaneStack(panes: worktree.panes, showsHairline: style == .compact) { pane in
                         paneView(pane, in: worktree, style: style)
                             .ignoresSafeArea(.container, edges: .top)
+                    } onResize: {
+                        model.setPaneWidthShares($0, in: worktree.id)
                     }
                 }
             }
@@ -121,8 +127,11 @@ private struct PaneStack<Content: View>: View {
     /// Off in the comfortable style, where the gap between the cards already parts them.
     let showsHairline: Bool
     @ViewBuilder let content: (Pane) -> Content
+    /// Called with every pane's share of the width once a divider has been let go.
+    let onResize: ([Double]) -> Void
 
-    /// Each pane's share of the width. A pane that was never resized counts as 1.
+    /// The shares of the two panes at the divider being dragged. Empty otherwise: the workspace
+    /// keeps the widths, so they come back with the worktree and after a relaunch.
     @State private var weights: [Pane.ID: CGFloat] = [:]
     /// The widths of the two panes next to the divider being dragged, as they were when the drag began.
     @State private var dragOrigin: (leading: CGFloat, trailing: CGFloat)?
@@ -148,7 +157,11 @@ private struct PaneStack<Content: View>: View {
         }
     }
 
-    private func weight(of pane: Pane) -> CGFloat { weights[pane.id] ?? 1 }
+    private func weight(of pane: Pane) -> CGFloat {
+        // A worktree's panes either all have a stored share or none has, so the fallback is in
+        // the same unit as the shares next to it.
+        weights[pane.id] ?? CGFloat(pane.widthShare ?? 1 / Double(max(panes.count, 1)))
+    }
 
     private func widths(fitting total: CGFloat) -> [CGFloat] {
         let available = max(0, total - Self.dividerWidth * CGFloat(panes.count - 1))
@@ -172,7 +185,11 @@ private struct PaneStack<Content: View>: View {
                                 dragOrigin = origin
                                 resize(index, origin: origin, by: drag.translation.width)
                             }
-                            .onEnded { _ in dragOrigin = nil }
+                            .onEnded { _ in
+                                dragOrigin = nil
+                                onResize(panes.map { Double(weight(of: $0)) })
+                                weights = [:]
+                            }
                     )
             }
             // Above the pane that follows, which would otherwise take the clicks on its side of the hairline.
@@ -251,16 +268,28 @@ private struct PaneView: View {
     private var content: some View {
         switch pane.selectedTab?.content {
         case .session(let id):
-            if let tab = pane.selectedTab { SessionContent(sessionID: id, tabID: tab.id) }
+            if let tab = pane.selectedTab { SessionContent(sessionID: id, tabID: tab.id, isFocused: isFocused) }
         case .file(let url):
-            FileEditor(url: url, store: model.documents) { link in
-                if link.isFileURL {
+            FileEditor(url: url, store: model.documents, root: worktree.path) { link in
+                let show = { (file: URL) in
                     // A folder would open as a tab that can only say it is a folder.
-                    if model.isDirectory(link) { model.revealInFinder(link) } else { model.openFile(link, in: worktree.id, preview: false) }
-                } else if link.scheme == "http" || link.scheme == "https" {
-                    model.openWebLink(link, in: worktree.id)
-                } else {
-                    NSWorkspace.shared.open(link)
+                    if model.isDirectory(file) { model.revealInFinder(file) } else { model.openFile(file, in: worktree.id, preview: false) }
+                }
+                switch PreviewLinkPolicy.action(for: link, root: worktree.path) {
+                case .file(let file):
+                    show(file)
+                case .fileOutsideRoot(let file):
+                    // `/etc/hosts` or `../../other-repo/notes.md`: nothing the document's own
+                    // repository holds, so it is not shown on the strength of a click alone.
+                    ExternalLinkConfirmation.openFile(file) { show(file) }
+                case .web(let url):
+                    model.openWebLink(url, in: worktree.id)
+                case .system(let url):
+                    NSWorkspace.shared.open(url)
+                case .confirm(let url):
+                    ExternalLinkConfirmation.open(url, root: worktree.path)
+                case .ignore:
+                    break
                 }
             }
         case .diff(let path, let staged):
@@ -356,16 +385,30 @@ private struct SessionContent: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let sessionID: Session.ID
     let tabID: ArchipelCore.Tab.ID
+    /// Whether this is the pane the model has the focus in.
+    let isFocused: Bool
 
     var body: some View {
         let activity = model.activity(for: sessionID)
         let exitCode: Int32? = if case .exited(let code) = activity.status, model.terminals[sessionID] != nil { code } else { nil }
         Group {
             if let terminal = model.terminals[sessionID] {
-                TerminalView(session: terminal)
+                // Every pane's terminal mounts when a worktree comes on screen. Only the focused
+                // pane's may take the keyboard, or the last one to mount would end up with it
+                // while the tab commands act on the other.
+                TerminalView(session: terminal, focusOnMount: isFocused)
                     // A new identity per session, so SwiftUI swaps the hosted
                     // terminal view instead of reusing one representable.
                     .id(sessionID)
+                    .overlay(alignment: .topTrailing) {
+                        TerminalSearchBar(search: terminal.search)
+                    }
+                    // Return in the terminal is the bar's default action, as long as the terminal
+                    // has the keyboard. A window-wide shortcut on the button would also fire for
+                    // a live terminal in the next pane.
+                    .onChange(of: terminal.id, initial: true) { [weak model] in
+                        terminal.onReturnAfterExit = { model?.restartSession(sessionID) }
+                    }
             } else if let failure = model.launchFailures[sessionID] {
                 ContentUnavailableView {
                     Label("Could Not Start", systemImage: "exclamationmark.triangle")

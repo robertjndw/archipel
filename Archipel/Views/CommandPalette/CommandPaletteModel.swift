@@ -38,13 +38,14 @@ struct PaletteCommand: Identifiable {
 
         // Same rule as the File menu: every agent is listed, the first three show a shortcut.
         let shortcutHints = ["⌘T", "⌥⌘T", "⇧⌘T"]
+        let canStartSession = model.worktreeForNewSession(worktreeID) != nil
         let newSessions = model.agentsInMenuOrder.enumerated().map { index, agent in
             PaletteCommand(
                 id: "new-\(agent.id)",
                 title: "New \(agent.displayName) Session",
                 symbol: agent.symbolName,
                 shortcutHint: index < shortcutHints.count ? shortcutHints[index] : nil,
-                isAvailable: hasSelection && model.canStartSession(with: agent)
+                isAvailable: canStartSession && model.canStartSession(with: agent)
             ) {
                 if let worktreeID { model.newSession(in: worktreeID, agent: agent) }
             }
@@ -57,7 +58,7 @@ struct PaletteCommand: Identifiable {
                 title: "New \(entry.agent.displayName) Session: \(entry.preset.title)",
                 symbol: entry.agent.symbolName,
                 shortcutHint: index < 9 ? "⌃⌘\(index + 1)" : nil,
-                isAvailable: hasSelection && model.canStartSession(with: entry.agent)
+                isAvailable: canStartSession && model.canStartSession(with: entry.agent)
             ) {
                 if let worktreeID { model.newSession(in: worktreeID, agent: entry.agent, preset: entry.preset) }
             }
@@ -72,6 +73,41 @@ struct PaletteCommand: Identifiable {
                 isAvailable: stayAwake.mode != mode
             ) { stayAwake.mode = mode }
         }
+
+        let island = model.selectedIsland
+        let hasOtherIslands = model.workspace.islands.count > 1
+        // Flat entries, like the presets, so typing the island's name finds the move.
+        let projectMoves = model.workspace.islands.filter { $0.id != island?.id }.map { destination in
+            PaletteCommand(
+                id: "move-project-\(destination.id.uuidString)",
+                title: "Move Project to \(destination.name)",
+                symbol: destination.symbol,
+                isAvailable: project != nil,
+                alias: "Move to Island"
+            ) {
+                if let project { model.moveProject(project.id, to: destination.id) }
+            }
+        }
+        let islandCommands = [
+            PaletteCommand(id: "edit-island", title: "Edit Island…", symbol: "pencil", isAvailable: island != nil, refocusesTab: false) {
+                if let island, model.readyForSheet() { model.islandBeingEdited = island }
+            },
+            PaletteCommand(
+                id: "delete-island",
+                // The ellipsis promises a confirmation, which an empty island does not get.
+                title: island?.projects.isEmpty == true ? "Delete Island" : "Delete Island…",
+                symbol: "trash",
+                isAvailable: island != nil && hasOtherIslands,
+                refocusesTab: false
+            ) {
+                if let island { model.requestDeletion(of: island) }
+            },
+        ]
+        let projectCommands = projectMoves + [
+            PaletteCommand(id: "remove-project", title: "Remove Project…", symbol: "trash", isAvailable: project != nil, refocusesTab: false) {
+                if let project, model.readyForSheet() { model.projectAwaitingRemoval = project }
+            },
+        ]
 
         return newSessions + [
             PaletteCommand(id: "add-project", title: "Add Project…", symbol: "folder.badge.plus", shortcutHint: "⇧⌘O", refocusesTab: false) { actions.addProject() },
@@ -105,6 +141,23 @@ struct PaletteCommand: Identifiable {
             ) {
                 if let tab = model.focusedTab { model.split(tab: tab.id) }
             },
+            PaletteCommand(
+                id: "focus-next-pane",
+                title: "Focus Next Pane",
+                symbol: "arrow.right.square",
+                shortcutHint: "⌘]",
+                isAvailable: (worktree?.panes.count ?? 0) > 1,
+                // Puts the keyboard into the pane itself, after the palette has let go of it.
+                refocusesTab: false
+            ) { model.focusAdjacentPane(offset: 1) },
+            PaletteCommand(
+                id: "focus-previous-pane",
+                title: "Focus Previous Pane",
+                symbol: "arrow.left.square",
+                shortcutHint: "⌘[",
+                isAvailable: (worktree?.panes.count ?? 0) > 1,
+                refocusesTab: false
+            ) { model.focusAdjacentPane(offset: -1) },
             PaletteCommand(id: "close-tab", title: "Close Tab", symbol: "xmark", shortcutHint: "⌘W", isAvailable: model.focusedTab != nil) {
                 if let tab = model.focusedTab { model.close(tab: tab.id) }
             },
@@ -230,7 +283,7 @@ struct PaletteCommand: Identifiable {
             PaletteCommand(id: "project-settings", title: "Project Settings…", symbol: "gearshape", isAvailable: project != nil, refocusesTab: false) {
                 if let project { model.openProjectSettings(project.id) }
             },
-        ] + stayAwakeModes + [
+        ] + projectCommands + islandCommands + stayAwakeModes + [
             PaletteCommand(id: "settings", title: "Settings…", symbol: "gearshape", shortcutHint: "⌘,", refocusesTab: false) { actions.openSettings() },
             PaletteCommand(
                 id: "check-for-updates",
@@ -283,6 +336,9 @@ final class CommandPaletteModel {
     @ObservationIgnored private var rankTask: Task<Void, Never>?
     /// Bumped whenever results become stale, so a ranking that finishes late is dropped.
     @ObservationIgnored private var generation = 0
+    /// Set while a file ranking is in flight, when `rows` still belong to an earlier query.
+    @ObservationIgnored private var isRanking = false
+    @ObservationIgnored private var activatesWhenRanked = false
     @ObservationIgnored private weak var previousResponder: NSResponder?
 
     private static let destinationLimit = 200
@@ -323,6 +379,8 @@ final class CommandPaletteModel {
         loadTask?.cancel()
         rankTask?.cancel()
         generation += 1
+        isRanking = false
+        activatesWhenRanked = false
         // Keep the rows until the next present. The panel is still fading out at this point and an
         // empty list would flash "No results".
         files = []
@@ -339,7 +397,14 @@ final class CommandPaletteModel {
         if row.refocusesTab { focusFocusedSession() }
     }
 
-    func activateSelection() { activate(selection) }
+    func activateSelection() {
+        // Return right after typing must open a hit of the query in the field, not of the previous one.
+        if isRanking {
+            activatesWhenRanked = true
+            return
+        }
+        activate(selection)
+    }
 
     func move(_ delta: Int) {
         guard !rows.isEmpty else { return }
@@ -377,6 +442,8 @@ final class CommandPaletteModel {
     private func refresh() {
         rankTask?.cancel()
         generation += 1
+        isRanking = false
+        activatesWhenRanked = false
         let restrictsToCommands = query.hasPrefix(">")
         let text = restrictsToCommands ? String(query.dropFirst()) : query
 
@@ -515,6 +582,7 @@ final class CommandPaletteModel {
             rows = []
             return
         }
+        isRanking = true
         let paths = files
         let current = generation
         rankTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -544,6 +612,11 @@ final class CommandPaletteModel {
             )
         }
         selection = 0
+        isRanking = false
+        if activatesWhenRanked {
+            activatesWhenRanked = false
+            activateSelection()
+        }
     }
 
     nonisolated struct FileHit: Sendable {

@@ -45,6 +45,7 @@ private struct SwitcherPanel: View {
     @Environment(TabSwitcherModel.self) private var switcher
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var selection
+    @State private var pointer = PointerMovement()
     let gesture: TabSwitch
     let maxWidth: CGFloat
 
@@ -84,7 +85,7 @@ private struct SwitcherPanel: View {
                 )
                 .id(id)
                 .onContinuousHover { phase in
-                    if case .active = phase, id != gesture.selectedID { switcher.hover(id) }
+                    if case .active = phase, pointer.hasMoved(), id != gesture.selectedID { switcher.hover(id) }
                 }
                 .onTapGesture {
                     switcher.hover(id)

@@ -236,9 +236,16 @@ struct SwitchBranchSheet: View {
         selection = min(max(selection + delta, 0), count - 1)
     }
 
+    /// What typing would create, or nil when that branch already exists. A remote-only branch counts
+    /// as existing, with or without the configured prefix: someone who types its name means that
+    /// branch, not a new and unrelated one off the base.
     private var createName: String? {
         guard let name = model.newBranchName(fromTyped: query), !localNames.contains(name) else { return nil }
-        return name
+        let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteOnly = Set(remote.compactMap { branch in
+            branch.firstIndex(of: "/").map { String(branch[branch.index(after: $0)...]) }
+        }).subtracting(localNames)
+        return remoteOnly.contains(name) || remoteOnly.contains(typed) ? nil : name
     }
 
     /// The worktree in the sidebar that has `path` as its folder, if any.

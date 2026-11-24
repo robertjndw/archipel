@@ -13,7 +13,11 @@ struct NotificationSettingsView: View {
             if let note = authorizationNote {
                 Section {
                     LabeledContent {
-                        Button("Open System Settings…", action: openSystemSettings)
+                        if authorization == .notDetermined {
+                            Button("Allow Notifications…", action: requestAuthorization)
+                        } else {
+                            Button("Open System Settings…", action: openSystemSettings)
+                        }
                     } label: {
                         Label {
                             Text(note.title)
@@ -91,6 +95,14 @@ struct NotificationSettingsView: View {
     private func openSystemSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// System Settings does not list an app that has never asked, so the dialog has to come from here.
+    private func requestAuthorization() {
+        Task {
+            await model.notifier.requestAuthorization()
+            await refreshAuthorization()
         }
     }
 

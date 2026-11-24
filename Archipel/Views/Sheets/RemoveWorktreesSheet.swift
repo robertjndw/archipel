@@ -54,6 +54,23 @@ struct RemoveWorktreesSheet: View {
                 ? "An agent is working in one of these worktrees. Removing it stops that agent."
                 : "\(busy) agents are working in these worktrees. Removing them stops the agents.")
         }
+        let idle = chosen.reduce(0) { $0 + $1.sessions.count } - busy
+        if idle > 0 {
+            let other = busy > 0 ? "other " : ""
+            warnings.append(idle == 1 ? "One \(other)session is closed too." : "\(idle) \(other)sessions are closed too.")
+        }
+        let detached = chosen.filter { $0.branch == nil && deletesFromDisk($0) }
+        if !detached.isEmpty {
+            let which = switch (detached.count, chosen.count) {
+            case (1, 1): "This worktree is"
+            case (1, _): "One of these worktrees is"
+            case (let count, _) where count == chosen.count: "These worktrees are"
+            case (let count, _): "\(count) of these worktrees are"
+            }
+            let place = detached.count == 1 ? "there" : "in them"
+            let folders = detached.count == 1 ? "its folder is" : "their folders are"
+            warnings.append("\(which) on a detached HEAD. Commits made \(place) are not on any branch, and are only reachable through the reflog once \(folders) deleted.")
+        }
         let unsaved = chosen.reduce(0) { $0 + model.unsavedDocuments(under: $1.path).count }
         if unsaved > 0 {
             let count = unsaved == 1 ? "1 file has unsaved changes in the editor." : "\(unsaved) files have unsaved changes in the editor."
@@ -222,7 +239,7 @@ struct RemoveWorktreesSheet: View {
             if !deleteFolders {
                 Text("The folders and branches stay on disk. You can add the worktrees back from Add Worktree.")
             } else {
-                Text("Branches with commits that are not merged are kept. Missing folders are only taken out of the sidebar.")
+                Text("A branch is kept unless git finds it fully merged, which includes being pushed to its upstream. Missing folders are only taken out of the sidebar.")
             }
         }
         .disabled(isWorking)
@@ -266,7 +283,7 @@ struct RemoveWorktreesSheet: View {
                 )
                 switch result {
                 case .keptUnmerged(let branch):
-                    notes.append("The branch \(branch) was kept because it has commits that are not merged.")
+                    notes.append("The branch \(branch) was kept because it has commits that are not merged or pushed.")
                 case .failed(let branch, let message):
                     notes.append("The branch \(branch) could not be deleted: \(message)")
                 case .notRequested, .deleted:

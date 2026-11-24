@@ -7,7 +7,6 @@ import SwiftUI
 /// Collapsed project headers use it; the island switcher has a dot of the same colors, without the count.
 struct SidebarAttentionBadge: View {
     let signal: AttentionSummary.Signal
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -15,7 +14,8 @@ struct SidebarAttentionBadge: View {
             case .needsAttention(let count):
                 Text(count, format: .number)
                     .font(.system(size: 9, weight: .bold).monospacedDigit())
-                    .foregroundStyle(.white)
+                    // White on system orange is about 2:1; black reads at roughly 10:1.
+                    .foregroundStyle(.black)
                     .padding(.horizontal, 4)
                     .frame(minWidth: 14, minHeight: 14)
                     .background(.orange, in: .capsule)
@@ -29,7 +29,8 @@ struct SidebarAttentionBadge: View {
                     .controlSize(.mini)
             }
         }
-        .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
+        // Opacity only, since the working case is a spinner; see `statusGlowLanding`.
+        .transition(.opacity)
         .accessibilityHidden(true)
     }
 }
