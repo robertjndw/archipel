@@ -25,6 +25,9 @@ public final class ChatSession {
     public internal(set) var permissionRequests: [ChatPermissionRequest] = []
     /// What the user is typing. `send()` takes it and clears it.
     public var draft = ""
+    /// Prompts sent while a turn was running, oldest first. Each goes out when the turn before
+    /// it ends; a turn that is stopped or fails gives them back to the draft instead.
+    public internal(set) var queuedPrompts: [QueuedPrompt] = []
     /// Counts requests to put the cursor in the composer. The view focuses its field whenever
     /// this changes, which lets the app ask for focus without knowing the view.
     public internal(set) var composerFocusRequests = 0
@@ -100,8 +103,8 @@ public final class ChatSession {
     /// At most one `.activity` per this interval; the owner only needs to know the agent is busy.
     static let activityInterval: Duration = .milliseconds(250)
 
-    /// One prompt at a time. The protocol allows no second `session/prompt` while one runs, but a
-    /// client could queue it; flip this and teach `submit` to queue to allow typing ahead.
+    /// One prompt at a time: the protocol allows no second `session/prompt` while one runs.
+    /// Typing ahead goes through `queuedPrompts` instead.
     static let acceptsPromptsWhileRunning = false
 
     public init(configuration: Configuration) {
@@ -137,7 +140,16 @@ public final class ChatSession {
 
     /// Whether `send()` would send now.
     public var canSend: Bool {
-        canAcceptPrompt && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+        canAcceptPrompt && hasDraft
+    }
+
+    /// Whether `send()` would queue the draft behind the running turn.
+    public var canQueue: Bool {
+        phase.isReady && client != nil && agentSessionID != nil && isTurnRunning && hasDraft
+    }
+
+    private var hasDraft: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
     }
 
     var canAcceptPrompt: Bool {

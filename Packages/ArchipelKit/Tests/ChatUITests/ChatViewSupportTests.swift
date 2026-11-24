@@ -215,6 +215,78 @@ struct ComposerKeysTests {
 }
 
 @Suite
+struct ComposerHabitsTests {
+    private func action(_ command: ComposerCommand, _ edit: (inout ComposerKeyContext) -> Void) -> ComposerAction {
+        var context = ComposerKeyContext()
+        edit(&context)
+        return ComposerKeys.action(for: command, in: context)
+    }
+
+    @Test func upTakesBackTheQueuedPromptBeforeAnythingSent() {
+        #expect(action(.up) { $0.hasQueuedPrompts = true; $0.canRecallOlder = true } == .editQueuedPrompt)
+        #expect(action(.up) { $0.hasQueuedPrompts = true; $0.isDraftEmpty = false } == .passThrough)
+        #expect(action(.up) { $0.canRecallOlder = true } == .recallPrompt(older: true))
+        #expect(action(.down) { $0.canRecallNewer = true } == .recallPrompt(older: false))
+    }
+
+    @Test func theArrowsMoveTheCursorInTheUsersOwnText() {
+        #expect(action(.up) { $0.isDraftEmpty = false } == .passThrough)
+        #expect(action(.down) { $0.isDraftEmpty = false } == .passThrough)
+    }
+
+    @Test func shiftTabCyclesTheModeWhenThereIsOne() {
+        #expect(action(.backtab) { $0.canCycleMode = true } == .cycleMode)
+        #expect(action(.backtab) { _ in } == .passThrough)
+        #expect(action(.backtab) { $0.canCycleMode = true; $0.hasMarkedText = true } == .passThrough)
+    }
+
+    @Test func recallWalksBackThroughThePromptsAndOutAgain() {
+        var recall = PromptRecall(history: ["one", "two", "three"])
+        #expect(recall.move(older: false, draft: "") == nil)
+        #expect(recall.move(older: true, draft: "") == "three")
+        #expect(recall.move(older: true, draft: "three") == "two")
+        #expect(recall.move(older: true, draft: "two") == "one")
+        #expect(!recall.canRecallOlder(draft: "one"))
+        #expect(recall.move(older: false, draft: "one") == "two")
+        #expect(recall.move(older: false, draft: "two") == "three")
+        #expect(recall.move(older: false, draft: "three") == "")
+        #expect(!recall.canRecallNewer(draft: ""))
+    }
+
+    @Test func editingARecalledPromptMakesItTheUsersDraft() {
+        var recall = PromptRecall(history: ["one", "two"])
+        #expect(recall.move(older: true, draft: "") == "two")
+        #expect(!recall.canRecallOlder(draft: "two, changed"))
+        #expect(!recall.canRecallNewer(draft: "two, changed"))
+        #expect(recall.move(older: true, draft: "two, changed") == nil)
+    }
+
+    @Test func historyIsTheSentPromptsWithoutBackToBackRepeats() {
+        let items: [ChatItem] = [
+            .userMessage(ChatMessage(id: "1", text: "fix it")),
+            .agentMessage(ChatMessage(id: "2", text: "done")),
+            .userMessage(ChatMessage(id: "3", text: "fix it\n")),
+            .userMessage(ChatMessage(id: "4", text: "")),
+            .userMessage(ChatMessage(id: "5", text: "thanks")),
+        ]
+        #expect(PromptRecall.history(of: items) == ["fix it", "thanks"])
+    }
+
+    @Test func theNextModeWrapsAround() {
+        func mode(current: String?) -> ChatControl {
+            ChatControl(
+                id: "mode", name: "Mode", category: .mode,
+                value: .select(current: current, groups: [.init(name: nil, choices: ["ask", "plan", "auto"].map { ConfigOptionValue(value: $0, name: $0) })])
+            )
+        }
+        #expect(mode(current: "ask").nextChoice?.value == "plan")
+        #expect(mode(current: "auto").nextChoice?.value == "ask")
+        #expect(mode(current: nil).nextChoice?.value == "ask")
+        #expect(ChatControl(id: "t", name: "T", category: .mode, value: .toggle(true)).nextChoice == nil)
+    }
+}
+
+@Suite
 struct SlashCommandsTests {
     private let commands = [
         AvailableCommand(name: "compact", description: "Summarize the conversation"),
@@ -544,5 +616,171 @@ struct ChatControlLabelTests {
     @Test func aChoiceThatIsNotListedFallsBackToTheName() {
         let control = ChatControl(id: "x", name: "Effort", category: nil, value: .select(current: "?", groups: []))
         #expect(control.barLabel == "Effort")
+    }
+
+    @Test func onlyTheModeAndTheModelArePrimary() {
+        #expect(select("Mode", .mode, current: "m", name: "Manual").isPrimary)
+        #expect(select("Model", .model, current: "d", name: "Default").isPrimary)
+        #expect(!select("Effort", .thoughtLevel, current: "m", name: "Medium").isPrimary)
+        #expect(!select("Agent", nil, current: "d", name: "Default").isPrimary)
+    }
+
+    @Test func aChoiceBetweenOnAndOffIsASwitch() {
+        func control(_ values: [String]) -> ChatControl {
+            ChatControl(
+                id: "x", name: "Fast mode", category: nil,
+                value: .select(current: values.first, groups: [.init(name: nil, choices: values.map { ConfigOptionValue(value: $0, name: $0) })])
+            )
+        }
+        #expect(control(["off", "on"]).switchValues.map { [$0.on, $0.off] } == ["on", "off"])
+        #expect(control(["On", "Off"]).switchValues.map { [$0.on, $0.off] } == ["On", "Off"])
+        #expect(control(["off", "on", "auto"]).switchValues == nil)
+        #expect(control(["low", "high"]).switchValues == nil)
+        #expect(ChatControl(id: "t", name: "Brief", category: nil, value: .toggle(true)).switchValues == nil)
+    }
+
+    private func effort(_ values: [String], category: ConfigOptionCategory? = .thoughtLevel) -> ChatControl {
+        ChatControl(
+            id: "effort", name: "Effort", category: category,
+            value: .select(current: values.first, groups: [.init(name: nil, choices: values.map { ConfigOptionValue(value: $0, name: $0) })])
+        )
+    }
+
+    @Test func theEffortIsAScaleOfItsLevels() {
+        #expect(effort(["low", "medium", "high", "xhigh"]).levelScale?.levels.map(\.value) == ["low", "medium", "high", "xhigh"])
+        #expect(effort(["low", "medium", "high", "xhigh"]).levelScale?.fallback == nil)
+    }
+
+    @Test func defaultIsNotAStopOnTheScale() {
+        let scale = effort(["default", "low", "medium", "high"]).levelScale
+        #expect(scale?.levels.map(\.value) == ["low", "medium", "high"])
+        #expect(scale?.fallback?.value == "default")
+    }
+
+    @Test func onlyAnEffortWithLevelsToMoveBetweenIsAScale() {
+        #expect(effort(["default", "high"]).levelScale == nil)
+        #expect(effort(["low", "medium", "high"], category: .mode).levelScale == nil)
+        #expect(ChatControl(id: "t", name: "Think", category: .thoughtLevel, value: .toggle(true)).levelScale == nil)
+    }
+
+    @Test func aShortDescriptionIsItsOwnSummary() {
+        #expect(ChatControl.menuSummary(of: "Reviews code changes") == "Reviews code changes")
+        #expect(ChatControl.menuSummary(of: "Requires approval to edit files.") == "Requires approval to edit files")
+        #expect(ChatControl.menuSummary(of: nil) == nil)
+        #expect(ChatControl.menuSummary(of: "  \n") == nil)
+    }
+
+    @Test func aLongDescriptionIsCutToItsFirstSentenceAndOneLine() {
+        #expect(ChatControl.menuSummary(of: "The default agent. Executes tools based on configured permissions.") == "The default agent")
+        #expect(ChatControl.menuSummary(of: "First line\nSecond line") == "First line")
+        let long = "Use this agent when you need to review code for adherence to project guidelines, style guides, and best practices."
+        #expect(ChatControl.menuSummary(of: long) == "Use this agent when you need to review code for adherence to…")
+        #expect(ChatControl.menuSummary(of: String(repeating: "a", count: 80)) == String(repeating: "a", count: 60) + "…")
+    }
+
+    private func models(_ values: [String], current: String?, category: ConfigOptionCategory? = .model) -> ChatControl {
+        ChatControl(
+            id: "model", name: "Model", category: category,
+            value: .select(current: current, groups: [.init(name: nil, choices: values.map { ConfigOptionValue(value: $0, name: $0) })])
+        )
+    }
+
+    private let manyModels = ["a/1", "a/2", "a/3", "b/1", "b/2", "b/3", "b/4", "c/1", "c/2", "c/3"]
+
+    @Test func aShortModelListIsShownWhole() {
+        #expect(models(["opus", "fable", "sonnet", "haiku"], current: "opus").modelShortlist(recent: []) == nil)
+        #expect(models(Array(manyModels.prefix(8)), current: "a/1").modelShortlist(recent: []) == nil)
+        #expect(models(manyModels, current: "a/1", category: .mode).modelShortlist(recent: []) == nil)
+    }
+
+    @Test func aLongModelListShowsTheCurrentTheRecentAndTheProviderInUse() {
+        let shortlist = models(manyModels, current: "b/3").modelShortlist(recent: ["c/2", "gone", "a/1"])
+        // The model in use, the two recent ones still offered, then its provider's first two.
+        #expect(shortlist?.shown.map(\.value) == ["a/1", "b/1", "b/2", "b/3", "c/2"])
+        #expect(shortlist?.others.flatMap(\.choices).map(\.value) == ["a/2", "a/3", "b/4", "c/1", "c/3"])
+    }
+
+    @Test func withNothingToGoOnTheAgentsFirstModelsAreShown() {
+        let plain = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9"]
+        #expect(models(plain, current: nil).modelShortlist(recent: [])?.shown.map(\.value) == ["m1", "m2", "m3", "m4", "m5"])
+        #expect(models(plain, current: "m9").modelShortlist(recent: [])?.shown.map(\.value) == ["m1", "m2", "m3", "m4", "m9"])
+    }
+
+    @Test func groupsLeftEmptyAreDropped() {
+        let control = ChatControl(
+            id: "model", name: "Model", category: .model,
+            value: .select(current: "a/1", groups: [
+                .init(name: "A", choices: ["a/1", "a/2"].map { ConfigOptionValue(value: $0, name: $0) }),
+                .init(name: "B", choices: (1...8).map { ConfigOptionValue(value: "b/\($0)", name: "b/\($0)") }),
+            ])
+        )
+        let shortlist = control.modelShortlist(recent: ["b/1", "b/2", "b/3"])
+        #expect(shortlist?.shown.map(\.value) == ["a/1", "a/2", "b/1", "b/2", "b/3"])
+        #expect(shortlist?.others.map(\.name) == ["B"])
+    }
+
+    @Test func recentModelsKeepTheLatestFirstAndEachOnce() {
+        var stored = ""
+        for value in ["a", "b", "a", "c"] { stored = RecentModels.adding(value, to: stored) }
+        #expect(RecentModels.values(in: stored) == ["c", "a", "b"])
+        for index in 0..<20 { stored = RecentModels.adding("m\(index)", to: stored) }
+        #expect(RecentModels.values(in: stored).count == RecentModels.capacity)
+        #expect(RecentModels.values(in: stored).first == "m19")
+    }
+
+    @Test func modesAreKnownByTheWordsAgentsShare() {
+        func style(_ value: String, _ name: String) -> ChatControl.ModeStyle {
+            ChatControl.modeStyle(for: ConfigOptionValue(value: value, name: name))
+        }
+        #expect(style("default", "Manual").symbol == "hand.raised")
+        #expect(style("acceptEdits", "Accept edits").symbol == "pencil")
+        #expect(style("plan", "Plan").symbol == "list.clipboard")
+        #expect(style("auto", "Auto").symbol == "sparkles")
+        #expect(style("read-only", "Read-only").symbol == "eye")
+        #expect(style("workspace-write", "Workspace access").symbol == "pencil")
+        #expect(style("agent", "Auto review").symbol == "sparkles")
+        #expect(style("build", "Build").symbol == "hammer")
+        #expect(style("x", "Something Else") == ChatControl.ModeStyle(symbol: "switch.2"))
+    }
+
+    @Test func onlyAModeWithoutLimitsIsMarked() {
+        func style(_ value: String, _ name: String) -> ChatControl.ModeStyle {
+            ChatControl.modeStyle(for: ConfigOptionValue(value: value, name: name))
+        }
+        #expect(style("agent-full-access", "Full access").isUnrestricted)
+        #expect(style("bypassPermissions", "Bypass permissions").isUnrestricted)
+        #expect(!style("auto", "Auto").isUnrestricted)
+        #expect(!style("acceptEdits", "Accept edits").isUnrestricted)
+    }
+
+    @Test func theDefaultModelIsShownByItsName() {
+        func model(_ value: String, _ name: String, _ description: String?) -> ChatControl {
+            ChatControl(
+                id: "model", name: "Model", category: .model,
+                value: .select(current: value, groups: [.init(name: nil, choices: [ConfigOptionValue(value: value, name: name, description: description)])])
+            )
+        }
+        #expect(model("default", "Default (recommended)", "Opus 5.5").barLabel == "Opus 5.5")
+        #expect(model("default", "Default", nil).barLabel == "Default")
+        #expect(model("default", "Default", "Whatever the provider considers best for this account today").barLabel == "Default")
+        #expect(model("opus", "Opus 5.5", "For complex work").barLabel == "Opus 5.5")
+    }
+
+    @Test func theGaugeFollowsTheLevel() {
+        let scale = effort(["default", "low", "medium", "high"]).levelScale
+        func fraction(_ current: String) -> Double? {
+            var control = effort(["default", "low", "medium", "high"])
+            if case let .select(_, groups) = control.value { control.value = .select(current: current, groups: groups) }
+            return scale?.fraction(of: control)
+        }
+        #expect(fraction("low") == 0)
+        #expect(fraction("medium") == 0.5)
+        #expect(fraction("high") == 1)
+        #expect(fraction("default") == nil)
+        #expect(ChatControl.LevelScale.gaugeSymbol(for: 0) == "gauge.with.dots.needle.0percent")
+        #expect(ChatControl.LevelScale.gaugeSymbol(for: 1.0 / 3) == "gauge.with.dots.needle.33percent")
+        #expect(ChatControl.LevelScale.gaugeSymbol(for: nil) == "gauge.with.dots.needle.50percent")
+        #expect(ChatControl.LevelScale.gaugeSymbol(for: 2.0 / 3) == "gauge.with.dots.needle.67percent")
+        #expect(ChatControl.LevelScale.gaugeSymbol(for: 1) == "gauge.with.dots.needle.100percent")
     }
 }

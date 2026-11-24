@@ -141,6 +141,7 @@ struct ComposerTextView: NSViewRepresentable {
             case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)), #selector(NSResponder.insertLineBreak(_:)):
                 command = .newline(modified: true)
             case #selector(NSResponder.insertTab(_:)): command = .tab
+            case #selector(NSResponder.insertBacktab(_:)): command = .backtab
             case #selector(NSResponder.cancelOperation(_:)): command = .escape
             case #selector(NSResponder.moveUp(_:)): command = .up
             case #selector(NSResponder.moveDown(_:)): command = .down

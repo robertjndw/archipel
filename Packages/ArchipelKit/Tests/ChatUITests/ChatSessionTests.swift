@@ -125,21 +125,120 @@ struct ChatSessionTests {
         await harness.session.shutDown()
     }
 
-    @Test func onePromptAtATime() async throws {
+    @Test func aPromptSentWhileATurnRunsWaitsForItsEnd() async throws {
         let harness = ChatHarness()
         try await harness.start()
         let promptID = try await harness.send("First")
         harness.session.draft = "Second"
         #expect(!harness.session.canSend)
-        #expect(!harness.session.send())
+        #expect(harness.session.canQueue)
+        #expect(harness.session.send())
+        #expect(harness.session.draft.isEmpty)
+        #expect(harness.session.queuedPrompts.map(\.text) == ["Second"])
+        // The app's own prompts are not queued: its callers decide what to do with a refusal.
         #expect(!harness.session.send(text: "From the app"))
-        #expect(harness.session.draft == "Second")
-        try harness.agent().finishPrompt(promptID)
+        let agent = try harness.agent()
+        #expect(agent.requests(ACPMethod.sessionPrompt).count == 1)
+        #expect(harness.session.transcript.readableItems == ["user: First"])
+
+        try agent.finishPrompt(promptID)
+        try await waitUntil("the queued prompt goes out") { agent.requests(ACPMethod.sessionPrompt).count == 2 }
+        #expect(harness.session.queuedPrompts.isEmpty)
+        #expect(harness.session.isTurnRunning)
+        #expect(harness.session.transcript.readableItems == ["user: First", "user: Second"])
+        await harness.session.shutDown()
+    }
+
+    @Test func queuedPromptsGoOutOneTurnAtATime() async throws {
+        let harness = ChatHarness()
+        try await harness.start()
+        let first = try await harness.send("First")
+        for text in ["Second", "Third"] {
+            harness.session.draft = text
+            #expect(harness.session.send())
+        }
+        let agent = try harness.agent()
+        try agent.finishPrompt(first)
+        try await waitUntil("the second prompt goes out") { agent.requests(ACPMethod.sessionPrompt).count == 2 }
+        #expect(harness.session.queuedPrompts.map(\.text) == ["Third"])
+        try agent.finishPrompt(try #require(agent.requests(ACPMethod.sessionPrompt).last?.id))
+        try await waitUntil("the third prompt goes out") { agent.requests(ACPMethod.sessionPrompt).count == 3 }
+        #expect(harness.session.queuedPrompts.isEmpty)
+        await harness.session.shutDown()
+    }
+
+    @Test func theOwnerHearsOfTheEndOnlyOnceTheQueueIsEmpty() async throws {
+        let harness = ChatHarness()
+        try await harness.start()
+        let first = try await harness.send("First")
+        harness.session.draft = "Second"
+        #expect(harness.session.send())
+        func finishedCount() -> Int {
+            harness.events.count { if case .agent(.turnFinished) = $0 { true } else { false } }
+        }
+        let agent = try harness.agent()
+        try agent.finishPrompt(first)
+        try await waitUntil("the queued prompt goes out") { agent.requests(ACPMethod.sessionPrompt).count == 2 }
+        #expect(finishedCount() == 0)
+        try agent.finishPrompt(try #require(agent.requests(ACPMethod.sessionPrompt).last?.id))
+        try await waitUntil("the last turn ends") { !harness.session.isTurnRunning }
+        #expect(finishedCount() == 1)
+        await harness.session.shutDown()
+    }
+
+    @Test func aQueueEmptiedAsTheTurnEndsStillReportsTheEnd() async throws {
+        let harness = ChatHarness()
+        try await harness.start()
+        try await harness.send("First")
+        harness.session.draft = "Second"
+        #expect(harness.session.send())
+        // The row's X is clicked between the turn's end and the queued prompt going out.
+        harness.session.endTurnState(continuesWithQueue: true)
+        harness.session.queuedPrompts = []
+        try await waitUntil("the end is reported") {
+            harness.events.contains { if case .agent(.turnFinished) = $0 { true } else { false } }
+        }
+        await harness.session.shutDown()
+    }
+
+    @Test func aStoppedTurnGivesTheQueueBackToTheComposer() async throws {
+        let harness = ChatHarness()
+        try await harness.start()
+        let promptID = try await harness.send("First")
+        for text in ["Second", "Third"] {
+            harness.session.draft = text
+            #expect(harness.session.send())
+        }
+        harness.session.draft = "Being typed"
+        await harness.session.cancel()
+        let agent = try harness.agent()
+        try agent.finishPrompt(promptID, stopReason: "cancelled")
         try await waitUntil("the turn ends") { !harness.session.isTurnRunning }
-        #expect(harness.session.canSend)
-        #expect(harness.session.send(text: "From the app"))
-        #expect(harness.session.draft == "Second")
-        #expect(harness.session.transcript.readableItems == ["user: First", "user: From the app"])
+        #expect(harness.session.queuedPrompts.isEmpty)
+        #expect(harness.session.draft == "Second\n\nThird\n\nBeing typed")
+        #expect(agent.requests(ACPMethod.sessionPrompt).count == 1)
+        await harness.session.shutDown()
+    }
+
+    @Test func aQueuedPromptCanBeRemovedOrTakenBackForEditing() async throws {
+        let harness = ChatHarness()
+        try await harness.start()
+        try await harness.send("First")
+        for text in ["Second", "Third"] {
+            harness.session.draft = text
+            #expect(harness.session.send())
+        }
+        let second = try #require(harness.session.queuedPrompts.first)
+        #expect(harness.session.removeQueuedPrompt(second.id)?.text == "Second")
+        harness.session.editLastQueuedPrompt()
+        #expect(harness.session.draft == "Third")
+        #expect(harness.session.queuedPrompts.isEmpty)
+        // Never over what is being typed.
+        #expect(harness.session.send())
+        harness.session.draft = "Typing"
+        harness.session.editLastQueuedPrompt()
+        #expect(harness.session.draft == "Typing")
+        #expect(harness.session.queuedPrompts.map(\.text) == ["Third"])
         await harness.session.shutDown()
     }
 

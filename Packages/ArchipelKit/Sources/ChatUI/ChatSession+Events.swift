@@ -151,8 +151,12 @@ extension ChatSession {
         case let .success(response):
             confirmSessionID(into: &effects)
             transcript.endTurn(response.stopReason)
-            endTurnState()
-            effects.append(.agent(.turnFinished(message: transcript.lastAgentText)))
+            // Only a turn that ran to its end is followed by what was typed ahead. The owner then
+            // hears nothing yet: to whoever waits for a notification, the agent is done when the
+            // last queued prompt is.
+            let continues = response.stopReason == .endTurn && !queuedPrompts.isEmpty
+            endTurnState(continuesWithQueue: continues)
+            if !continues { effects.append(.agent(.turnFinished(message: transcript.lastAgentText))) }
 
         case let .failure(error) where error.isAuthenticationRequired:
             // Claude lets a signed-out user open a session and only refuses the first prompt.
@@ -177,7 +181,18 @@ extension ChatSession {
         }
     }
 
-    func endTurnState() {
+    func endTurnState(continuesWithQueue: Bool = false) {
+        if continuesWithQueue, !queuedPrompts.isEmpty {
+            // After the events at hand: they are still being applied to the transcript the next
+            // prompt's bubble goes into.
+            Task { [weak self] in
+                guard let self, !self.sendNextQueuedPrompt() else { return }
+                // The queue was emptied in the meantime, so this was the last turn after all.
+                self.emit(.agent(.turnFinished(message: self.transcript.lastAgentText)))
+            }
+        } else {
+            returnQueueToDraft()
+        }
         isTurnRunning = false
         isCancelling = false
         isCancelIgnored = false

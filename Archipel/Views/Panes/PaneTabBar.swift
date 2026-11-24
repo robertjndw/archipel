@@ -296,7 +296,9 @@ struct PaneTabBar: View {
             }
             if model.canSwitchInterface(id) {
                 let target = session.effectiveInterface.other
-                Button("Switch to \(target.title)", systemImage: target.symbolName) {
+                // "Open in", like the file and web tabs' items below. The Tab menu calls the same
+                // thing Switch, next to its other verbs.
+                Button("Open in \(target.title)", systemImage: target.symbolName) {
                     model.requestInterfaceSwitch(target, for: id)
                 }
             }

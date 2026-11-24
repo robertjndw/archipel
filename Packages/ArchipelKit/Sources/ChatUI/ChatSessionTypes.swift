@@ -233,3 +233,16 @@ public struct ChatControl: Sendable, Equatable, Identifiable {
         return groups.lazy.flatMap(\.choices).first { $0.value == current }?.name
     }
 }
+
+/// A prompt waiting for the running turn to end.
+public struct QueuedPrompt: Sendable, Equatable, Identifiable {
+    public let id: UUID
+    public var text: String
+    public var attachments: [URL]
+
+    public init(id: UUID = UUID(), text: String, attachments: [URL] = []) {
+        self.id = id
+        self.text = text
+        self.attachments = attachments
+    }
+}

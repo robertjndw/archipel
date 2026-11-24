@@ -96,7 +96,7 @@ struct NeedsMeTip: Tip {
 /// offering an alternative to, and the plus button is where the next one starts.
 struct ChatTip: Tip {
     var title: Text { Text("Open a Session as a Chat") }
-    var message: Text? { Text("See the conversation as a chat instead of a terminal. Choose Open In from this menu, or make Chat the default in Settings > Agents.") }
+    var message: Text? { Text("See the conversation as a chat instead of a terminal. Right-click a session's tab and choose Open in Chat, or make Chat the default in Settings > Agents.") }
     var image: Image? { Image(systemName: "bubble.left.and.text.bubble.right") }
 
     var rules: [Rule] {

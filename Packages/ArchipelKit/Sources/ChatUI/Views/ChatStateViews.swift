@@ -8,7 +8,8 @@ import UISupport
 /// say what is going on.
 ///
 /// A start that takes a while offers Cancel. A sign-in offers it at once: it waits on the user,
-/// who may have closed the browser it opened.
+/// who may have closed the browser it opened. So does an install, as a small button at the end of
+/// its progress bar, the way a download in Finder or Safari is stopped.
 struct ChatStartingView: View {
     let step: ChatSession.StartStep
     let cancel: @MainActor () -> Void
@@ -45,10 +46,7 @@ struct ChatStartingView: View {
             } description: {
                 Text("Downloading what \(agentName) needs to run as a chat. This happens once.")
             } actions: {
-                VStack(spacing: 16) {
-                    InstallProgress(fraction: fraction)
-                    cancelButton
-                }
+                InstallProgress(fraction: fraction, cancel: cancel)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .preparing, .connecting:
@@ -89,20 +87,40 @@ struct ChatStartingView: View {
 
 private struct InstallProgress: View {
     let fraction: Double?
+    let cancel: @MainActor () -> Void
 
     var body: some View {
         VStack(spacing: 6) {
+            bar
+                // Hangs off the bar's end rather than sitting in a row with it, so the bar and
+                // the percentage stay centered under the title.
+                .overlay(alignment: .trailing) {
+                    Button("Cancel", systemImage: "xmark.circle.fill", action: cancel)
+                        .labelStyle(.iconOnly)
+                        // Plain, not borderless: the actions of a ContentUnavailableView tint
+                        // their buttons with the accent color.
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Cancel")
+                        .accessibilityIdentifier("chat.cancelStart")
+                        .alignmentGuide(.trailing) { $0[.leading] - 8 }
+                }
             if let fraction {
-                ProgressView(value: min(max(fraction, 0), 1))
                 Text(fraction.formatted(.percent.precision(.fractionLength(0))))
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
-            } else {
-                ProgressView()
-                    .progressViewStyle(.linear)
             }
         }
         .frame(width: 220)
+    }
+
+    @ViewBuilder private var bar: some View {
+        if let fraction {
+            ProgressView(value: min(max(fraction, 0), 1))
+        } else {
+            ProgressView()
+                .progressViewStyle(.linear)
+        }
     }
 }
 

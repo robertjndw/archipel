@@ -7,28 +7,68 @@ extension ChatSession {
     // MARK: Sending
 
     /// Sends the draft and attachments as a prompt: shows it at once, clears the composer and
-    /// starts the turn. Returns false, changing nothing, when `canSend` is false.
+    /// starts the turn. While a turn runs the prompt is queued behind it instead. Returns false,
+    /// changing nothing, when neither `canSend` nor `canQueue` is true.
     ///
     /// Images are read off the main actor, so the prompt goes out a moment after the bubble shows.
     @discardableResult
     public func send() -> Bool {
-        guard canSend else { return false }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = attachments
+        if canQueue {
+            queuedPrompts.append(QueuedPrompt(text: text, attachments: files))
+        } else {
+            guard canSend, submit(text: text, files: files) else { return false }
+        }
+        draft = ""
+        attachments = []
+        return true
+    }
+
+    /// Takes a queued prompt back out, to drop it or to edit it in the composer.
+    @discardableResult
+    public func removeQueuedPrompt(_ id: QueuedPrompt.ID) -> QueuedPrompt? {
+        guard let index = queuedPrompts.firstIndex(where: { $0.id == id }) else { return nil }
+        return queuedPrompts.remove(at: index)
+    }
+
+    /// Puts the newest queued prompt back into the empty composer, to change it before it goes out.
+    public func editLastQueuedPrompt() {
+        guard draft.isEmpty, attachments.isEmpty, let prompt = queuedPrompts.popLast() else { return }
+        draft = prompt.text
+        attachments = prompt.attachments
+    }
+
+    /// Sends the oldest queued prompt, once nothing runs. False when there was none to send.
+    @discardableResult
+    func sendNextQueuedPrompt() -> Bool {
+        guard canAcceptPrompt, let prompt = queuedPrompts.first, submit(text: prompt.text, files: prompt.attachments) else { return false }
+        queuedPrompts.removeFirst()
+        return true
+    }
+
+    /// Gives what is queued back to the composer, ahead of what is being typed. A turn that was
+    /// stopped or failed should not be followed by prompts written while it still looked fine.
+    func returnQueueToDraft() {
+        guard !queuedPrompts.isEmpty else { return }
+        let texts = queuedPrompts.map(\.text) + [draft]
+        draft = texts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "\n\n")
+        let files = queuedPrompts.flatMap(\.attachments) + attachments
+        attachments = []
+        addAttachments(files)
+        queuedPrompts = []
+    }
+
+    private func submit(text: String, files: [URL]) -> Bool {
         // The bubble names the files; it never needs their data.
         var bubble: [ContentBlock] = text.isEmpty ? [] : [.text(text)]
         bubble += files.map { Self.linkBlock(for: $0) }
         let acceptsImages = promptCapabilities.image
-        let sent = submit(showing: bubble) {
+        return submit(showing: bubble) {
             await Task.detached(priority: .userInitiated) {
                 Self.promptBlocks(text: text, attachments: files, acceptsImages: acceptsImages)
             }.value
         }
-        if sent {
-            draft = ""
-            attachments = []
-        }
-        return sent
     }
 
     /// Sends `text` as a prompt on the app's behalf, such as review comments or a reply from a

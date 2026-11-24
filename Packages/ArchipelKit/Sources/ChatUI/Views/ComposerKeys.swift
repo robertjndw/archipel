@@ -6,6 +6,8 @@ enum ComposerCommand: Equatable, Sendable {
     /// Return. `modified` when Shift or Option is held.
     case newline(modified: Bool)
     case tab
+    /// Shift-Tab.
+    case backtab
     case escape
     case up
     case down
@@ -21,6 +23,12 @@ enum ComposerAction: Equatable, Sendable {
     case moveCompletion(Int)
     case acceptCompletion
     case dismissCompletion
+    /// Take the newest queued prompt back into the composer.
+    case editQueuedPrompt
+    /// Put an earlier prompt, or with `false` a later one, into the composer.
+    case recallPrompt(older: Bool)
+    /// Move on to the agent's next mode.
+    case cycleMode
     /// Take the key and do nothing: a Return that cannot send yet must not put a line break into
     /// the prompt, and an Esc with nothing to cancel must not reach the text view.
     case swallow
@@ -39,6 +47,14 @@ struct ComposerKeyContext: Equatable, Sendable {
     var canAllowPermission = false
     /// A permission card is showing a reject button.
     var canRejectPermission = false
+    var hasQueuedPrompts = false
+    /// Up would bring back an earlier prompt: the draft is empty, or still the recalled prompt
+    /// with an earlier one left. Never while the user's own text is in the composer, where the
+    /// arrows move the cursor.
+    var canRecallOlder = false
+    /// The draft is a recalled prompt, so Down moves back toward the present.
+    var canRecallNewer = false
+    var canCycleMode = false
 }
 
 enum ComposerKeys {
@@ -52,6 +68,7 @@ enum ComposerKeys {
             case .down: return .moveCompletion(1)
             case .newline, .tab: return .acceptCompletion
             case .escape: return .dismissCompletion
+            case .backtab: break
             }
         }
 
@@ -65,7 +82,15 @@ enum ComposerKeys {
             if context.canRejectPermission { return .rejectPermission }
             // Never left to the text view, where Esc opens the word completion list.
             return context.isTurnRunning ? .cancelTurn : .swallow
-        case .tab, .up, .down:
+        case .up:
+            // The queue comes before the history: it holds what was typed last.
+            if context.isDraftEmpty, context.hasQueuedPrompts { return .editQueuedPrompt }
+            return context.canRecallOlder ? .recallPrompt(older: true) : .passThrough
+        case .down:
+            return context.canRecallNewer ? .recallPrompt(older: false) : .passThrough
+        case .backtab:
+            return context.canCycleMode ? .cycleMode : .passThrough
+        case .tab:
             return .passThrough
         }
     }
@@ -108,5 +133,60 @@ enum SlashCommands {
     /// The draft after choosing a command: ready for its arguments.
     static func insertion(for command: AvailableCommand) -> String {
         "/\(displayName(command)) "
+    }
+}
+
+/// Going back through the prompts already sent with the arrow keys, the way a shell does.
+struct PromptRecall: Equatable {
+    /// The sent prompts, oldest first, without ones repeated back to back.
+    var history: [String]
+    /// Which of them is in the composer, with the text put there. Editing that text ends the
+    /// recall: from then on it is the user's own draft.
+    var shown: (index: Int, text: String)?
+
+    static func == (lhs: PromptRecall, rhs: PromptRecall) -> Bool {
+        lhs.history == rhs.history && lhs.shown?.index == rhs.shown?.index && lhs.shown?.text == rhs.shown?.text
+    }
+
+    static func history(of items: [ChatItem]) -> [String] {
+        var history: [String] = []
+        for case let .userMessage(message) in items {
+            let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty, text != history.last { history.append(text) }
+        }
+        return history
+    }
+
+    private func index(for draft: String) -> Int? {
+        guard let shown, shown.text == draft, history.indices.contains(shown.index) else { return nil }
+        return shown.index
+    }
+
+    func canRecallOlder(draft: String) -> Bool {
+        if let index = index(for: draft) { return index > 0 }
+        return draft.isEmpty && !history.isEmpty
+    }
+
+    func canRecallNewer(draft: String) -> Bool {
+        index(for: draft) != nil
+    }
+
+    /// The draft after the key, or nil when there is nowhere to go. Past the newest prompt the
+    /// composer is empty again, as it was before the first Up.
+    mutating func move(older: Bool, draft: String) -> String? {
+        let current = index(for: draft)
+        if older {
+            guard canRecallOlder(draft: draft) else { return nil }
+            let index = current.map { $0 - 1 } ?? history.count - 1
+            shown = (index, history[index])
+            return history[index]
+        }
+        guard let current else { return nil }
+        guard current + 1 < history.count else {
+            shown = nil
+            return ""
+        }
+        shown = (current + 1, history[current + 1])
+        return history[current + 1]
     }
 }

@@ -85,6 +85,15 @@ private func chatPreview(_ session: ChatSession, width: CGFloat = previewSize.wi
     .background(Color(nsColor: .textBackgroundColor))
 }
 
+#Preview("Queued") {
+    let session = ChatSession.preview(.streaming)
+    session.queuedPrompts = [
+        QueuedPrompt(text: "Then run the tests and fix whatever fails"),
+        QueuedPrompt(text: "Also update the changelog, and mention that the old flag keeps working for one more release"),
+    ]
+    return chatPreview(session, width: 560)
+}
+
 #Preview("Installing") {
     chatPreview(.preview(.installing))
 }
