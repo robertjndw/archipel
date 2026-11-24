@@ -4,7 +4,7 @@
 
 # Archipel
 
-A macOS app for running coding agents. Claude Code, Codex and plain shells run in
+A macOS app for running coding agents. Claude Code, Codex, OpenCode and plain shells run in
 embedded Ghostty terminals, each in its own git worktree, with an Arc style sidebar
 that shows what every agent is doing.
 
@@ -130,7 +130,7 @@ Archipel updates itself, so `brew upgrade` leaves it alone unless you pass `--gr
 
 **Requirements:** macOS 27, Xcode 27 and Zig 0.17 (`brew install zig`). You only need
 the agents you want to use: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or
-[Codex](https://github.com/openai/codex), plus the [GitHub CLI](https://cli.github.com)
+[Codex](https://github.com/openai/codex) and/or [OpenCode](https://opencode.ai), plus the [GitHub CLI](https://cli.github.com)
 to see pull requests.
 
 ```sh
@@ -150,10 +150,31 @@ under Settings > About.
 ## How agent status works
 
 Archipel starts each agent itself and injects what it needs per launch, so your own
-agent configuration is never edited. Claude Code gets hooks through `--settings`;
-Codex gets `notify` and approval notifications through `-c` overrides. Hooks call
-`archipel-hook`, which forwards the event to the app over a Unix socket in
-`~/Library/Application Support/Archipel`.
+agent configuration is never edited. Claude Code gets hooks through `--settings`.
+Codex gets hooks through `-c hooks.<Event>` overrides, plus `notify` and approval
+notifications as a fallback. Hooks call `archipel-hook`, which forwards the event to
+the app over a Unix socket in `~/Library/Application Support/Archipel`.
+
+Codex only runs hooks you have trusted. The first time it starts with Archipel's hooks
+it shows a "Hooks need review" prompt: choose "Trust all and continue" (or trust them
+in `/hooks`). Codex remembers that in its own `config.toml`, keyed by the hook's command
+line, so Archipel points the hooks at a stable link in its support directory and asks
+again only if that path changes. Until the hooks are trusted, status comes from
+`notify` and Codex's approval notifications: finished turns and approvals work, but
+start of a turn and subagents are not reported. Once hooks report a session, `notify`
+is ignored for it so a turn is not finished twice. Settings > Agents > Codex shows
+whether the hooks are active.
+
+OpenCode reports through a small plugin that Archipel adds to each OpenCode it starts,
+using `OPENCODE_CLI_CONFIG_CONTENT`. OpenCode replaces its plugin list with that value,
+so Archipel passes the plugins from your own `cli.json` along with its own; if that file
+cannot be read, the plugin is left out and the session is followed through its terminal
+title only. OpenCode keeps using your background service and providers. The plugin
+reports the conversation shown in its own tab (turns, permission requests, questions and
+errors) and ignores the other sessions the shared service knows about. Permission
+requests in OpenCode are answered in the terminal, so their notifications only bring the
+session forward. Sessions start with `opencode -s <id>`, which makes resuming work after a
+relaunch.
 
 ## Development
 

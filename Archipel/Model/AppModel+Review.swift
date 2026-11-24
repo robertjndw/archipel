@@ -30,7 +30,7 @@ extension AppModel {
             return ReviewTarget(
                 id: session.id,
                 title: session.displayTitle,
-                symbolName: agent.definition.symbolName
+                symbolName: agent.adapter.symbolName
             )
         }
     }

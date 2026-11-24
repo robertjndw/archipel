@@ -48,8 +48,8 @@ struct ClaudeUserHooksTests {
     @Test func installsOneGroupOnEveryEvent() throws {
         let result = try ClaudeUserHooks.installing(into: [:], link: link, socket: socket)
         let hooks = try #require(result["hooks"] as? [String: Any])
-        #expect(Set(hooks.keys) == Set(claudeHookEvents))
-        for event in claudeHookEvents {
+        #expect(Set(hooks.keys) == Set(ClaudeAdapter.hookEvents))
+        for event in ClaudeAdapter.hookEvents {
             let found = handlers(result, event: event)
             #expect(found.count == 1)
             #expect(found.first?["command"] as? String == ClaudeUserHooks.command(link: link, socket: socket))
@@ -137,7 +137,7 @@ struct ClaudeUserHooksTests {
 
         let updated = try ClaudeUserHooks.installing(into: old, link: link, socket: socket)
         #expect(ClaudeUserHooks.status(of: updated, link: link, socket: socket) == .installed)
-        for event in claudeHookEvents { #expect(handlers(updated, event: event).count == 1) }
+        for event in ClaudeAdapter.hookEvents { #expect(handlers(updated, event: event).count == 1) }
     }
 
     @Test func partialInstallIsOutdated() throws {
@@ -156,7 +156,7 @@ struct ClaudeUserHooksTests {
             link: devLink,
             socket: socket
         )
-        for event in claudeHookEvents { #expect(handlers(both, event: event).count == 2) }
+        for event in ClaudeAdapter.hookEvents { #expect(handlers(both, event: event).count == 2) }
         #expect(ClaudeUserHooks.status(of: both, link: link, socket: socket) == .installed)
         #expect(ClaudeUserHooks.status(of: both, link: devLink, socket: socket) == .installed)
 

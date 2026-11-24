@@ -16,7 +16,8 @@ extension AppModel {
     func effectiveAgent(for session: Session) -> EffectiveAgent {
         EffectiveAgent.resolve(
             persisted: session.agent,
-            runtime: isPlainShell(session) ? runtimeAgents[session.id]?.agent : nil
+            runtime: isPlainShell(session) ? runtimeAgents[session.id]?.agent : nil,
+            hooksSeen: hookedSessions.contains(session.id)
         )
     }
 
@@ -162,7 +163,7 @@ extension AppModel {
         // and they would now be typed into the shell.
         if pendingReviews.removeValue(forKey: id) != nil {
             let title = workspace.session(id: id)?.displayTitle ?? "The session"
-            problem = "\(title) is no longer running \(kind.definition.displayName), so the review comments were not sent. Your comments are kept."
+            problem = "\(title) is no longer running \(kind.adapter.displayName), so the review comments were not sent. Your comments are kept."
         }
         apply(.agentLeft, to: id)
     }

@@ -177,6 +177,34 @@ class ArchipelUITestCase: XCTestCase {
         shown?.click()
     }
 
+    // MARK: Settings
+
+    /// Selects one agent in the list of Settings > Agents, which shows its settings beside the
+    /// list. Its header switch only exists for the selected agent, so that is what is waited for.
+    func selectAgent(
+        _ id: String,
+        named name: String,
+        in settingsWindow: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let row = settingsWindow.descendants(matching: .any).matching(identifier: "settings.agents.\(id).row").firstMatch
+        assertExists(row, "Settings > Agents should list \(name).", file: file, line: line)
+        row.click()
+        assertExists(
+            agentSwitch(id, in: settingsWindow),
+            "Selecting \(name) should show its settings.",
+            file: file,
+            line: line
+        )
+    }
+
+    /// The switch in the selected agent's header. It isn't a Form toggle row, so SwiftUI exposes it
+    /// as a plain toggle and `switches[...]` won't find it.
+    func agentSwitch(_ id: String, in settingsWindow: XCUIElement) -> XCUIElement {
+        settingsWindow.descendants(matching: .any)["settings.agents.\(id).enabled"]
+    }
+
     // MARK: Waiting
 
     /// Polls for something outside the app's interface, such as the state of a repository or the

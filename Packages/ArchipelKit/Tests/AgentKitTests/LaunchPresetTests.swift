@@ -4,7 +4,7 @@ import Testing
 
 struct LaunchPresetTests {
     @Test func defaultsAreClaudeModels() {
-        #expect(LaunchPreset.defaults.allSatisfy { $0.agentID == AgentDefinition.claude.id })
+        #expect(LaunchPreset.defaults.allSatisfy { $0.agentID == ClaudeAdapter().id })
         #expect(LaunchPreset.defaults.map(\.name) == ["Fable", "Opus", "Sonnet", "Haiku"])
         #expect(LaunchPreset.defaults.first?.arguments == "--model fable")
         #expect(Set(LaunchPreset.defaults.map(\.id)).count == LaunchPreset.defaults.count)

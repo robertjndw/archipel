@@ -236,6 +236,36 @@ final class AgentLifecycleTests: ArchipelUITestCase {
         waitUntil("the request counts as answered") { self.agentsStatus == "None working" }
     }
 
+    func testCodexHooksReportTheRequestAndTheEndOfTheTurn() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let stub = try sandbox.installCodexHooksStub(named: "codex")
+        try launch(with: repository.workspace(sessions: [Session(title: "Codex", agent: .codex)]))
+        waitUntil("the window shows Codex idle") { self.agentsStatus == "None working" }
+
+        // A permission request arrives through the hook, not through a terminal notification.
+        try stub.ask()
+        waitUntil("the request is waiting and unread") { self.agentsStatus == "1 waiting for you, 1 unread" }
+
+        // Hooks say when the request was dealt with, so ending the turn clears it without the user
+        // having to look at the session.
+        try stub.finishTurn()
+        waitUntil("the turn is finished") { self.agentsStatus == "1 unread" }
+    }
+
+    func testOpenCodePluginReportsTheRequestAndTheEndOfTheTurn() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let stub = try sandbox.installOpenCodeStub(named: "opencode")
+        try launch(with: repository.workspace(sessions: [Session(title: "OpenCode", agent: .opencode)]))
+        waitUntil("the window shows OpenCode working") { self.agentsStatus == "1 agent working" }
+
+        try stub.ask()
+        waitUntil("the request is waiting and unread") { self.agentsStatus == "1 waiting for you, 1 unread" }
+
+        // The plugin says when the request was dealt with, so ending the turn clears it.
+        try stub.finishTurn()
+        waitUntil("the turn is finished") { self.agentsStatus == "1 unread" }
+    }
+
     func testReviewCommentsArePastedIntoTheAgent() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         try repository.write("notes.txt", "first line\nsecond line\n")

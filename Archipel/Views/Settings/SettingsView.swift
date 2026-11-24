@@ -16,7 +16,11 @@ struct SettingsView: View {
             Tab("General", systemImage: "gearshape", value: .general) { GeneralSettingsView() }
             Tab("Appearance", systemImage: "paintbrush", value: .appearance) { AppearanceSettingsView() }
             Tab("Notifications", systemImage: "bell.badge", value: .notifications) { NotificationSettingsView() }
-            Tab("Agents", systemImage: "sparkles", value: .agents) { AgentSettingsView() }
+            Tab("Agents", systemImage: "sparkles", value: .agents) {
+                // A list beside a form has no natural height, so it gets a fixed one, and the
+                // form scrolls inside it.
+                AgentSettingsView().frame(height: min(560, Self.maxPaneHeight))
+            }
             Tab("Worktrees", systemImage: "arrow.triangle.branch", value: .worktrees) { WorktreeSettingsView() }
             Tab("About", systemImage: "info.circle", value: .about) { AboutSettingsView() }
         }
@@ -25,7 +29,8 @@ struct SettingsView: View {
         // cannot be scrolled, so past the screen's height the form scrolls after all.
         .frame(maxHeight: Self.maxPaneHeight)
         .fixedSize(horizontal: false, vertical: true)
-        .frame(width: 540)
+        // Agents is a list beside a form and needs the room. The other panes are single forms.
+        .frame(width: pane == .agents ? 720 : 540)
         // Here and not on the main window, which may be closed while Settings is open.
         .onChange(of: model.settings.appearance) { model.applyAppearance() }
         .onChange(of: model.settings.showsDockBadge) { model.refreshDockBadge() }

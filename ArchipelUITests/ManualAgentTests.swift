@@ -140,10 +140,16 @@ final class ManualAgentTests: ArchipelUITestCase {
         assertExists(settingsWindow, "⌘, should open Settings.")
         settingsWindow.toolbars.buttons["Agents"].click()
         waitUntil("Settings shows Agents") { self.settingsWindow.title == "Agents" }
+        selectAgent("claude", named: "Claude Code", in: settingsWindow)
     }
 
     private func clickHookSwitch() {
         waitUntil("the switch for Claude in a shell tab is shown") { self.hookSwitch.exists }
+        // It sits below Claude's presets, which can push it out of view.
+        let form = settingsWindow.scrollViews.containing(.switch, identifier: "settings.claudeUserHooks").element(boundBy: 0)
+        for _ in 0..<10 where !hookSwitch.isHittable {
+            form.scroll(byDeltaX: 0, deltaY: -200)
+        }
         hookSwitch.click()
     }
 
@@ -223,10 +229,10 @@ final class ManualAgentTests: ArchipelUITestCase {
             guard let hooks = try self.hooksInSettingsFile() else { return true }
             return hooks.keys.allSatisfy { self.command(for: $0, in: hooks) == nil }
         }
-        // The link goes only after the file is rewritten, so checking once right after the entries
-        // vanish races the app.
-        waitUntil("turning it off removes the link too") {
-            (try? FileManager.default.destinationOfSymbolicLink(atPath: self.hookLink.path)) == nil
-        }
+        // Codex's hooks point at the same link, so it has to outlive Claude's entries.
+        XCTAssertNotNil(
+            try? FileManager.default.destinationOfSymbolicLink(atPath: hookLink.path),
+            "Turning the shell hooks off should leave the helper link for Codex."
+        )
     }
 }

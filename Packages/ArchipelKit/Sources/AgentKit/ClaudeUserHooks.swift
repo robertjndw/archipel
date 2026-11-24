@@ -54,8 +54,8 @@ public enum ClaudeUserHooks {
     public static func installing(into settings: [String: Any], link: URL, socket: URL) throws -> [String: Any] {
         var result = try removing(from: settings, link: link)
         var hooks = (result["hooks"] as? [String: Any]) ?? [:]
-        let group: [String: Any] = ["hooks": [claudeHookHandler(command: command(link: link, socket: socket))]]
-        for event in claudeHookEvents {
+        let group: [String: Any] = ["hooks": [ClaudeAdapter.hookHandler(command: command(link: link, socket: socket))]]
+        for event in ClaudeAdapter.hookEvents {
             hooks[event] = ((hooks[event] as? [Any]) ?? []) + [group]
         }
         result["hooks"] = hooks
@@ -66,7 +66,7 @@ public enum ClaudeUserHooks {
         guard let existing = settings["hooks"] else { return settings }
         guard var hooks = existing as? [String: Any] else { throw Failure.unexpectedShape("hooks") }
 
-        for event in claudeHookEvents {
+        for event in ClaudeAdapter.hookEvents {
             guard let value = hooks[event] else { continue }
             guard let groups = value as? [Any] else { throw Failure.unexpectedShape("hooks.\(event)") }
 
@@ -104,14 +104,14 @@ public enum ClaudeUserHooks {
         let expected = command(link: link, socket: socket)
         var found = 0
         var current = 0
-        for event in claudeHookEvents {
+        for event in ClaudeAdapter.hookEvents {
             let handlers = ((hooks[event] as? [Any]) ?? []).flatMap { ($0 as? [String: Any])?["hooks"] as? [Any] ?? [] }
             let ours = handlers.filter { isOurs($0, link: link) }
             found += ours.count
             if ours.count == 1, (ours[0] as? [String: Any])?["command"] as? String == expected { current += 1 }
         }
         if found == 0 { return .notInstalled }
-        return current == claudeHookEvents.count && found == current ? .installed : .outdated
+        return current == ClaudeAdapter.hookEvents.count && found == current ? .installed : .outdated
     }
 
     /// Claude reads `$CLAUDE_CONFIG_DIR/settings.json`, falling back to `~/.claude`.

@@ -31,7 +31,7 @@ public struct LaunchPreset: Codable, Equatable, Identifiable, Sendable {
         ("Sonnet", "5A0F1C2E-3B4D-4E5F-8A6B-7C8D9E0F1A03"),
         ("Haiku", "5A0F1C2E-3B4D-4E5F-8A6B-7C8D9E0F1A04"),
     ].map { name, id in
-        LaunchPreset(id: UUID(uuidString: id)!, agentID: AgentDefinition.claude.id, name: name, arguments: "--model \(name.lowercased())")
+        LaunchPreset(id: UUID(uuidString: id)!, agentID: ClaudeAdapter().id, name: name, arguments: "--model \(name.lowercased())")
     }
 
     /// Turns the old per-agent "Extra arguments" field into a preset called "Default", marked as

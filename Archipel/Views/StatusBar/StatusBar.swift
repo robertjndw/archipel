@@ -157,10 +157,12 @@ struct UsageItem: View {
 private extension UsageProvider {
     /// The agent logo the sidebar uses.
     var symbolName: String {
-        switch self {
-        case .claude: AgentDefinition.claude.symbolName
-        case .codex: AgentDefinition.codex.symbolName
-        }
+        AgentRegistry.builtIn.adapter(forUsage: self)?.symbolName ?? "gauge.with.dots.needle.33percent"
+    }
+
+    /// Claude's numbers come in live through its status line and have nothing to re-read.
+    var canRefreshOnDemand: Bool {
+        AgentRegistry.builtIn.adapter(forUsage: self)?.capabilities.usage?.canRefreshOnDemand == true
     }
 }
 
@@ -250,8 +252,7 @@ private struct ProviderDetails: View {
                 Text("Updated \(reading.updatedAt.formatted(.relative(presentation: .named)))")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                // Only Codex: Claude's numbers come in live through its status line and have nothing to re-read.
-                if reading.provider == .codex {
+                if reading.provider.canRefreshOnDemand {
                     Button("Refresh", systemImage: "arrow.clockwise") {
                         refreshes += 1
                         model.refreshCodexUsage()

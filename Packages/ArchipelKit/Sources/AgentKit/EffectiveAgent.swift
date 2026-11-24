@@ -20,24 +20,27 @@ public struct EffectiveAgent: Equatable, Sendable {
 
     /// Use it for the symbol and the name only. Its launch commands and flags don't apply to a
     /// detected agent, since the app didn't start it.
-    public var definition: AgentDefinition { kind.definition }
+    public var adapter: any AgentAdapter { kind.adapter }
 
-    public static func resolve(persisted: AgentKind, runtime: RuntimeAgent?) -> EffectiveAgent {
+    /// `hooksSeen`: the session's hooks have reported, which turns an agent with
+    /// `LifecycleSource.hooksOnceSeen` into one that reports through hooks.
+    public static func resolve(persisted: AgentKind, runtime: RuntimeAgent?, hooksSeen: Bool = false) -> EffectiveAgent {
         if persisted == .shell, let runtime {
             return EffectiveAgent(
                 kind: runtime.kind,
-                acceptsPrompts: runtime.kind.definition.acceptsPrompts,
+                acceptsPrompts: runtime.kind.adapter.capabilities.acceptsPrompts,
                 // Claude launched by the app always reports through hooks; one started by hand
                 // only does once the user's settings carry them.
                 reportsLifecycleThroughHooks: runtime.reportsThroughHooks,
                 isDetected: true
             )
         }
-        let definition = persisted.definition
+        let capabilities = persisted.adapter.capabilities
         return EffectiveAgent(
             kind: persisted,
-            acceptsPrompts: definition.acceptsPrompts,
-            reportsLifecycleThroughHooks: definition.reportsLifecycleThroughHooks,
+            acceptsPrompts: capabilities.acceptsPrompts,
+            reportsLifecycleThroughHooks: capabilities.reportsLifecycleThroughHooks
+                || (capabilities.lifecycle == .hooksOnceSeen && hooksSeen),
             isDetected: false
         )
     }

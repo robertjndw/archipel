@@ -13,7 +13,7 @@ struct EffectiveAgentTests {
     @Test func claudeInAShellWithoutHooks() {
         let agent = EffectiveAgent.resolve(persisted: .shell, runtime: detected)
         #expect(agent == EffectiveAgent(kind: .claude, acceptsPrompts: true, reportsLifecycleThroughHooks: false, isDetected: true))
-        #expect(agent.definition.symbolName == AgentDefinition.claude.symbolName)
+        #expect(agent.adapter.symbolName == ClaudeAdapter().symbolName)
     }
 
     @Test func claudeInAShellWithHooks() {
@@ -29,6 +29,6 @@ struct EffectiveAgentTests {
         let agent = EffectiveAgent.resolve(persisted: persisted, runtime: detected)
         #expect(agent.kind == persisted)
         #expect(!agent.isDetected)
-        #expect(agent.reportsLifecycleThroughHooks == persisted.definition.reportsLifecycleThroughHooks)
+        #expect(agent.reportsLifecycleThroughHooks == persisted.adapter.capabilities.reportsLifecycleThroughHooks)
     }
 }

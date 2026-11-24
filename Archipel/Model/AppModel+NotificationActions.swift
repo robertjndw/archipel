@@ -34,9 +34,12 @@ extension AppModel {
     /// Buttons only where the app knows how to answer: an agent prompt, not a shell or a script (which
     /// always runs as one), since those could take a reply as a command.
     private func notificationCategory(for session: Session, activity: SessionActivity) -> AttentionNotifier.Category? {
-        guard effectiveAgent(for: session).acceptsPrompts else { return nil }
+        let agent = effectiveAgent(for: session)
+        guard agent.acceptsPrompts else { return nil }
         switch activity.status {
         case .needsAttention(.permission):
+            // An agent whose prompt we cannot read gets a notification that only opens the session.
+            guard agent.adapter.capabilities.answersApprovalsInTerminal else { return nil }
             // Claude asks its multiple choice questions through the permission hook; they have no Yes and No.
             return activity.lastMessage == "AskUserQuestion" ? nil : .permission
         case .needsAttention(.question), .finished:

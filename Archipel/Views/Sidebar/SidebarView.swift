@@ -327,7 +327,7 @@ struct NewSessionButtons: View {
     var pane: Pane.ID?
 
     var body: some View {
-        ForEach(AgentDefinition.builtIns) { agent in
+        ForEach(model.enabledAgents, id: \.id) { agent in
             let canStart = model.canStartSession(with: agent)
             Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
                 model.newSession(in: worktree, agent: agent, pane: pane)
@@ -355,7 +355,7 @@ struct NewSessionButtons: View {
     }
 }
 
-extension AgentDefinition {
+extension AgentAdapter {
     /// The tooltip on a start button that is disabled because the agent's executable is missing.
     var missingCommandHint: String {
         "The \"\(executableName)\" command was not found on your PATH"

@@ -26,8 +26,63 @@ struct HookServerTests {
         #expect(messages == [HookMessage(
             sessionID: sessionID,
             event: .attentionRequested(.permission, message: "Bash"),
-            agentSessionID: Fixtures.claudeSessionID
+            agentSessionID: Fixtures.claudeSessionID,
+            source: "claude"
         )])
+    }
+
+    @Test func genericEventModeRoutesBySourceThroughTheRegistry() async throws {
+        let socket = shortSocketURL()
+        let server = HookServer(socketURL: socket, registry: AgentRegistry(adapters: [EchoAdapter(), ClaudeAdapter()]))
+        try server.start()
+        defer { server.stop() }
+
+        let sessionID = UUID()
+        let run = try runHook(
+            arguments: ["event", "echo"],
+            environment: ["ARCHIPEL_SESSION_ID": sessionID.uuidString, "ARCHIPEL_SOCKET": socket.path],
+            stdin: #"{"id": "echo-1", "said": "done"}"#
+        )
+        #expect(run.status == 0)
+        #expect(run.stdout.isEmpty)
+
+        let messages = await collect(1, from: server)
+        #expect(messages == [HookMessage(sessionID: sessionID, event: .turnFinished(message: "done"), agentSessionID: "echo-1", source: "echo")])
+    }
+
+    @Test func genericEventModeWithAKnownSourceDecodesLikeItsOwnMode() async throws {
+        let socket = shortSocketURL()
+        let server = HookServer(socketURL: socket)
+        try server.start()
+        defer { server.stop() }
+
+        let sessionID = UUID()
+        let run = try runHook(
+            arguments: ["event", "claude"],
+            environment: ["ARCHIPEL_SESSION_ID": sessionID.uuidString, "ARCHIPEL_SOCKET": socket.path],
+            stdin: Fixtures.permissionRequest
+        )
+        #expect(run.status == 0)
+        #expect(run.stdout.isEmpty)
+
+        let messages = await collect(1, from: server)
+        #expect(messages == [HookMessage(
+            sessionID: sessionID,
+            event: .attentionRequested(.permission, message: "Bash"),
+            agentSessionID: Fixtures.claudeSessionID,
+            source: "claude"
+        )])
+    }
+
+    @Test func envelopesFromSourcesTheRegistryDoesNotKnowAreDropped() {
+        let session = UUID().uuidString
+        let echo = #"{"session": "\#(session)", "source": "echo", "payload": {"said": "hi"}}"#
+        #expect(HookServer.decodeEnvelope(Data(echo.utf8)) == nil)
+        let message = HookServer.decodeEnvelope(Data(echo.utf8), registry: AgentRegistry(adapters: [EchoAdapter()]))
+        #expect(message?.event == .turnFinished(message: "hi"))
+
+        let claude = #"{"session": "\#(session)", "source": "claude", "payload": \#(Fixtures.stop)}"#
+        #expect(HookServer.decodeEnvelope(Data(claude.utf8), registry: AgentRegistry(adapters: [EchoAdapter()])) == nil)
     }
 
     @Test func codexNotifyThroughRealBinary() async throws {
@@ -48,7 +103,8 @@ struct HookServerTests {
         #expect(messages == [HookMessage(
             sessionID: sessionID,
             event: .turnFinished(message: "Rename complete."),
-            agentSessionID: "0199a213-81c0-7800-8aa1-bbab2a035a53"
+            agentSessionID: "0199a213-81c0-7800-8aa1-bbab2a035a53",
+            source: "codex"
         )])
     }
 
@@ -230,8 +286,39 @@ struct HookServerTests {
         #expect(await collect(1, from: server) == [HookMessage(
             sessionID: sessionID,
             event: .attentionRequested(.permission, message: "Write"),
-            agentSessionID: Fixtures.claudeSessionID
+            agentSessionID: Fixtures.claudeSessionID,
+            source: "claude"
         )])
+    }
+
+    @Test func oversizedOpenCodePermissionKeepsItsEventAndSession() async throws {
+        let socket = shortSocketURL()
+        let server = HookServer(socketURL: socket)
+        try server.start()
+        defer { server.stop() }
+
+        // Enough resources to push the payload past the helper's 512 KiB cut.
+        let resources = (0..<20_000).map { "/tmp/some/long/path/file-\($0).swift" }
+        let payload: [String: Any] = [
+            "event": "permission", "opencodeSessionID": "ses_big", "action": "edit", "resources": resources,
+        ]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        #expect(json.utf8.count > 512 << 10)
+
+        let sessionID = UUID()
+        let run = try runHook(
+            arguments: ["event", "opencode"],
+            environment: ["ARCHIPEL_SESSION_ID": sessionID.uuidString, "ARCHIPEL_SOCKET": socket.path],
+            stdin: json
+        )
+        #expect(run.status == 0)
+        let message = try #require(await collect(1, from: server).first)
+        #expect(message.agentSessionID == "ses_big")
+        guard case .attentionRequested(.permission, let text)? = message.event else {
+            Issue.record("Expected a permission request, got \(String(describing: message.event))")
+            return
+        }
+        #expect(text?.hasPrefix("/tmp/some/long/path/file-0.swift") == true)
     }
 
     @Test func oversizedFinalMessageIsCutShortNotLost() async throws {
@@ -280,4 +367,35 @@ struct HookServerTests {
         #expect(noEnvironment.status == 0)
         #expect(noEnvironment.stdout.isEmpty)
     }
+}
+
+/// A made-up agent that reports through `archipel-hook event echo`, the way a new adapter would.
+private struct EchoAdapter: AgentAdapter {
+    let id = "echo"
+    let displayName = "Echo"
+    let symbolName = "waveform"
+    let executableName = "echo"
+    let hookSources: Set<String> = ["echo"]
+    let capabilities = AgentCapabilities(
+        sessionID: .reportedByHook,
+        lifecycle: .hooks,
+        acceptsPrompts: true,
+        answersApprovalsInTerminal: false,
+        usage: nil,
+        tracksSubagents: false,
+        presetPlaceholder: "",
+        settingsSections: []
+    )
+
+    func launchCommand(for context: LaunchContext) -> LaunchCommand {
+        LaunchCommand(executable: executableName, arguments: [], environment: [:])
+    }
+
+    func resumeCommand(for context: LaunchContext, agentSessionID: String) -> LaunchCommand? { nil }
+
+    func decodeHook(source: String, payload: [String: Any], receivedAt date: Date) -> DecodedHook? {
+        DecodedHook(event: .turnFinished(message: payload["said"] as? String), agentSessionID: payload["id"] as? String)
+    }
+
+    func attentionReason(forTerminalNotification body: String) -> AttentionReason? { nil }
 }

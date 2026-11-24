@@ -5,27 +5,36 @@ import EditorUI
 
 /// Small conveniences for the sidebar and the island switcher.
 extension AppModel {
-    var defaultAgent: AgentDefinition {
-        AgentDefinition.builtIn(id: settings.defaultAgentID) ?? .claude
+    /// The agents New Session offers, in registry order. Sessions of the others keep running.
+    var enabledAgents: [any AgentAdapter] {
+        agentRegistry.adapters.filter { settings.isEnabled($0.id) }
+    }
+
+    /// Settings keep the default enabled, but the stored id can still point at a disabled agent,
+    /// for instance one given on the command line. ⌘T then starts the first enabled agent instead.
+    var defaultAgent: any AgentAdapter {
+        let chosen = agentRegistry.adapter(id: settings.defaultAgentID)
+        if let chosen, settings.isEnabled(chosen.id) { return chosen }
+        return enabledAgents.first ?? chosen ?? ClaudeAdapter()
     }
 
     /// The order of the File menu and the palette: the default agent gets ⌘T, the others follow.
-    var agentsInMenuOrder: [AgentDefinition] {
+    var agentsInMenuOrder: [any AgentAdapter] {
         let defaultAgent = defaultAgent
-        return [defaultAgent] + AgentDefinition.builtIns.filter { $0.id != defaultAgent.id }
+        return [defaultAgent] + enabledAgents.filter { $0.id != defaultAgent.id }
     }
 
     /// The presets the File menu and the palette offer, grouped by agent in menu order. Presets of
     /// agents that take no arguments, like the shell, are left out.
-    var presetsInMenuOrder: [(agent: AgentDefinition, preset: LaunchPreset)] {
-        agentsInMenuOrder.filter(\.acceptsPrompts).flatMap { agent in
+    var presetsInMenuOrder: [(agent: any AgentAdapter, preset: LaunchPreset)] {
+        agentsInMenuOrder.filter(\.capabilities.acceptsPrompts).flatMap { agent in
             settings.launchPresets.filter { $0.agentID == agent.id }.map { (agent: agent, preset: $0) }
         }
     }
 
     /// False for an agent that is not installed. The default agent is let through regardless: ⌘T
     /// should never be a dead key, and the session it opens says what is missing.
-    func canStartSession(with agent: AgentDefinition) -> Bool {
+    func canStartSession(with agent: any AgentAdapter) -> Bool {
         isInstalled(agent) || agent.id == defaultAgent.id
     }
 
