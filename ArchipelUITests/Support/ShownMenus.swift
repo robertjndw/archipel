@@ -32,3 +32,21 @@ extension ArchipelUITestCase {
         app.buttons.matching(NSPredicate(format: "label == %@ OR title == %@", title, title)).element(boundBy: 0)
     }
 }
+
+extension ArchipelUITestCase {
+    /// The header of the unstaged section in the Changes panel.
+    var unstagedChangesHeader: XCUIElement {
+        mainWindow.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Changes, ")).element(boundBy: 0)
+    }
+
+    /// A list's section header is one heading to accessibility, with the buttons in it as named
+    /// actions that XCUITest cannot perform. So these click where the buttons are drawn: at the
+    /// trailing edge, Discard All before Stage All.
+    func clickStageAll() {
+        unstagedChangesHeader.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).withOffset(CGVector(dx: -6, dy: 0)).click()
+    }
+
+    func clickDiscardAll() {
+        unstagedChangesHeader.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).withOffset(CGVector(dx: -26, dy: 0)).click()
+    }
+}

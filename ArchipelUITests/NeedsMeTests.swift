@@ -93,6 +93,10 @@ final class NeedsMeTests: ArchipelUITestCase {
         assertExists(sidebarWorktree("gamma"), "The waiting gamma should be listed.")
         XCTAssertFalse(sidebarWorktree("beta").exists, "beta waits for nothing and is filtered out.")
 
+        // The worktree the filter opened starts its agent, and a terminal takes the keyboard when
+        // it comes up. Waiting for it keeps that from happening after the click below.
+        waitUntil("the opened session's terminal is up") { self.terminalSurfaces.count > 0 }
+
         // As in SidebarPeekTests: a click on the selected row gives the list the keyboard without
         // changing the selection, then Space peeks at the row under the pointer.
         sidebarWorktree(shown).click()

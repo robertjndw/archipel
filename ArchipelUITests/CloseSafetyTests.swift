@@ -167,14 +167,14 @@ final class CloseSafetyTests: ArchipelUITestCase {
         let question = app.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", message, message)).element(boundBy: 0)
         app.typeKey("q", modifierFlags: .command)
         assertExists(question, "Quitting with a command running in a shell should ask first.")
-        app.buttons.matching(NSPredicate(format: "label == %@", "Cancel")).element(boundBy: 0).click()
+        dialogButton("Cancel").click()
         assertGone(question, "Cancel should dismiss the question.")
         XCTAssertEqual(app.state, .runningForeground, "Cancel should keep the app running.")
         XCTAssertTrue(job.isRunning, "Cancel should leave the command running.")
 
         app.typeKey("q", modifierFlags: .command)
         assertExists(question, "The question should come back.")
-        app.buttons.matching(NSPredicate(format: "label == %@", "Quit")).element(boundBy: 0).click()
+        dialogButton("Quit").click()
         waitUntil("the app has quit") { self.app.state == .notRunning }
     }
 }

@@ -188,9 +188,8 @@ final class ChangesTests: ArchipelUITestCase {
         assertExists(unstagedChange("notes.txt"), "The conflicted file should be listed.")
         assertExists(unstagedChange("draft.txt"), "The untracked file should be listed.")
 
-        let stageAll = mainWindow.buttons.matching(NSPredicate(format: "label == %@", "Stage All")).element(boundBy: 0)
-        assertExists(stageAll, "The Changes section should offer Stage All.")
-        stageAll.click()
+        assertExists(unstagedChangesHeader, "The Changes section should have its header.")
+        clickStageAll()
 
         // Staging a conflicted file marks it resolved with its markers still in it.
         waitUntil("everything but the conflict is staged") {
@@ -230,9 +229,8 @@ final class ChangesTests: ArchipelUITestCase {
         XCTAssertFalse(menuShows("Discard Changes…"), "A nested repository is not one change to discard.")
         app.typeKey(.escape, modifierFlags: [])
 
-        let discardAll = mainWindow.buttons.matching(NSPredicate(format: "label == %@", "Discard All Changes")).element(boundBy: 0)
-        assertExists(discardAll, "The Changes section should offer Discard All.")
-        discardAll.click()
+        assertExists(unstagedChangesHeader, "The Changes section should have its header.")
+        clickDiscardAll()
         // Three rows, but only the two files count.
         let question = staticText(containing: "Discard all 2 unstaged changes?")
         assertExists(question, "Discard All should count the two files and leave the folder out.")
