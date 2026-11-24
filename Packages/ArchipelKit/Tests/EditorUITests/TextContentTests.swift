@@ -29,6 +29,20 @@ struct TextSnifferTests {
         #expect(cr.format.lineEnding == .cr)
     }
 
+    @Test func measuresTheLongestLine() {
+        #expect(TextSniffer.longestLineLength("") == 0)
+        #expect(TextSniffer.longestLineLength("ab\nabcd\r\nabc") == 4)
+        #expect(TextSniffer.longestLineLength("one\rthree\r") == 5)
+        // In the units TextKit lays out: CJK is one each, not the three bytes UTF-8 takes, and an
+        // emoji outside the BMP is a surrogate pair.
+        #expect(TextSniffer.longestLineLength("\u{e9}") == 1)
+        #expect(TextSniffer.longestLineLength("\u{65e5}\u{672c}\u{8a9e}\nab") == 3)
+        #expect(TextSniffer.longestLineLength("\u{1F600}") == 2)
+        let cjk = String(repeating: "\u{6f22}", count: 20_000)
+        #expect(TextSniffer.longestLineLength(cjk) == cjk.utf16.count)
+        #expect(TextSniffer.longestLineLength(cjk) <= TextBuffer.maximumLineLength)
+    }
+
     @Test func encodeRestoresFormat() throws {
         let format = TextFileFormat(encoding: .utf8, hasBOM: true, lineEnding: .crlf)
         #expect(try format.encode("a\nb") == Data([0xEF, 0xBB, 0xBF]) + Data("a\r\nb".utf8))

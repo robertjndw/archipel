@@ -48,6 +48,19 @@ struct DiffCommentAnchoringTests {
         #expect(DiffCommentAnchoring.markedItems(items, rows: document.sideBySide, role: .new, document: document, anchors: []) == [])
     }
 
+    @Test func aCommentWhoseLineNowReadsDifferentlyIsStale() {
+        let comments = [
+            comment("f", 12, code: "d"),
+            // Made on old line 11 when it still read "x"; the number now shows "b".
+            comment("f", 11, side: .old, code: "x"),
+            comment("f", 13, code: "e"),
+        ]
+        let items = DiffFolding.allRows(document.sideBySide)
+        #expect(DiffCommentAnchoring.staleItems(items, rows: document.sideBySide, role: .old, document: document, comments: comments) == [1])
+        #expect(DiffCommentAnchoring.staleItems(items, rows: document.sideBySide, role: .new, document: document, comments: comments) == [])
+        #expect(DiffCommentAnchoring.staleItems(items, rows: document.unified, role: .unified, document: document, comments: []) == [])
+    }
+
     @Test func commentsInsideAFoldHaveNoMarker() {
         var lines = (1...20).map { GitDiffLine(.context, "\($0)") }
         lines.insert(GitDiffLine(.added, "new"), at: 10)

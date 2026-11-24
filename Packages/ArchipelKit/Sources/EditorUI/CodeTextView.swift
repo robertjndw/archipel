@@ -103,6 +103,8 @@ final class CodeScrollView: NSScrollView, NSTextViewDelegate {
         textView.backgroundColor = .textBackgroundColor
         textView.drawsBackground = true
         textView.insertionPointColor = .textColor
+        // The terminal is a text area to accessibility as well, so UI tests need this to tell them apart.
+        textView.setAccessibilityIdentifier("editor.text")
     }
 
     /// Called when SwiftUI removes the view: remembers where the user was and lets go of the
@@ -216,8 +218,15 @@ final class CodeNSTextView: NSTextView {
 
     /// The app's File > Save menu sends this to the first responder.
     @IBAction func saveDocument(_ sender: Any?) {
-        // Errors are shown inline by the editor from the buffer's saveError.
-        try? buffer?.save()
+        do {
+            try buffer?.save()
+        } catch is SaveConflictError {
+            // The conflict bar is already on screen and the save changed nothing; without a sound
+            // Cmd-S just seems broken.
+            NSSound.beep()
+        } catch {
+            // Shown inline by the editor from the buffer's saveError.
+        }
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
@@ -225,8 +234,74 @@ final class CodeNSTextView: NSTextView {
         return super.validateUserInterfaceItem(item)
     }
 
+    private var indentUnit: String { buffer?.indentation.text ?? "\t" }
+
     override func insertTab(_ sender: Any?) {
-        insertText(buffer?.indentation.text ?? "\t", replacementRange: selectedRange())
+        let selection = selectedRange()
+        if selection.length > 0, (string as NSString).substring(with: selection).contains("\n") {
+            changeIndentation(outdent: false)
+        } else {
+            insertText(indentUnit, replacementRange: selection)
+        }
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        changeIndentation(outdent: true)
+    }
+
+    /// A new line starts where the one before it is indented to.
+    override func insertNewline(_ sender: Any?) {
+        let selection = selectedRange()
+        let text = string as NSString
+        let lineStart = text.lineRange(for: NSRange(location: selection.location, length: 0)).location
+        var end = lineStart
+        while end < selection.location, [0x20, 0x09].contains(text.character(at: end)) { end += 1 }
+        insertText("\n" + text.substring(with: NSRange(location: lineStart, length: end - lineStart)), replacementRange: selection)
+    }
+
+    /// Indents or outdents every line the selection touches by one step, as a single undo step.
+    private func changeIndentation(outdent: Bool) {
+        let text = string as NSString
+        let selection = selectedRange()
+        var touched = selection
+        // Lines selected whole end at the start of the next one, which is not meant to move.
+        if touched.length > 0, text.character(at: NSMaxRange(touched) - 1) == 0x0A { touched.length -= 1 }
+        let range = text.lineRange(for: touched)
+        let lines = text.substring(with: range).components(separatedBy: "\n")
+        let unit = indentUnit
+        var removedFromFirst = 0
+        let changed = lines.enumerated().map { index, line -> String in
+            // The empty string after the last line's newline is not a line of its own.
+            if line.isEmpty { return line }
+            guard outdent else { return unit + line }
+            let removed = Self.outdentLength(of: line, unit: unit)
+            if index == 0 { removedFromFirst = removed }
+            return String(line.dropFirst(removed))
+        }
+        let replacement = changed.joined(separator: "\n")
+        guard replacement != text.substring(with: range) else { return }
+        breakUndoCoalescing()
+        guard shouldChangeText(in: range, replacementString: replacement) else { return }
+        textStorage?.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: EditorTheme.textAttributes))
+        didChangeText()
+        breakUndoCoalescing()
+        if touched.length == 0 {
+            // A caret, or a lone newline at the end of the line, stays on the same character. Indenting
+            // put a step before it; outdenting took up to one away.
+            let shift = outdent ? -removedFromFirst : (unit as NSString).length
+            setSelectedRange(NSRange(location: max(range.location, selection.location + shift), length: selection.length))
+        } else {
+            let length = (replacement as NSString).length
+            let trailing = replacement.hasSuffix("\n") ? 1 : 0
+            setSelectedRange(NSRange(location: range.location, length: length - trailing))
+        }
+    }
+
+    /// One leading tab, or up to one step's worth of leading spaces.
+    private static func outdentLength(of line: String, unit: String) -> Int {
+        if line.hasPrefix("\t") { return 1 }
+        let width = unit == "\t" ? EditorTheme.tabWidth : unit.count
+        return line.prefix(width).prefix { $0 == " " }.count
     }
 
     /// Hosting apps do not always have Find or Save menu items, so their shortcuts are handled here

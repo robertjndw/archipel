@@ -45,9 +45,24 @@ struct ReviewCommentsButton: View {
                     ReviewCommentsList(root: root, review: review) { isPresented = false }
                 }
                 .transition(.opacity)
+            } else if !review.store.sentComments(in: root).isEmpty {
+                restoreSent
+                    .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.2), value: count > 0)
+    }
+
+    private var restoreSent: some View {
+        let sent = review.store.sentComments(in: root).count
+        return Button("Restore Sent Comments", systemImage: "arrow.uturn.backward") {
+            review.store.restoreSent(in: root)
+        }
+        .buttonStyle(.borderless)
+        .labelStyle(.iconOnly)
+        .help(sent == 1
+            ? "Restore the comment last sent to an agent, in case it never arrived"
+            : "Restore the \(sent) comments last sent to an agent, in case they never arrived")
     }
 }
 
@@ -215,6 +230,11 @@ extension ReviewTarget {
         }
         PreviewVariant("Several comments") {
             ReviewCommentsButton(root: PreviewSamples.root, review: PreviewSamples.review(comments: 4))
+        }
+        PreviewVariant("Sent") {
+            let review = PreviewSamples.review(comments: 3)
+            let _ = review.store.markSent(in: PreviewSamples.root)
+            ReviewCommentsButton(root: PreviewSamples.root, review: review)
         }
     }
     .padding()

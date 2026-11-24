@@ -23,10 +23,13 @@ final class DiffLayout {
     /// Row index to hunk index, for the row that carries a hunk's drag handle.
     let hunkLeadRows: [Int: Int]
 
-    init(document: DiffDocument, unified: Bool, showsAllLines: Bool) {
+    /// `unfolded` are unchanged lines to keep out of folds, carried over from the previous version.
+    init(document: DiffDocument, unified: Bool, showsAllLines: Bool, unfolded: Set<DiffUnchangedLine> = []) {
         self.document = document
-        rows = unified ? document.unified : document.sideBySide
-        items = showsAllLines ? DiffFolding.allRows(rows) : DiffFolding.items(for: rows)
+        let rows = unified ? document.unified : document.sideBySide
+        self.rows = rows
+        items = showsAllLines ? DiffFolding.allRows(rows)
+            : DiffFolding.items(for: rows, keeping: DiffFolding.rows(showing: unfolded, in: rows, document: document))
         oldOffsets = document.old.lineOffsets()
         newOffsets = document.new.lineOffsets()
         oldWidth = DiffLineRenderer.width(of: document.old.lines)
@@ -146,11 +149,34 @@ enum DiffLineRenderer {
 final class DiffPaneView: NSView {
     let role: DiffPaneRole
     var layoutState: DiffLayout? {
-        didSet { needsDisplay = true }
+        didSet {
+            needsDisplay = true
+            if oldValue !== layoutState {
+                // The rows a selection points at belong to the layout it was made in. While an agent
+                // writes to the file a new layout arrives every few seconds, so a selection whose
+                // lines are still there is carried over rather than lost each time.
+                if let selection {
+                    self.selection = oldValue.flatMap { old in layoutState.flatMap { DiffPaneText.carry(selection, from: old, to: $0, role: role) } }
+                }
+                accessibleText = nil
+                NSAccessibility.post(element: self, notification: .valueChanged)
+            }
+        }
     }
     var onExpandFold: ((Int) -> Void)?
     /// The display item under the mouse, or nil when it leaves; drives the gutter's add button.
     var onHover: ((Int?) -> Void)?
+
+    /// Where a selection began and where it now ends; the two are in either order.
+    private var selection: (anchor: DiffTextPosition, head: DiffTextPosition)? {
+        didSet {
+            needsDisplay = true
+            NSAccessibility.post(element: self, notification: .selectedTextChanged)
+        }
+    }
+    private var isSelecting = false
+    /// Built when VoiceOver first asks, for the layout and folds of that moment.
+    private var accessibleText: (text: DiffAccessibleText, items: Int)?
 
     init(role: DiffPaneRole) {
         self.role = role
@@ -193,11 +219,199 @@ final class DiffPaneView: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let index = Int(point.y / EditorTheme.lineHeight)
-        guard let items = layoutState?.items, items.indices.contains(index), case .fold = items[index] else {
+        guard let layoutState else {
             super.mouseDown(with: event)
             return
         }
-        onExpandFold?(index)
+        if layoutState.items.indices.contains(index), case .fold = layoutState.items[index], !event.modifierFlags.contains(.shift) {
+            onExpandFold?(index)
+            return
+        }
+        window?.makeFirstResponder(self)
+        // No rows means no position to put a selection at; the word and line paths below would
+        // index a row that is not there.
+        guard !layoutState.rows.isEmpty else { return }
+        let position = textPosition(at: point, in: layoutState)
+        isSelecting = true
+        if event.modifierFlags.contains(.shift), let selection {
+            self.selection = (selection.anchor, position)
+            return
+        }
+        switch event.clickCount {
+        case 2:
+            let line = DiffPaneText.line(of: position.row, in: layoutState, role: role) ?? ""
+            let word = DiffPaneText.word(in: line, at: position.column)
+            selection = (DiffTextPosition(row: position.row, column: word.lowerBound), DiffTextPosition(row: position.row, column: word.upperBound))
+        case 3...:
+            selectLine(position.row, in: layoutState)
+        default:
+            selection = (position, position)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isSelecting, let layoutState, !layoutState.rows.isEmpty, let selection else { return }
+        let position = textPosition(at: convert(event.locationInWindow, from: nil), in: layoutState)
+        if position != selection.head { self.selection = (selection.anchor, position) }
+        autoscroll(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        isSelecting = false
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .iBeam)
+    }
+
+    /// The row and column under a point. Above or below the text it is the start or the end; on a
+    /// fold, the first line it hides.
+    func textPosition(at point: NSPoint, in layout: DiffLayout) -> DiffTextPosition {
+        let item = Int(floor(point.y / EditorTheme.lineHeight))
+        guard item >= 0, !layout.items.isEmpty else { return DiffTextPosition(row: 0, column: 0) }
+        guard item < layout.items.count else {
+            return DiffPaneText.end(of: layout, role: role) ?? DiffTextPosition(row: 0, column: 0)
+        }
+        switch layout.items[item] {
+        case .fold(let range):
+            return DiffTextPosition(row: range.lowerBound, column: 0)
+        case .row(let rowIndex):
+            guard let text = DiffPaneText.line(of: rowIndex, in: layout, role: role) else { return DiffTextPosition(row: rowIndex, column: 0) }
+            let length = text.utf16.count
+            let line = DiffLineRenderer.ctLine(text, lineStart: 0, runs: [])
+            let index = CTLineGetStringIndexForPosition(line, CGPoint(x: point.x - DiffLineRenderer.textInset, y: 0))
+            // Past the elided end of a long line means all of it.
+            let column = index == kCFNotFound || index >= DiffLineRenderer.maximumDrawnLength ? length : min(max(0, index), length)
+            return DiffTextPosition(row: rowIndex, column: column)
+        }
+    }
+
+    private func selectLine(_ row: Int, in layout: DiffLayout) {
+        let end = row + 1 < layout.rows.count
+            ? DiffTextPosition(row: row + 1, column: 0)
+            : DiffTextPosition(row: row, column: DiffPaneText.line(of: row, in: layout, role: role)?.utf16.count ?? 0)
+        selection = (DiffTextPosition(row: row, column: 0), end)
+    }
+
+    /// Start and end in order, or nil when nothing is selected.
+    var selectedRange: (start: DiffTextPosition, end: DiffTextPosition)? {
+        guard let selection, selection.anchor != selection.head else { return nil }
+        return (min(selection.anchor, selection.head), max(selection.anchor, selection.head))
+    }
+
+    var selectedText: String {
+        guard let layoutState, let range = selectedRange else { return "" }
+        return DiffPaneText.text(from: range.start, to: range.end, in: layoutState, role: role)
+    }
+
+    // MARK: Keyboard
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        // The selection turns from grey to the accent colour.
+        needsDisplay = true
+        return true
+    }
+
+    override func resignFirstResponder() -> Bool {
+        needsDisplay = true
+        return true
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Space pages through like a web page; no key binding sends a command for it.
+        if event.charactersIgnoringModifiers == " ", flags.subtracting(.shift).isEmpty {
+            flags.contains(.shift) ? scrollPageUp(nil) : scrollPageDown(nil)
+            return
+        }
+        interpretKeyEvents([event])
+    }
+
+    /// The pane takes no text, so Tab and Shift-Tab move the keyboard focus on as they do between
+    /// controls. Every key goes through `interpretKeyEvents`, which turns them into these commands
+    /// instead of letting the window handle them.
+    override func insertTab(_ sender: Any?) {
+        window?.selectNextKeyView(self)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        window?.selectPreviousKeyView(self)
+    }
+
+    /// Hosts without an Edit menu (the editor demo) still copy and select all.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self else { return super.performKeyEquivalent(with: event) }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags == [.command] else { return super.performKeyEquivalent(with: event) }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "c" where selectedRange != nil:
+            copy(nil)
+            return true
+        case "a":
+            selectAll(nil)
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
+        }
+    }
+
+    @objc func copy(_ sender: Any?) {
+        let text = selectedText
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    override func selectAll(_ sender: Any?) {
+        guard let layoutState, let end = DiffPaneText.end(of: layoutState, role: role) else { return }
+        selection = (DiffTextPosition(row: 0, column: 0), end)
+    }
+
+    @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(copy(_:)): selectedRange != nil
+        case #selector(selectAll(_:)): layoutState?.rows.isEmpty == false
+        default: true
+        }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        if selectedRange != nil { selection = nil } else { super.cancelOperation(sender) }
+    }
+
+    override func moveUp(_ sender: Any?) { scrollBy(y: -EditorTheme.lineHeight) }
+    override func moveDown(_ sender: Any?) { scrollBy(y: EditorTheme.lineHeight) }
+    override func scrollLineUp(_ sender: Any?) { scrollBy(y: -EditorTheme.lineHeight) }
+    override func scrollLineDown(_ sender: Any?) { scrollBy(y: EditorTheme.lineHeight) }
+    override func moveLeft(_ sender: Any?) { scrollBy(x: -EditorTheme.characterWidth * 4) }
+    override func moveRight(_ sender: Any?) { scrollBy(x: EditorTheme.characterWidth * 4) }
+    override func scrollPageUp(_ sender: Any?) { scrollBy(y: -pageHeight) }
+    override func scrollPageDown(_ sender: Any?) { scrollBy(y: pageHeight) }
+    override func pageUp(_ sender: Any?) { scrollBy(y: -pageHeight) }
+    override func pageDown(_ sender: Any?) { scrollBy(y: pageHeight) }
+    override func scrollToBeginningOfDocument(_ sender: Any?) { scrollBy(y: -bounds.height) }
+    override func scrollToEndOfDocument(_ sender: Any?) { scrollBy(y: bounds.height) }
+    override func moveToBeginningOfDocument(_ sender: Any?) { scrollBy(y: -bounds.height) }
+    override func moveToEndOfDocument(_ sender: Any?) { scrollBy(y: bounds.height) }
+
+    /// A screen less two lines, so the reader keeps some context, as NSTextView does.
+    private var pageHeight: CGFloat {
+        max(EditorTheme.lineHeight, (enclosingScrollView?.contentView.bounds.height ?? 0) - EditorTheme.lineHeight * 2)
+    }
+
+    /// The other pane follows through the container's scroll sync.
+    private func scrollBy(x: CGFloat = 0, y: CGFloat = 0) {
+        guard let scrollView = enclosingScrollView else { return }
+        let clip = scrollView.contentView
+        var target = clip.bounds
+        target.origin.x += x
+        target.origin.y += y
+        let constrained = clip.constrainBoundsRect(target)
+        guard constrained.origin != clip.bounds.origin else { return }
+        clip.setBoundsOrigin(constrained.origin)
+        scrollView.reflectScrolledClipView(clip)
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -219,18 +433,53 @@ final class DiffPaneView: NSView {
         let last = min(layoutState.items.count - 1, Int(dirtyRect.maxY / height))
         guard first <= last else { return }
 
+        let selected = selectedRange
         for index in first...last {
             let rect = NSRect(x: 0, y: CGFloat(index) * height, width: bounds.width, height: height)
             switch layoutState.items[index] {
             case .fold(let range):
                 drawFold(hiding: range.count, in: rect, context: context)
+                if let selected, selected.start.row < range.lowerBound, selected.end.row >= range.upperBound {
+                    selectionColor.withAlphaComponent(0.5).setFill()
+                    rect.fill(using: .sourceOver)
+                }
             case .row(let rowIndex):
-                drawRow(layoutState.rows[rowIndex], layout: layoutState, in: rect, context: context)
+                drawRow(layoutState.rows[rowIndex], at: rowIndex, layout: layoutState, selected: selected, in: rect, context: context)
             }
         }
     }
 
-    private func drawRow(_ row: DiffRow, layout: DiffLayout, in rect: NSRect, context: CGContext) {
+    /// Like NSTextView: the accent colour while the pane has the keyboard, grey otherwise.
+    private var selectionColor: NSColor {
+        window?.isKeyWindow == true && window?.firstResponder === self
+            ? .selectedTextBackgroundColor : .unemphasizedSelectedTextBackgroundColor
+    }
+
+    /// Drawn over the line's added or removed tint and under its text, so both stay readable.
+    private func drawSelection(_ selected: (start: DiffTextPosition, end: DiffTextPosition), row rowIndex: Int, line: CTLine, length: Int, in rect: NSRect) {
+        guard selected.start.row <= rowIndex, rowIndex <= selected.end.row else { return }
+        let from = rowIndex == selected.start.row ? min(selected.start.column, length) : 0
+        let to = rowIndex == selected.end.row ? min(selected.end.column, length) : length
+        let drawnEnd = DiffLineRenderer.maximumDrawnLength
+        var startX = CTLineGetOffsetForStringIndex(line, min(from, drawnEnd), nil)
+        var endX = to > drawnEnd ? CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) : CTLineGetOffsetForStringIndex(line, to, nil)
+        // A selection that runs on to the next line takes in this line's newline too.
+        if rowIndex < selected.end.row { endX += EditorTheme.characterWidth }
+        guard endX > startX else { return }
+        startX += DiffLineRenderer.textInset
+        endX += DiffLineRenderer.textInset
+        selectionColor.setFill()
+        NSRect(x: startX, y: rect.minY, width: endX - startX, height: rect.height).fill(using: .sourceOver)
+    }
+
+    private func drawRow(
+        _ row: DiffRow,
+        at rowIndex: Int,
+        layout: DiffLayout,
+        selected: (start: DiffTextPosition, end: DiffTextPosition)?,
+        in rect: NSRect,
+        context: CGContext
+    ) {
         guard let (lineIndex, isOld) = layout.line(for: row, role: role) else {
             drawFiller(in: rect, context: context)
             return
@@ -252,6 +501,7 @@ final class DiffPaneView: NSView {
             (isOld ? EditorTheme.removedEmphasis : EditorTheme.addedEmphasis).setFill()
             NSBezierPath(roundedRect: NSRect(x: x + start, y: rect.minY + 1, width: max(end - start, 2), height: rect.height - 2), xRadius: 2, yRadius: 2).fill()
         }
+        if let selected { drawSelection(selected, row: rowIndex, line: line, length: text.utf16.count, in: rect) }
 
         let width = Self.draw(line, x: x, in: rect, context: context)
 
@@ -329,6 +579,9 @@ final class DiffPaneView: NSView {
 
     // MARK: Accessibility
 
+    // The text is drawn, so VoiceOver gets it as a read-only text area of one line per display item,
+    // and the line-based calls below let it move line by line.
+
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .textArea }
     override func accessibilityLabel() -> String? {
@@ -336,6 +589,111 @@ final class DiffPaneView: NSView {
         case .old: String(localized: "Original")
         case .new: String(localized: "Modified")
         case .unified: String(localized: "Changes")
+        }
+    }
+
+    private var accessibilityText: DiffAccessibleText? {
+        guard let layoutState else { return nil }
+        // Expanding a fold changes the item count without a new layout.
+        if let accessibleText, accessibleText.items == layoutState.items.count { return accessibleText.text }
+        let text = DiffPaneText.accessible(layoutState, role: role)
+        accessibleText = (text, layoutState.items.count)
+        return text
+    }
+
+    override func accessibilityValue() -> Any? { accessibilityText?.string ?? "" }
+    override func accessibilityNumberOfCharacters() -> Int { accessibilityText?.length ?? 0 }
+
+    override func accessibilityLine(for index: Int) -> Int {
+        accessibilityText?.line(containing: index) ?? 0
+    }
+
+    override func accessibilityRange(forLine line: Int) -> NSRange {
+        accessibilityText?.range(ofLine: line) ?? NSRange(location: NSNotFound, length: 0)
+    }
+
+    override func accessibilityString(for range: NSRange) -> String? {
+        guard let string = accessibilityText?.string as NSString?, NSMaxRange(range) <= string.length else { return nil }
+        return string.substring(with: range)
+    }
+
+    override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
+        accessibilityString(for: range).map { NSAttributedString(string: $0) }
+    }
+
+    override func accessibilityVisibleCharacterRange() -> NSRange {
+        guard let text = accessibilityText, !text.lineStarts.isEmpty else { return NSRange(location: 0, length: 0) }
+        let height = EditorTheme.lineHeight
+        let first = min(text.lineStarts.count - 1, max(0, Int(visibleRect.minY / height)))
+        let last = min(text.lineStarts.count - 1, max(first, Int(visibleRect.maxY / height)))
+        let start = text.lineStarts[first]
+        return NSRange(location: start, length: NSMaxRange(text.range(ofLine: last)) - start)
+    }
+
+    override func accessibilityFrame(for range: NSRange) -> NSRect {
+        guard let text = accessibilityText, let window else { return .zero }
+        let first = text.line(containing: range.location)
+        let last = text.line(containing: max(range.location, NSMaxRange(range) - 1))
+        let height = EditorTheme.lineHeight
+        let rect = NSRect(x: 0, y: CGFloat(first) * height, width: bounds.width, height: CGFloat(last - first + 1) * height)
+        return window.convertToScreen(convert(rect, to: nil))
+    }
+
+    override func accessibilitySelectedText() -> String? { selectedText }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        guard let text = accessibilityText, let layoutState, let range = selectedRange,
+              let start = item(showing: range.start.row, in: layoutState), let end = item(showing: range.end.row, in: layoutState)
+        else { return NSRange(location: 0, length: 0) }
+        let from = text.offset(item: start, column: range.start.column)
+        let to = text.offset(item: end, column: range.end.column)
+        return NSRange(location: from, length: max(0, to - from))
+    }
+
+    override func accessibilityInsertionPointLineNumber() -> Int {
+        guard let layoutState, let range = selectedRange, let item = item(showing: range.start.row, in: layoutState) else { return 0 }
+        return item
+    }
+
+    /// Folds only open on a click otherwise; each is offered as an action named after what it hides.
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard let layoutState else { return nil }
+        var actions: [NSAccessibilityCustomAction] = []
+        for item in layoutState.items {
+            guard case .fold(let range) = item, let first = firstLineNumber(of: range, in: layoutState) else { continue }
+            let name = range.count == 1
+                ? String(localized: "Show 1 unchanged line at line \(first)")
+                : String(localized: "Show \(range.count) unchanged lines from line \(first)")
+            actions.append(NSAccessibilityCustomAction(name: name) { [weak self] in
+                // VoiceOver can hold on to these after another fold opened and moved every item
+                // after it, so the fold is looked up by the rows it hides rather than by index.
+                guard let self, self.layoutState === layoutState,
+                      let index = layoutState.items.firstIndex(of: .fold(range)) else { return false }
+                self.onExpandFold?(index)
+                return true
+            })
+        }
+        return actions
+    }
+
+    /// The number the gutter beside this pane shows for a fold's first line: the old side's on the
+    /// left of side by side, the new side's on the right, and the old one inline, whose first
+    /// column it is.
+    private func firstLineNumber(of range: Range<Int>, in layout: DiffLayout) -> Int? {
+        guard layout.rows.indices.contains(range.lowerBound) else { return nil }
+        let row = layout.rows[range.lowerBound]
+        switch role {
+        case .old, .unified: return row.old.map { layout.document.old.numbers[$0] } ?? row.new.map { layout.document.new.numbers[$0] }
+        case .new: return row.new.map { layout.document.new.numbers[$0] }
+        }
+    }
+
+    private func item(showing row: Int, in layout: DiffLayout) -> Int? {
+        layout.items.firstIndex { item in
+            switch item {
+            case .row(let index): index == row
+            case .fold(let range): range.contains(row)
+            }
         }
     }
 }
@@ -356,6 +714,10 @@ final class DiffGutterView: NSView {
     var commentsEnabled = false
     var markedItems: Set<Int> = [] {
         didSet { if markedItems != oldValue { needsDisplay = true } }
+    }
+    /// Marked items whose comment was made when the line read differently; drawn dimmed.
+    var staleItems: Set<Int> = [] {
+        didSet { if staleItems != oldValue { needsDisplay = true } }
     }
     /// The container only sets rows that can take a comment.
     var hoveredItem: Int? {
@@ -543,7 +905,7 @@ final class DiffGutterView: NSView {
             if commentsEnabled {
                 let laneRect = NSRect(x: 0, y: rect.minY, width: lane, height: height)
                 if markedItems.contains(index) {
-                    drawCommentMarker(in: laneRect)
+                    drawCommentMarker(in: laneRect, stale: staleItems.contains(index))
                 } else if hoveredItem == index {
                     drawAddButton(in: laneRect)
                 }
@@ -569,15 +931,16 @@ final class DiffGutterView: NSView {
     }
 
     /// Drawn as shapes in the accent colour rather than from a symbol image, so it follows the
-    /// appearance and accent colour at draw time instead of whatever an image cached.
-    private func drawCommentMarker(in lane: NSRect) {
+    /// appearance and accent colour at draw time instead of whatever an image cached. A stale one is
+    /// dimmed: the comment is still on this line number, but the code it was about has changed.
+    private func drawCommentMarker(in lane: NSRect, stale: Bool) {
         let body = NSRect(x: (lane.midX - 5.5).rounded(), y: (lane.midY - 5).rounded(), width: 11, height: 8)
         let bubble = NSBezierPath(roundedRect: body, xRadius: 2.5, yRadius: 2.5)
         bubble.move(to: NSPoint(x: body.minX + 2.5, y: body.maxY - 1))
         bubble.line(to: NSPoint(x: body.minX + 2.5, y: body.maxY + 3))
         bubble.line(to: NSPoint(x: body.minX + 6.5, y: body.maxY - 1))
         bubble.close()
-        NSColor.controlAccentColor.setFill()
+        (stale ? NSColor.controlAccentColor.withAlphaComponent(0.4) : NSColor.controlAccentColor).setFill()
         bubble.fill()
     }
 
