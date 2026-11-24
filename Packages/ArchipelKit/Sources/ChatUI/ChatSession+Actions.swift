@@ -129,6 +129,10 @@ extension ChatSession {
     /// Images over this size go as links, so a stray screenshot cannot blow up one message.
     nonisolated static let maximumInlineImageBytes = 10 << 20
 
+    /// The image formats that go out inline. Adapters pass the media type on as is and the model
+    /// refuses a prompt with any other, so an SVG or HEIC goes as a link instead.
+    private nonisolated static let inlineImageTypes: Set<UTType> = [.png, .jpeg, .gif, .webP]
+
     /// Reads image files, so call it off the main actor. A file that cannot be read goes as a link.
     nonisolated static func promptBlocks(text: String, attachments: [URL], acceptsImages: Bool) -> [ContentBlock] {
         var blocks: [ContentBlock] = []
@@ -139,7 +143,7 @@ extension ChatSession {
 
     private nonisolated static func block(for url: URL, acceptsImages: Bool) -> ContentBlock {
         let type = UTType(filenameExtension: url.pathExtension)
-        if acceptsImages, let type, type.conforms(to: .image), let mimeType = type.preferredMIMEType,
+        if acceptsImages, let type, inlineImageTypes.contains(type), let mimeType = type.preferredMIMEType,
            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maximumInlineImageBytes,
            let data = try? Data(contentsOf: url)
         {
@@ -217,6 +221,14 @@ extension ChatSession {
     public func respond(to request: ChatPermissionRequest, optionId: String) async {
         guard let index = permissionRequests.firstIndex(where: { $0.id == request.id }) else { return }
         permissionRequests.remove(at: index)
+        switch request.options.first(where: { $0.optionId == optionId })?.kind {
+        case .rejectOnce, .rejectAlways:
+            // Agents need not report a refused call (Codex never does), and the status line
+            // would name it as running for the rest of the turn. One that does report it wins.
+            transcript.markToolCallCancelled(id: request.toolCall.toolCallId)
+        default:
+            break
+        }
         if let next = permissionRequests.first {
             emit(Self.attentionEvent(for: next))
         } else {

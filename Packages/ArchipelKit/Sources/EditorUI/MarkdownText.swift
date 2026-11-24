@@ -46,11 +46,17 @@ enum MarkdownMetrics {
 struct MarkdownBlockStack: View {
     let blocks: [MarkdownBlock]
     let spacing: CGFloat
+    /// The place of the first block's text among the document's pieces; see `TextHighlight`.
+    var firstPiece = 0
 
     var body: some View {
+        // Blocks only ever grow at the end, so every earlier block keeps its number while the
+        // last one streams in.
+        let pieces = blocks.reduce(into: [firstPiece]) { starts, block in starts.append(starts[starts.count - 1] + block.pieceCount) }
         VStack(alignment: .leading, spacing: spacing) {
-            ForEach(blocks) { block in
-                MarkdownBlockView(block: block)
+            ForEach(blocks.indices, id: \.self) { index in
+                let block = blocks[index]
+                MarkdownBlockView(block: block, firstPiece: pieces[index])
                     .equatable()
                     // A heading belongs to what follows it, so it sits a little further from
                     // what came before.
@@ -66,38 +72,40 @@ private extension MarkdownBlock {
     }
 }
 
-/// Equatable on the block alone, so while the last block grows SwiftUI skips all the others.
+/// Equatable on the block and its place, so while the last block grows SwiftUI skips all the
+/// others.
 struct MarkdownBlockView: View, Equatable {
     let block: MarkdownBlock
+    var firstPiece = 0
 
     var body: some View {
         switch block.kind {
         case .paragraph(let text):
-            Text(text)
+            HighlightedText(text, piece: firstPiece)
                 .lineSpacing(MarkdownMetrics.lineSpacing)
                 .fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let text):
-            Text(text)
+            HighlightedText(text, piece: firstPiece)
                 .font(Self.font(forHeading: level))
                 .accessibilityAddTraits(.isHeader)
                 .fixedSize(horizontal: false, vertical: true)
         case .codeBlock(let language, let code):
-            MarkdownCodeBlock(language: language, code: code)
+            MarkdownCodeBlock(language: language, code: code, piece: firstPiece)
         case .blockQuote(let blocks):
             HStack(alignment: .top, spacing: 10) {
                 Capsule()
                     .fill(.tertiary)
                     .frame(width: 3)
-                MarkdownBlockStack(blocks: blocks, spacing: MarkdownMetrics.blockSpacing)
+                MarkdownBlockStack(blocks: blocks, spacing: MarkdownMetrics.blockSpacing, firstPiece: firstPiece)
                     .foregroundStyle(.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
         case .unorderedList(let items):
-            MarkdownList(items: items, start: nil)
+            MarkdownList(items: items, start: nil, firstPiece: firstPiece)
         case .orderedList(let start, let items):
-            MarkdownList(items: items, start: start)
+            MarkdownList(items: items, start: start, firstPiece: firstPiece)
         case .table(let table):
-            MarkdownTableView(table: table)
+            MarkdownTableView(table: table, firstPiece: firstPiece)
         case .thematicBreak:
             Divider()
                 .padding(.vertical, 4)
@@ -124,14 +132,19 @@ struct MarkdownList: View {
     let items: [MarkdownListItem]
     /// Nil for an unordered list.
     let start: Int?
+    var firstPiece = 0
     @Environment(\.markdownListDepth) private var depth
 
     var body: some View {
+        let pieces = items.reduce(into: [firstPiece]) { starts, item in
+            starts.append(starts[starts.count - 1] + MarkdownBlock.pieceCount(of: item.blocks))
+        }
         VStack(alignment: .leading, spacing: MarkdownMetrics.listItemSpacing) {
-            ForEach(items) { item in
+            ForEach(items.indices, id: \.self) { index in
+                let item = items[index]
                 HStack(alignment: .firstTextBaseline, spacing: MarkdownMetrics.markerSpacing) {
                     marker(for: item)
-                    MarkdownBlockStack(blocks: item.blocks, spacing: MarkdownMetrics.listItemSpacing + 2)
+                    MarkdownBlockStack(blocks: item.blocks, spacing: MarkdownMetrics.listItemSpacing + 2, firstPiece: pieces[index])
                 }
             }
         }
@@ -181,6 +194,8 @@ struct MarkdownList: View {
 
 struct MarkdownTableView: View {
     let table: MarkdownTable
+    /// The place of the first header cell; the cells follow row by row, as they are searched.
+    var firstPiece = 0
 
     /// Past this a cell wraps instead of pushing the table ever wider.
     private static let maximumCellWidth: CGFloat = 320
@@ -190,16 +205,18 @@ struct MarkdownTableView: View {
             Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
                 GridRow {
                     ForEach(Array(table.header.enumerated()), id: \.offset) { column, cell in
-                        self.cell(cell, column: column)
+                        self.cell(cell, column: column, piece: firstPiece + column)
                             .fontWeight(.semibold)
                             .gridColumnAlignment(horizontalAlignment(column))
                     }
                 }
-                ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
+                ForEach(Array(table.rows.enumerated()), id: \.offset) { index, row in
+                    // Every row has as many cells as the table has columns.
+                    let rowStart = firstPiece + table.header.count + index * table.alignments.count
                     Divider()
                     GridRow {
                         ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
-                            self.cell(cell, column: column)
+                            self.cell(cell, column: column, piece: rowStart + column)
                         }
                     }
                 }
@@ -210,9 +227,9 @@ struct MarkdownTableView: View {
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
     }
 
-    private func cell(_ text: AttributedString, column: Int) -> some View {
+    private func cell(_ text: AttributedString, column: Int, piece: Int) -> some View {
         CappedWidthLayout(maximumWidth: Self.maximumCellWidth) {
-            Text(text)
+            HighlightedText(text, piece: piece)
                 .multilineTextAlignment(textAlignment(column))
         }
         .padding(.vertical, 5)
@@ -262,10 +279,13 @@ struct MarkdownCodeBlock: View {
     let code: String
     /// Nil for a block without a language, which has no header row.
     let language: String?
+    /// The code's place among the pieces of its Markdown document.
+    let piece: Int?
 
-    init(language: String?, code: String) {
+    init(language: String?, code: String, piece: Int? = nil) {
         self.language = language.flatMap { $0.isEmpty ? nil : $0 }
         self.code = code
+        self.piece = piece
     }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -288,7 +308,7 @@ struct MarkdownCodeBlock: View {
                 .padding(.top, 4)
             }
             ScrollView(.horizontal) {
-                Text(displayed)
+                HighlightedText(displayed, piece: piece)
                     .font(.system(size: MarkdownMetrics.codeFontSize, design: .monospaced))
                     .lineSpacing(2)
                     .fixedSize()

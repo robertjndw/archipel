@@ -40,7 +40,7 @@ let package = Package(
             ]
         ),
         // The native chat: one conversation with an agent over ACP, and how its process is launched.
-        .target(name: "ChatUI", dependencies: ["ACPKit", "AgentKit", "ArchipelCore", "EditorUI", "UISupport"]),
+        .target(name: "ChatUI", dependencies: ["ACPKit", "AgentKit", "ArchipelCore", "EditorUI", "GitKit", "UISupport"]),
         // Manual verification harness; see Sources/editor-demo/main.swift for usage.
         .executableTarget(name: "editor-demo", dependencies: ["EditorUI"]),
         .executableTarget(name: "archipel-hook"),

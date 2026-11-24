@@ -160,6 +160,23 @@ struct ChatTranscriptTests {
         #expect(statuses == [.completed, .cancelled, .cancelled, .failed])
     }
 
+    @Test func oneCallCanBeMarkedCancelledAndTheAgentStillHasTheLastWord() {
+        var transcript = folded([
+            .toolCall(ToolCall(toolCallId: "refused", title: "", status: .pending)),
+            .toolCall(ToolCall(toolCallId: "running", title: "", status: .inProgress)),
+            .toolCall(ToolCall(toolCallId: "done", title: "", status: .completed)),
+        ])
+        transcript.markToolCallCancelled(id: "refused")
+        transcript.markToolCallCancelled(id: "done")
+        transcript.markToolCallCancelled(id: "unknown")
+        #expect(transcript.toolCall(id: "refused")?.status == .cancelled)
+        #expect(transcript.toolCall(id: "running")?.status == .inProgress)
+        #expect(transcript.toolCall(id: "done")?.status == .completed)
+        // An agent that does report what became of the call overwrites the guess.
+        transcript.apply(.toolCallUpdate(ToolCallUpdate(toolCallId: "refused", status: .failed)))
+        #expect(transcript.toolCall(id: "refused")?.status == .failed)
+    }
+
     @Test func liveUserChunksAreIgnoredByDefault() {
         var live = ChatTranscript()
         #expect(live.ignoresUserMessageChunks)

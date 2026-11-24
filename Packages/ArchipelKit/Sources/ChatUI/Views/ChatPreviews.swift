@@ -45,6 +45,47 @@ private func chatPreview(_ session: ChatSession, width: CGFloat = previewSize.wi
     LiveStreamingPreview()
 }
 
+#Preview("Working, a Minute In") {
+    let session = ChatSession.preview(.streaming)
+    session.viewState.setTurnClock(TurnClock(turn: 0, elapsed: 72))
+    return chatPreview(session)
+}
+
+#Preview("Working Status") {
+    VStack(alignment: .leading, spacing: 0) {
+        WorkingStatusLine(phrase: WorkingStatus.working, anchor: .now)
+        WorkingStatusLine(phrase: WorkingStatus.thinking, anchor: .now.addingTimeInterval(-8))
+        WorkingStatusLine(phrase: "Reading ChatTranscriptView.swift", anchor: .now.addingTimeInterval(-72))
+        WorkingStatusLine(phrase: "Running swift build -c release --product archipel-hook", anchor: .now.addingTimeInterval(-3840))
+        WorkingStatusLine(phrase: WorkingStatus.stopping, anchor: nil)
+    }
+    .padding(20)
+    .frame(width: 360, alignment: .leading)
+    .background(Color(nsColor: .textBackgroundColor))
+}
+
+#Preview("Find") {
+    let session = ChatSession.preview(.finished)
+    session.viewState.find.present()
+    session.viewState.find.query = "password"
+    return chatPreview(session)
+}
+
+#Preview("Find, Dark") {
+    let session = ChatSession.preview(.finished)
+    session.viewState.find.present()
+    session.viewState.find.query = "login"
+    return chatPreview(session)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Find, Narrow, Not Found") {
+    let session = ChatSession.preview(.finished)
+    session.viewState.find.present()
+    session.viewState.find.query = "logout"
+    return chatPreview(session, width: 480)
+}
+
 #Preview("Awaiting Permission") {
     chatPreview(.preview(.awaitingPermission))
 }

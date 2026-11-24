@@ -78,6 +78,12 @@ struct RootView: View {
             IslandEditor(mode: .create)
         }
         .renameAlert($model.renameRequest)
+        // A sidebar tip with a hidden sidebar has nowhere to show, and would keep every tip
+        // after it in the group waiting. The sidebar's own appearing and disappearing cannot say
+        // this: a collapsed column stays in the view tree.
+        .onChange(of: isSidebarCollapsed, initial: true) {
+            SidebarTips.sidebarVisibilityChanged(!isSidebarCollapsed)
+        }
         .alert("Archipel ran into a problem", item: $model.problem) { _ in
             Button("OK") {}
         } message: { problem in

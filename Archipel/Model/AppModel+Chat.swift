@@ -66,12 +66,19 @@ extension AppModel {
                 return
             }
             guard let launcher = chatLauncher(for: adapter, inPATH: path) else { return }
-            let chat = ChatSession(configuration: .init(
+            var configuration = ChatSession.Configuration(
                 launcher: launcher,
                 workingDirectory: worktree.path.path(percentEncoded: false),
                 existingAgentSessionID: session.agentSessionID,
                 clientInfo: Self.chatClientInfo
-            ))
+            )
+            // Files for @ mentions. Checked at each listing and not here, since git can be
+            // installed while the chat is open. Throwing makes the chat walk the folder itself.
+            configuration.listFiles = { [weak self, git] folder in
+                guard await self?.isGitAvailable == true else { throw CocoaError(.featureUnsupported) }
+                return try await git.listFiles(in: folder)
+            }
+            let chat = ChatSession(configuration: configuration)
             chat.onEvent = { [weak self, weak chat] event in
                 // A chat replaced by a restart or a switch may still be finishing a step.
                 guard let self, let chat, self.chats[id] === chat else { return }

@@ -15,6 +15,11 @@ struct ComposerTextView: NSViewRepresentable {
     let focusRequests: Int
     var maximumLines = 8
     let accessibilityLabel: String
+    /// Gets hold of the text view, for edits at the cursor.
+    let editor: ComposerEditor
+    /// The selection after every move of it, in UTF-16 units. A file mention is completed where
+    /// the cursor is, which the text alone does not say.
+    let onSelectionChange: @MainActor (NSRange) -> Void
     /// Decides what a key does and carries it out, except for the two things only the text view
     /// can do: `.insertNewline` and `.passThrough`.
     let onCommand: @MainActor (ComposerCommand, _ hasMarkedText: Bool) -> ComposerAction
@@ -71,6 +76,9 @@ struct ComposerTextView: NSViewRepresentable {
         scrollView.scrollerStyle = .overlay
         scrollView.documentView = textView
         context.coordinator.textView = textView
+        editor.textView = textView
+        // A draft that was there before the view puts the cursor at its end.
+        context.coordinator.reportSelection(deferred: true)
         return scrollView
     }
 
@@ -82,8 +90,11 @@ struct ComposerTextView: NSViewRepresentable {
         // Never while an input method composes: replacing the string would throw its marked text
         // away mid-word.
         if textView.string != text, !textView.hasMarkedText() {
+            coordinator.isUpdatingView = true
             textView.replaceText(with: text)
+            coordinator.isUpdatingView = false
             coordinator.updateHeight()
+            coordinator.reportSelection(deferred: true)
         }
         if coordinator.lastFocusRequest != focusRequests {
             coordinator.lastFocusRequest = focusRequests
@@ -100,9 +111,32 @@ struct ComposerTextView: NSViewRepresentable {
         var parent: ComposerTextView
         weak var textView: ComposerNSTextView?
         var lastFocusRequest: Int?
+        /// Set while `updateNSView` replaces the text, when the selection moves inside a SwiftUI
+        /// update and cannot be reported on the spot.
+        var isUpdatingView = false
+        /// What the composer was told last, so only a selection that moved is reported.
+        private var reportedSelection: NSRange?
 
         init(_ parent: ComposerTextView) {
             self.parent = parent
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            reportSelection(deferred: isUpdatingView)
+        }
+
+        /// Typing reports at once, so the composer sees the new text and cursor in one update.
+        /// `deferred` is for a move made inside a SwiftUI update, where state cannot change.
+        func reportSelection(deferred: Bool) {
+            guard !deferred else {
+                Task { @MainActor [weak self] in self?.reportSelection(deferred: false) }
+                return
+            }
+            guard let textView else { return }
+            let selection = textView.selectedRange()
+            guard selection != reportedSelection else { return }
+            reportedSelection = selection
+            parent.onSelectionChange(selection)
         }
 
         func textDidChange(_ notification: Notification) {
@@ -160,6 +194,20 @@ struct ComposerTextView: NSViewRepresentable {
     }
 }
 
+/// The composer's hold on its text view, for the one thing a binding to the text cannot do: an
+/// edit at the cursor that leaves the cursor there. Setting the text through the binding puts the
+/// cursor at the end and drops the undo history.
+@MainActor
+final class ComposerEditor {
+    fileprivate(set) weak var textView: ComposerNSTextView?
+
+    /// See `ComposerNSTextView.replaceAsTyped`. False as well before the text view exists.
+    @discardableResult
+    func replace(_ range: NSRange, with text: String, alongside: ComposerNSTextView.SideEffect? = nil) -> Bool {
+        textView?.replaceAsTyped(range, with: text, alongside: alongside) ?? false
+    }
+}
+
 final class ComposerNSTextView: NSTextView {
     var onFiles: (([URL]) -> Void)?
     private var wantsFocus = false
@@ -211,6 +259,44 @@ final class ComposerNSTextView: NSTextView {
             if let textStorage { undoManager.removeAllActions(withTarget: textStorage) }
         }
         setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+    }
+
+    /// Replaces `range` the way typing would: the rest of the text and its undo history stay, the
+    /// change can be undone, and the cursor ends up behind the new text. For an edit in the middle
+    /// of a draft, where `replaceText(with:)` would throw away what was typed around it.
+    ///
+    /// `alongside` is what else the edit does outside the text, such as attaching the file a
+    /// mention names. It joins the edit's undo step. The caller does it the first time.
+    ///
+    /// False, changing nothing, when the range is not in the text or an input method is
+    /// composing: its marked text is not the app's to replace.
+    @discardableResult
+    func replaceAsTyped(_ range: NSRange, with text: String, alongside: SideEffect? = nil) -> Bool {
+        guard !hasMarkedText(), range.location != NSNotFound, NSMaxRange(range) <= (string as NSString).length else { return false }
+        // A step of its own for Undo, apart from the typing before and after it.
+        breakUndoCoalescing()
+        insertText(text, replacementRange: range)
+        // Same event as the text's own undo, so the two form one group. The text view is the
+        // target, so `replaceText(with:)` drops it along with the typing.
+        if let alongside { registerUndo(alongside.undo, redo: alongside.redo) }
+        breakUndoCoalescing()
+        return true
+    }
+
+    /// Something an edit did besides changing the text, and how to take it back and do it again.
+    struct SideEffect {
+        var undo: @MainActor () -> Void
+        var redo: @MainActor () -> Void
+    }
+
+    private func registerUndo(_ undo: @escaping @MainActor () -> Void, redo: @escaping @MainActor () -> Void) {
+        undoManager?.registerUndo(withTarget: self) { view in
+            MainActor.assumeIsolated {
+                undo()
+                // Registered while undoing, this is what Redo runs, and the other way around.
+                view.registerUndo(redo, redo: undo)
+            }
+        }
     }
 
     // MARK: Files

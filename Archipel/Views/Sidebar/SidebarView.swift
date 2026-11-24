@@ -45,6 +45,9 @@ struct SidebarView: View {
                 IslandSwitcher(swipe: swipe)
                     .popoverTip(SidebarTips.group.currentTip as? IslandSwipeTip, arrowEdge: .top)
                     .tipViewStyle(CompactTipStyle())
+                    // Its tip has no place while the filter takes the switcher away.
+                    .onAppear { SidebarTips.islandSwitcherVisibilityChanged(true) }
+                    .onDisappear { SidebarTips.islandSwitcherVisibilityChanged(false) }
             }
         }
         .islandSwipe(swipe, isEnabled: !model.showsOnlyNeedsMe)

@@ -27,12 +27,16 @@ public struct ChatView: View {
             .environment(\.chatGutter, ChatMetrics.gutter(forPaneWidth: paneWidth))
             .environment(\.chatAgentSymbol, agentSymbol)
             .environment(\.chatWorkingDirectory, session.configuration?.workingDirectory)
+            .environment(\.chatAgentName, session.agentName)
             .environment(\.chatDiffCache, session.diffCache)
             // Links in replies go where the app sends links, not straight to the browser.
             .environment(\.openURL, OpenURLAction { url in
                 actions.openLink(url)
                 return .handled
             })
+            // From the first moment the chat is on screen, so the status line can say how long
+            // a turn has been running even after its tab was switched away from and back.
+            .task(id: ObjectIdentifier(session)) { session.viewState.follow(session) }
     }
 
     @ViewBuilder private var content: some View {

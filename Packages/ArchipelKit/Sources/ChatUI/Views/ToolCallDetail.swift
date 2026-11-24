@@ -1,4 +1,5 @@
 import ACPKit
+import EditorUI
 import SwiftUI
 import UISupport
 
@@ -8,9 +9,6 @@ struct ToolCallDetail: View {
     let openFile: (URL, Int?) -> Void
 
     @Environment(\.chatWorkingDirectory) private var workingDirectory
-
-    /// A search can list hundreds of hits; the first few say where it looked.
-    private static let maximumLocations = 6
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -40,25 +38,26 @@ struct ToolCallDetail: View {
     }
 
     private var locations: some View {
-        let unique = call.locations.reduce(into: [ToolCallLocation]()) { result, location in
-            if !result.contains(location) { result.append(location) }
-        }
-        let shown = unique.prefix(Self.maximumLocations)
+        let (shown, more) = call.listedLocations
         return VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(shown.enumerated()), id: \.offset) { _, location in
                 Button {
                     openFile(location.url, location.line)
                 } label: {
-                    Label(location.displayLabel(relativeTo: workingDirectory), systemImage: FileSymbol.name(for: location.url.lastPathComponent))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    Label {
+                        SearchableText(text: location.displayLabel(relativeTo: workingDirectory))
+                    } icon: {
+                        Image(systemName: FileSymbol.name(for: location.url.lastPathComponent))
+                    }
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 }
                 .buttonStyle(.link)
                 .help(location.path)
                 .accessibilityHint("Opens the file")
             }
-            if unique.count > shown.count {
-                Text("and \(unique.count - shown.count) more")
+            if more > 0 {
+                Text("and \(more) more")
                     .foregroundStyle(.tertiary)
             }
         }
@@ -73,12 +72,19 @@ struct OutputBlock: View {
 
     private static let padding: CGFloat = 10
 
+    @Environment(\.textHighlight) private var highlight
+    @State private var position = ScrollPosition(edge: .bottom)
+
     var body: some View {
         let tail = OutputTail.tail(of: text)
         let rows = tail.lineCount + (tail.hiddenLines > 0 ? 1 : 0)
         // Lines never wrap, so the height is known without measuring. A scroll view would
         // otherwise take the whole cap even for two lines.
         let height = CGFloat(max(rows, 1)) * ChatMetrics.codeLineHeight + Self.padding * 2
+        let shownHeight = min(height, maximumHeight)
+        // The line Find is on, when it is in this block. The block shows a dozen lines of up to
+        // four hundred, so the hit is brought into it like the transcript brings its row.
+        let currentRow = highlight?.currentLine(in: tail.text).map { $0 + (tail.hiddenLines > 0 ? 1 : 0) }
 
         ScrollView([.vertical, .horizontal]) {
             VStack(alignment: .leading, spacing: 0) {
@@ -87,7 +93,7 @@ struct OutputBlock: View {
                         .foregroundStyle(.tertiary)
                         .frame(height: ChatMetrics.codeLineHeight)
                 }
-                Text(verbatim: tail.text)
+                SearchableText(text: tail.text)
                     .lineSpacing(ChatMetrics.codeLineHeight - Self.naturalLineHeight)
                     .fixedSize()
                     .textSelection(.enabled)
@@ -99,8 +105,14 @@ struct OutputBlock: View {
         .scrollBounceBehavior(.basedOnSize, axes: [.vertical, .horizontal])
         // The end of the output is the result, so a long one opens there.
         .defaultScrollAnchor(.bottomLeading)
+        .scrollPosition($position)
+        // Also when the block first shows: Find opens the row with the hit already current.
+        .onChange(of: currentRow, initial: true) {
+            guard let currentRow else { return }
+            position.scrollTo(y: CodeBlockScroll.offset(centering: currentRow, padding: Self.padding, blockHeight: shownHeight))
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: min(height, maximumHeight))
+        .frame(height: shownHeight)
         .background(.quinary, in: .rect(cornerRadius: ChatMetrics.blockRadius, style: .continuous))
     }
 
@@ -110,4 +122,26 @@ struct OutputBlock: View {
         let font = NSFont.monospacedSystemFont(ofSize: ChatMetrics.codeFontSize, weight: .regular)
         return NSLayoutManager().defaultLineHeight(for: font)
     }()
+}
+
+/// Where a block of fixed-height code lines scrolls to for Find.
+enum CodeBlockScroll {
+    /// The offset that puts line `row`, counted from zero, in the middle of a block
+    /// `blockHeight` tall whose lines start `padding` below its top. Lines never wrap and are
+    /// `ChatMetrics.codeLineHeight` tall, so nothing has to be measured.
+    static func offset(centering row: Int, padding: CGFloat, blockHeight: CGFloat) -> CGFloat {
+        max(0, padding + CGFloat(row) * ChatMetrics.codeLineHeight - (blockHeight - ChatMetrics.codeLineHeight) / 2)
+    }
+}
+
+extension TextHighlight {
+    /// The line of `text` the current hit is in, counted from zero. Nil unless `text` is the
+    /// piece the search is on.
+    func currentLine(in text: String) -> Int? {
+        guard let current, current.text == text else { return nil }
+        let ranges = Self.ranges(of: query, in: text)
+        guard ranges.indices.contains(current.occurrence) else { return nil }
+        let newline = UInt8(ascii: "\n")
+        return text[..<ranges[current.occurrence].lowerBound].utf8.count { $0 == newline }
+    }
 }

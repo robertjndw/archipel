@@ -62,6 +62,11 @@ public final class ChatSession {
     let configuration: Configuration?
     /// The diffs of this chat's edits, worked out once each, off the main actor.
     @ObservationIgnored let diffCache = DiffCache()
+    /// What the views keep with the session so that it outlives them: the turn's clock and Find.
+    @ObservationIgnored let viewState = ChatViewState()
+    /// The files an @ in the composer can mention. Nil only for a preview session that sets
+    /// none, where the composer offers no files.
+    @ObservationIgnored var fileIndex: WorktreeFileIndex?
     @ObservationIgnored var client: ACPClient?
     @ObservationIgnored var connection: ChatAgentConnection?
     /// The inbox of the current client. Events drained from any other inbox belong to a client
@@ -112,6 +117,10 @@ public final class ChatSession {
         agentName = configuration.agentName
         phase = .starting(.preparing)
         transcript = ChatTranscript()
+        fileIndex = WorktreeFileIndex(
+            root: URL(filePath: configuration.workingDirectory, directoryHint: .isDirectory),
+            list: configuration.listFiles
+        )
     }
 
     /// A session with fixed content and no process, for previews. Actions do nothing.

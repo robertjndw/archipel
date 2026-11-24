@@ -44,18 +44,6 @@ enum ChatRow: Identifiable, Equatable, Sendable {
         return rows
     }
 
-    /// Whether to show that the agent is busy although nothing on screen moves: after the prompt
-    /// and between steps. A streaming message, a running tool call and a permission card each
-    /// show it themselves.
-    static func showsWorking(items: [ChatItem], isTurnRunning: Bool, isAwaitingPermission: Bool) -> Bool {
-        guard isTurnRunning, !isAwaitingPermission else { return false }
-        switch items.last {
-        case nil, .userMessage: return true
-        case .agentMessage, .agentThought: return false
-        case let .toolCall(call): return call.status.isFinished
-        }
-    }
-
     private enum Family {
         case user, agent, activity
     }
@@ -81,6 +69,86 @@ enum ChatRow: Identifiable, Equatable, Sendable {
         case (.activity, .activity): return 0
         default: return 14
         }
+    }
+
+    /// The room between the last row and the status line under it. After tool calls and thoughts
+    /// the line stands a little apart. Under a reply it takes exactly the room the Copy button gets
+    /// once the turn is over, since the transcript rests on its last line and any difference would
+    /// move everything at the end of every turn.
+    static func statusSpacing(after last: ChatRow?) -> CGFloat {
+        switch last?.family {
+        case nil: 0
+        case .user: 20
+        case .agent: ChatMetrics.replyFooterHeight - ChatMetrics.activityRowHeight
+        case .activity: 6
+        }
+    }
+
+    // MARK: Find
+
+    /// Whether the transcript item `itemID` is drawn in this row.
+    func contains(itemID: String) -> Bool {
+        switch self {
+        case let .user(message), let .agent(message, _, _), let .thought(message, _):
+            message.id == itemID
+        case let .tools(_, calls):
+            calls.contains { ChatItem.toolCall($0).id == itemID }
+        }
+    }
+
+    /// Roughly where in this row `match` sits, from 0 at the row's top to 1 at its bottom. Nil
+    /// when the hit is in another row.
+    func position(of match: ChatFindMatch) -> Double? {
+        switch self {
+        case let .user(message), let .agent(message, _, _), let .thought(message, _):
+            return message.id == match.itemID ? match.position : nil
+        case let .tools(_, calls):
+            // The calls of a group are taken as equally tall, which is right until one is opened
+            // and close enough after.
+            guard let index = calls.firstIndex(where: { ChatItem.toolCall($0).id == match.itemID }) else { return nil }
+            return (Double(index) + match.position) / Double(calls.count)
+        }
+    }
+
+    /// Where to scroll for `match`: the row it is in, and how far down that row the hit sits,
+    /// from 0 at its top to 1 at its end.
+    static func scrollTarget(for match: ChatFindMatch, in rows: [ChatRow]) -> (rowID: String, position: Double)? {
+        for row in rows {
+            if let position = row.position(of: match) {
+                return (row.id, min(max(position, 0), 1))
+            }
+        }
+        return nil
+    }
+
+    /// The anchor that makes `scrollTo` bring the part of a row at `position` to rest inside the pane.
+    ///
+    /// A message can be several panes tall, so bringing the row into view is not enough. The hit
+    /// lands as far down the pane as it is down its row. The outer tenths of the pane are left out,
+    /// where the find bar and Jump to Latest float.
+    ///
+    /// `scrollTo` lines up the same unit point of the row and of the pane, so the hit comes to rest
+    /// at `a * pane + hit - a * row` for an anchor `a`, and this solves for `a`. A fixed anchor would
+    /// put the first and last lines of a row taller than the pane outside it. The result can lie
+    /// outside 0...1, which `scrollTo` accepts. Without a height (the lazy stack never built the
+    /// row) the anchor is the position itself, which lands inside the pane whatever the height is.
+    ///
+    /// `spacingAbove` is the room above the row that the view being scrolled to includes.
+    static func scrollAnchor(position: Double, rowHeight: CGFloat?, paneHeight: CGFloat, spacingAbove: CGFloat = 0) -> Double {
+        let position = min(max(position, 0), 1)
+        guard let rowHeight, rowHeight > 0, paneHeight > 0 else { return position }
+        let hit = spacingAbove + position * max(0, rowHeight - spacingAbove)
+        // A row as tall as the pane fills it whatever the anchor.
+        guard abs(paneHeight - rowHeight) >= 1 else { return hit / rowHeight }
+        let rest = (0.12 + 0.76 * position) * paneHeight
+        return (rest - hit) / (paneHeight - rowHeight)
+    }
+
+    /// Whether a row is on screen from its first line to its last, clear of the `covered` points
+    /// at the pane's top that the find bar floats over. Stepping to a hit in such a row needs no
+    /// scrolling: the mark moves, and the page should not.
+    static func isInView(top: CGFloat, height: CGFloat, metrics: ScrollMetrics, covered: CGFloat) -> Bool {
+        top - metrics.offset >= covered && top + height - metrics.offset <= metrics.viewportHeight
     }
 }
 
@@ -109,5 +177,13 @@ enum ScrollFollowing {
         let contentShrank = new.contentHeight < old.contentHeight - 1
         if movedUp, !contentShrank { return false }
         return was
+    }
+
+    /// Where to scroll so the text stays where it is on screen while the room above the first row
+    /// changes by `change`. Nil at the conversation's very start, where the text is meant to move: it
+    /// rests below the find bar and comes back up when the bar goes.
+    static func offset(keepingTextAt offset: CGFloat, whenTopInsetChangesBy change: CGFloat) -> CGFloat? {
+        guard offset > 0 else { return nil }
+        return max(0, offset + change)
     }
 }

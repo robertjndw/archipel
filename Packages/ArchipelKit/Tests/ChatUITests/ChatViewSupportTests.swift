@@ -212,6 +212,18 @@ struct ComposerKeysTests {
         #expect(action(.escape) { $0.isTurnRunning = true } == .cancelTurn)
         #expect(action(.escape) == .swallow)
     }
+
+    @Test func escapeClosesFindBeforeItAnswersACardOrStopsTheTurn() {
+        #expect(action(.escape) { $0.isFindVisible = true } == .dismissFind)
+        #expect(action(.escape) { $0.isFindVisible = true; $0.isTurnRunning = true } == .dismissFind)
+        #expect(action(.escape) { $0.isFindVisible = true; $0.canRejectPermission = true } == .dismissFind)
+        // The list above the composer was opened after Find, so it goes first.
+        #expect(action(.escape) { $0.isFindVisible = true; $0.isCompletionVisible = true } == .dismissCompletion)
+        // Find takes no other key from the composer.
+        #expect(action(.newline(modified: false)) { $0.isFindVisible = true; $0.canSend = true; $0.isDraftEmpty = false } == .send)
+        #expect(action(.up) { $0.isFindVisible = true; $0.canRecallOlder = true } == .recallPrompt(older: true))
+        #expect(action(.escape) { $0.isFindVisible = true; $0.hasMarkedText = true } == .passThrough)
+    }
 }
 
 @Suite
@@ -283,6 +295,19 @@ struct ComposerHabitsTests {
         #expect(mode(current: "auto").nextChoice?.value == "ask")
         #expect(mode(current: nil).nextChoice?.value == "ask")
         #expect(ChatControl(id: "t", name: "T", category: .mode, value: .toggle(true)).nextChoice == nil)
+    }
+
+    @Test func aSecondPressBeforeTheAnswerGoesOnFromTheModeAskedFor() {
+        let control = ChatControl(
+            id: "mode", name: "Mode", category: .mode,
+            value: .select(current: "ask", groups: [.init(name: nil, choices: ["ask", "plan", "auto"].map { ConfigOptionValue(value: $0, name: $0) })])
+        )
+        // The control still says "ask" while "plan" is on its way to the agent.
+        #expect(control.nextChoice(after: nil)?.value == "plan")
+        #expect(control.nextChoice(after: "plan")?.value == "auto")
+        #expect(control.nextChoice(after: "auto")?.value == "ask")
+        // A pending mode the agent no longer offers starts over.
+        #expect(control.nextChoice(after: "gone")?.value == "ask")
     }
 }
 
@@ -379,19 +404,6 @@ struct ChatRowTests {
         #expect(rows.map(\.id) == ["u"])
     }
 
-    @Test func workingShowsOnlyWhenNothingElseDoes() {
-        func shows(_ items: [ChatItem], running: Bool = true, permission: Bool = false) -> Bool {
-            ChatRow.showsWorking(items: items, isTurnRunning: running, isAwaitingPermission: permission)
-        }
-        #expect(shows([.userMessage(message("u"))]))
-        #expect(shows([.userMessage(message("u")), call("a", .completed)]))
-        #expect(!shows([.userMessage(message("u")), call("a", .inProgress)]))
-        #expect(!shows([.userMessage(message("u")), .agentMessage(message("m"))]))
-        #expect(!shows([.userMessage(message("u")), .agentThought(message("t"))]))
-        #expect(!shows([.userMessage(message("u"))], running: false))
-        #expect(!shows([.userMessage(message("u")), call("a", .completed)], permission: true))
-    }
-
     @Test func spacingGroupsATurnAndSeparatesPrompts() {
         let user = ChatRow.user(message("u"))
         let thought = ChatRow.thought(message("t"), isStreaming: false)
@@ -430,6 +442,22 @@ struct ScrollFollowingTests {
         let old = metrics(offset: 300, content: 1000)
         let new = metrics(offset: 470, content: 1000)
         #expect(ScrollFollowing.isFollowing(was: false, old: old, new: new))
+    }
+
+    @Test func roomAboveTheFirstRowLeavesTheTextBeingReadWhereItIs() {
+        // The find bar opens: everything is 36 points further down, and so is the reader.
+        #expect(ScrollFollowing.offset(keepingTextAt: 800, whenTopInsetChangesBy: 36) == 836)
+        #expect(ScrollFollowing.offset(keepingTextAt: 836, whenTopInsetChangesBy: -36) == 800)
+        // Opened near the start and closed nearer still: there is no further up than the top.
+        #expect(ScrollFollowing.offset(keepingTextAt: 20, whenTopInsetChangesBy: -36) == 0)
+        // At the very start the text moves, to rest below the bar and to come back up after.
+        #expect(ScrollFollowing.offset(keepingTextAt: 0, whenTopInsetChangesBy: 36) == nil)
+        #expect(ScrollFollowing.offset(keepingTextAt: 0, whenTopInsetChangesBy: -36) == nil)
+        // Staying put neither stops nor starts following.
+        let old = metrics(offset: 800, content: 3000)
+        let new = metrics(offset: 836, content: 3036)
+        #expect(!ScrollFollowing.isFollowing(was: false, old: old, new: new))
+        #expect(!ScrollFollowing.isFollowing(was: false, old: new, new: old))
     }
 
     @Test func aShrinkingPaneKeepsFollowing() {
@@ -700,6 +728,39 @@ struct ChatControlLabelTests {
         #expect(shortlist?.others.flatMap(\.choices).map(\.value) == ["a/2", "a/3", "b/4", "c/1", "c/3"])
     }
 
+    @Test func starredModelsComeRightAfterTheOneInUse() {
+        let control = models(manyModels, current: "b/3")
+        // The model in use, the starred ones, and the recent ones for what is left. Without the
+        // stars the provider's first models would have taken the places of a/3 and c/3.
+        let shortlist = control.modelShortlist(favorites: ["c/3", "gone", "a/3"], recent: ["c/2", "a/1", "b/1"])
+        #expect(shortlist?.shown.map(\.value) == ["a/1", "a/3", "b/3", "c/2", "c/3"])
+        // More stars than places: the agent's order decides, not the order they were starred in.
+        let many = control.modelShortlist(favorites: ["c/3", "c/2", "c/1", "a/1", "a/2"], recent: [])
+        #expect(many?.shown.map(\.value) == ["a/1", "a/2", "b/3", "c/1", "c/2"])
+    }
+
+    @Test func theSettingsPopoverNamesAModelWithoutItsProviderAndCutsALongOne() {
+        func model(_ name: String) -> ChatControl {
+            ChatControl(
+                id: "model", name: "Model", category: .model,
+                value: .select(current: "anthropic/x", groups: [.init(name: nil, choices: [ConfigOptionValue(value: "anthropic/x", name: name)])])
+            )
+        }
+        #expect(model("anthropic/Claude Fable 5.2").popoverLabel(limit: 28) == "Claude Fable 5.2")
+        let long = model("anthropic/Claude Fable 5.2 with extended thinking (preview)").popoverLabel(limit: 28)
+        #expect(long == "Claude Fable 5…ing (preview)")
+        #expect(long.count <= 28)
+        // Other settings keep their value as it is, and a control without a choice says nothing.
+        let mode = ChatControl(
+            id: "mode", name: "Mode", category: .mode,
+            value: .select(current: "a/b", groups: [.init(name: nil, choices: [ConfigOptionValue(value: "a/b", name: "a/Plan")])])
+        )
+        #expect(mode.popoverLabel(limit: 28) == "a/Plan")
+        #expect(ChatControl(id: "t", name: "T", category: nil, value: .toggle(true)).popoverLabel(limit: 28) == "")
+        #expect(mode.currentValue == "a/b")
+        #expect(ChatControl(id: "t", name: "T", category: nil, value: .toggle(true)).currentValue == nil)
+    }
+
     @Test func withNothingToGoOnTheAgentsFirstModelsAreShown() {
         let plain = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9"]
         #expect(models(plain, current: nil).modelShortlist(recent: [])?.shown.map(\.value) == ["m1", "m2", "m3", "m4", "m5"])
@@ -740,7 +801,8 @@ struct ChatControlLabelTests {
         #expect(style("workspace-write", "Workspace access").symbol == "pencil")
         #expect(style("agent", "Auto review").symbol == "sparkles")
         #expect(style("build", "Build").symbol == "hammer")
-        #expect(style("x", "Something Else") == ChatControl.ModeStyle(symbol: "switch.2"))
+        // A mode no word places goes by its initial; `ModeStyleTests` has the rest of that.
+        #expect(style("x", "Something Else") == ChatControl.ModeStyle(symbol: "s.circle"))
     }
 
     @Test func onlyAModeWithoutLimitsIsMarked() {

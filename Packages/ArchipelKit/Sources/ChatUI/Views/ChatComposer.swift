@@ -15,10 +15,23 @@ struct ChatComposer: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage private var recentModels: String
+    @AppStorage private var favoriteModels: String
     @State private var textHeight = ComposerTextView.lineHeight
     @State private var completionIndex = 0
-    /// The draft at which Esc closed the command list. Typing on brings the list back.
+    /// The draft at which Esc closed the completion list. Typing on brings the list back.
     @State private var dismissedCompletionDraft: String?
+    /// The selection in the draft, as the text view counts it. Says where an @ is being typed.
+    @State private var selection = NSRange(location: 0, length: 0)
+    @State private var mentionMatches = MentionMatches()
+    /// Return came while the list still showed the rows of an earlier keystroke. The search it
+    /// was meant for accepts its own first row once it is back, instead of one of the old rows.
+    @State private var pendingAccept: MentionSearch?
+    /// The mode Shift-Tab asked for last, until the agent answers. Without it a second press
+    /// before the answer would ask for the same mode again.
+    @State private var pendingMode: String?
+    /// Counts the times the file index found the worktree changed, to ask for the matches again.
+    @State private var fileIndexChanges = 0
+    @State private var editor = ComposerEditor()
     @State private var recall = PromptRecall(history: [])
     @State private var isAttaching = false
 
@@ -31,15 +44,40 @@ struct ChatComposer: View {
         self.allowPermission = allowPermission
         self.rejectPermission = rejectPermission
         _recentModels = AppStorage(wrappedValue: "", RecentModels.key(agentName: session.agentName))
+        // Same key the model list stars under, so a narrow pane's shortlist shows the stars.
+        _favoriteModels = AppStorage(wrappedValue: "", FavoriteModels.key(agentName: session.agentName))
     }
 
-    private var completions: [AvailableCommand] {
-        guard dismissedCompletionDraft != session.draft, let query = SlashCommands.query(in: session.draft) else { return [] }
-        return SlashCommands.matches(session.transcript.availableCommands, query: query)
+    /// What the list above the composer offers: commands for a draft that is a "/" word, files
+    /// for an @ at the cursor. A draft is never both, since a command being typed has no space
+    /// for a mention to follow.
+    private var completion: Completion? {
+        guard dismissedCompletionDraft != session.draft else { return nil }
+        if let query = SlashCommands.query(in: session.draft) {
+            let commands = SlashCommands.matches(session.transcript.availableCommands, query: query)
+            return commands.isEmpty ? nil : .commands(commands)
+        }
+        // Matches found for another @ stay hidden until this one's arrive. With none there is no
+        // list and Return sends: "@escaping" in a prompt about code matches no file.
+        guard let mention, mentionMatches.location == mention.range.location, !mentionMatches.files.isEmpty else { return nil }
+        return .files(mentionMatches.files, replacing: mention)
+    }
+
+    private var mention: MentionToken? {
+        guard session.fileIndex != nil else { return nil }
+        return FileMentions.token(in: session.draft, selection: selection)
+    }
+
+    private var mentionSearch: MentionSearch? {
+        mention.map { MentionSearch(location: $0.range.location, query: $0.query, indexChanges: fileIndexChanges) }
     }
 
     var body: some View {
-        let completions = completions
+        let completion = completion
+        let mentionSearch = mentionSearch
+        let rows = completion?.rows ?? []
+        let selectedRow = CompletionSelection.index(completionIndex, count: rows.count)
+        let announcement = completion.flatMap { CompletionList.Announcement(kind: $0.kind, rows: rows, selection: selectedRow) }
 
         VStack(alignment: .leading, spacing: 8) {
             if !session.queuedPrompts.isEmpty {
@@ -52,7 +90,7 @@ struct ChatComposer: View {
             if !session.attachments.isEmpty {
                 FlowLayout(spacing: 6) {
                     ForEach(session.attachments, id: \.self) { url in
-                        AttachmentChip(item: .init(url: url)) { session.removeAttachment(url) }
+                        AttachmentChip(item: .init(url: url, among: session.attachments)) { session.removeAttachment(url) }
                             .help(url.path(percentEncoded: false))
                     }
                 }
@@ -67,19 +105,25 @@ struct ChatComposer: View {
                     .foregroundStyle(.secondary)
                     .barItem(isActive: isAttaching)
                     .padding(.leading, -BarItem.inset)
-                    .help("Attach Files")
+                    .help(session.fileIndex == nil ? "Attach Files" : "Attach Files, or Type @ to Mention One")
                     .accessibilityIdentifier("chat.attach")
                 ChatControlsBar(
                     controls: session.controls,
                     recentModels: RecentModels.values(in: recentModels),
+                    favoriteModels: FavoriteModels.values(in: favoriteModels),
                     select: { id, value in
                         if session.controls.first(where: { $0.id == id })?.category == .model {
                             recentModels = RecentModels.adding(value, to: recentModels)
                         }
-                        Task { await session.setControl(id, to: value) }
+                        // Awaited by whoever asked: the effort slider holds its thumb until the
+                        // agent has answered.
+                        await session.setControl(id, to: value)
                     },
                     setToggle: { id, isOn in Task { await session.setControl(id, isOn: isOn) } }
                 )
+                // The mode's tip opens over the text, so like the composer's own two it waits
+                // for an empty draft.
+                .environment(\.composerHasRoomForTips, session.draft.isEmpty && session.permissionRequests.isEmpty)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if let usage = session.transcript.usage, usage.size > 0 {
                     ContextUsageRing(usage: usage)
@@ -97,18 +141,39 @@ struct ChatComposer: View {
         .padding(.top, 12)
         .padding(.bottom, 8)
         .glassEffect(.regular, in: .rect(cornerRadius: ChatMetrics.surfaceRadius))
+        .composerTips(for: session)
         .overlay(alignment: .topLeading) {
-            if !completions.isEmpty {
-                SlashCommandList(commands: completions, selection: min(completionIndex, completions.count - 1), choose: choose)
-                    // Sits above the composer without taking room, so nothing moves when it opens.
-                    .offset(y: -(SlashCommandList.height(for: completions.count) + 8))
-                    .transition(.opacity)
+            if let completion {
+                CompletionList(kind: completion.kind, rows: rows, selection: selectedRow, choose: { choose($0, from: completion) })
+                // Sits above the composer without taking room, so nothing moves when it opens.
+                .offset(y: -(CompletionList.height(for: completion.count) + 8))
+                .transition(.opacity)
             }
         }
-        .animation(reduceMotion ? nil : Motion.hover, value: completions.isEmpty)
+        .animation(reduceMotion ? nil : Motion.hover, value: completion == nil)
         .animation(reduceMotion ? nil : Motion.disclosure, value: session.attachments)
         .animation(reduceMotion ? nil : Motion.disclosure, value: session.queuedPrompts)
-        .onChange(of: session.draft) { completionIndex = 0 }
+        .onChange(of: session.draft) {
+            completionIndex = 0
+            pendingAccept = nil
+        }
+        // Moving the cursor into an old "@State" with arrows or a click must not open the list,
+        // or Up, Down and Return would stop doing their usual jobs. Typing brings it back.
+        .onChange(of: CaretState(draft: session.draft, selection: selection)) { old, new in
+            if old.draft == new.draft { dismissedCompletionDraft = new.draft }
+        }
+        // VoiceOver's cursor stays in the text, so the list announces itself.
+        .onChange(of: announcement) { old, new in
+            if let new { ChatAnnouncement.post(new.text(isOpening: old == nil)) }
+        }
+        .task(id: mentionSearch) { await findMentions(for: mentionSearch) }
+        .onChange(of: mentionSearch?.location) { _, location in
+            // A new @: the agent may have written files since the last one.
+            guard location != nil, let index = session.fileIndex else { return }
+            Task {
+                if await index.refreshIfStale() { fileIndexChanges += 1 }
+            }
+        }
         .fileImporter(isPresented: $isAttaching, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             guard case let .success(urls) = result else { return }
             session.addAttachments(urls)
@@ -129,6 +194,8 @@ struct ChatComposer: View {
             height: $textHeight,
             focusRequests: session.composerFocusRequests,
             accessibilityLabel: placeholder,
+            editor: editor,
+            onSelectionChange: { selection = $0 },
             onCommand: handle,
             onFiles: { session.addAttachments($0) }
         )
@@ -157,11 +224,12 @@ struct ChatComposer: View {
     // MARK: Actions
 
     private func handle(_ command: ComposerCommand, hasMarkedText: Bool) -> ComposerAction {
-        let completions = completions
+        let completion = completion
         recall.history = PromptRecall.history(of: session.transcript.items)
         let context = ComposerKeyContext(
             hasMarkedText: hasMarkedText,
-            isCompletionVisible: !completions.isEmpty,
+            isCompletionVisible: completion != nil,
+            isFindVisible: session.viewState.find.isPresented,
             canSend: session.canSend || session.canQueue,
             isTurnRunning: session.isTurnRunning,
             isDraftEmpty: session.draft.isEmpty && session.attachments.isEmpty,
@@ -179,27 +247,56 @@ struct ChatComposer: View {
         case .allowPermission: allowPermission?()
         case .rejectPermission: rejectPermission?()
         case let .moveCompletion(step):
-            // Wraps around, like the system's own completion lists.
-            let count = completions.count
-            completionIndex = (min(completionIndex, count - 1) + step + count) % count
+            completionIndex = CompletionSelection.index(completionIndex, movedBy: step, count: completion?.count ?? 0)
         case .acceptCompletion:
-            choose(completions[min(completionIndex, completions.count - 1)])
+            if case .files = completion, mentionMatches.query != mention?.query {
+                // The rows are still the last keystroke's. The key is taken all the same, and
+                // the search under way chooses for it.
+                pendingAccept = mentionSearch
+            } else if let completion {
+                choose(CompletionSelection.index(completionIndex, count: completion.count), from: completion)
+            }
         case .dismissCompletion:
             dismissedCompletionDraft = session.draft
+        case .dismissFind:
+            session.dismissFind()
         case .editQueuedPrompt:
             session.editLastQueuedPrompt()
+            dismissedCompletionDraft = session.draft
             actions.userInteracted()
         case let .recallPrompt(older):
-            if let text = recall.move(older: older, draft: session.draft) { session.draft = text }
+            if let text = recall.move(older: older, draft: session.draft) {
+                session.draft = text
+                // A recalled prompt is not being typed. If it opened the list for its "/review" or
+                // "@State", the next Up would move through the list and not on to the older prompt.
+                dismissedCompletionDraft = text
+                if older { ChatTips.promptRecalled() }
+            }
         case .cycleMode:
-            if let control = modeControl, let next = control.nextChoice {
+            if let control = modeControl, let next = control.nextChoice(after: pendingMode) {
                 actions.userInteracted()
-                Task { await session.setControl(control.id, to: next.value) }
+                ChatTips.modeCycled()
+                pendingMode = next.value
+                Task {
+                    await session.setControl(control.id, to: next.value)
+                    // Whatever the answer: a mode the agent refused must not stay the one the
+                    // next press goes on from.
+                    if pendingMode == next.value { pendingMode = nil }
+                }
             }
         case .insertNewline, .swallow, .passThrough:
             break
         }
         return action
+    }
+
+    private func choose(_ index: Int, from completion: Completion) {
+        switch completion {
+        case let .commands(commands):
+            if commands.indices.contains(index) { choose(commands[index]) }
+        case let .files(files, token):
+            if files.indices.contains(index) { attach(files[index], replacing: token) }
+        }
     }
 
     private func choose(_ command: AvailableCommand) {
@@ -212,6 +309,49 @@ struct ChatComposer: View {
         actions.userInteracted()
     }
 
+    /// The mention becomes the file's name in the text, and the file an attachment.
+    private func attach(_ file: FileMention, replacing token: MentionToken) {
+        guard let root = session.fileIndex?.root else { return }
+        let file = FileMentions.resolved(file, in: root)
+        let edit = FileMentions.edit(choosing: file, for: token, in: session.draft)
+        let url = file.url(in: root)
+        // A file that is attached already only gets its name written. Undoing that must leave
+        // the attachment, which the first mention of the file still needs.
+        let isNew = !session.attachments.contains(url)
+        let attachment = ComposerNSTextView.SideEffect(
+            undo: { [weak session] in session?.removeAttachment(url) },
+            redo: { [weak session] in session?.addAttachments([url]) }
+        )
+        // Through the text view and not the draft, so the cursor stays put and the undo history
+        // survives. Refused while an input method composes, and then nothing is attached.
+        guard editor.replace(edit.range, with: edit.text, alongside: isNew ? attachment : nil) else { return }
+        session.addAttachments([url])
+        session.requestComposerFocus()
+        actions.userInteracted()
+        ChatAnnouncement.post("Attached \(FileMentions.inlineText(for: file))")
+    }
+
+    /// Asks the file index for the mention's matches. The next keystroke cancels the task,
+    /// which stops the ranking too.
+    private func findMentions(for search: MentionSearch?) async {
+        guard let search, let index = session.fileIndex else {
+            mentionMatches = MentionMatches()
+            return
+        }
+        let root = index.root
+        let recent = search.query.isEmpty ? FileMentions.recentIDs(in: session.transcript.items, root: root) : []
+        let files = await index.matches(query: search.query, recent: recent)
+        guard !Task.isCancelled else { return }
+        // Other files under a selection that was moved would select something nobody picked.
+        if files != mentionMatches.files { completionIndex = 0 }
+        mentionMatches = MentionMatches(location: search.location, query: search.query, files: files)
+        let accepts = pendingAccept == search
+        pendingAccept = nil
+        if accepts, let first = files.first, let mention, dismissedCompletionDraft != session.draft {
+            attach(first, replacing: mention)
+        }
+    }
+
     private func send() {
         session.send()
         actions.userInteracted()
@@ -221,6 +361,57 @@ struct ChatComposer: View {
         actions.userInteracted()
         Task { await session.cancel() }
     }
+}
+
+/// What the list above the composer is completing.
+private enum Completion {
+    case commands([AvailableCommand])
+    /// Files for the mention `replacing`, which choosing one replaces.
+    case files([FileMention], replacing: MentionToken)
+
+    var kind: CompletionList.Kind {
+        switch self {
+        case .commands: .commands
+        case .files: .files
+        }
+    }
+
+    var count: Int {
+        switch self {
+        case let .commands(commands): commands.count
+        case let .files(files, _): files.count
+        }
+    }
+
+    var rows: [CompletionRow] {
+        switch self {
+        case let .commands(commands): commands.map(CompletionRow.init(command:))
+        case let .files(files, _): files.map(CompletionRow.init(file:))
+        }
+    }
+}
+
+/// Everything the matches for a mention depend on. A change of any of it asks again.
+private struct MentionSearch: Equatable {
+    /// Where the @ is in the draft.
+    var location: Int
+    var query: String
+    var indexChanges: Int
+}
+
+/// The files found for the mention whose @ is at `location`. They stay up while the next
+/// keystroke's are being found, so the list does not blink with every letter; `query` says
+/// which keystroke they answer.
+private struct MentionMatches: Equatable {
+    var location: Int?
+    var query = ""
+    var files: [FileMention] = []
+}
+
+/// The draft and where the cursor is in it, to tell a cursor that moved from text that changed.
+private struct CaretState: Equatable {
+    var draft: String
+    var selection: NSRange
 }
 
 /// Send, which turns into Stop while a turn runs. One button in one place, so the hand that sent

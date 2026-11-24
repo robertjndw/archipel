@@ -164,6 +164,14 @@ struct PaletteCommand: Identifiable {
                 isAvailable: actions.focusedSessionSwitchTarget != nil
             ) { actions.switchFocusedSessionInterface() },
             PaletteCommand(
+                id: "find-in-conversation",
+                title: "Find in Conversation…",
+                symbol: "magnifyingglass",
+                shortcutHint: "⌘F",
+                isAvailable: actions.focusedChat?.canFind == true,
+                refocusesTab: false
+            ) { actions.findInChat() },
+            PaletteCommand(
                 id: "next-attention",
                 title: "Next Session Needing Attention",
                 symbol: "bell.badge",

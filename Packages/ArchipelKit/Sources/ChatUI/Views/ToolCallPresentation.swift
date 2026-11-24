@@ -143,6 +143,17 @@ extension ToolCall {
             || !(terminalOutput ?? "").isEmpty || (terminalExitCode ?? 0) != 0 || commandDiffersFromTitle
     }
 
+    /// The places an opened row lists: each once, and only the first few, since a search can
+    /// turn up hundreds and the first ones say where it looked. `more` counts the ones left out.
+    /// Find reads the same list, so it never steps to a place that is not on screen.
+    var listedLocations: (shown: [ToolCallLocation], more: Int) {
+        let unique = locations.reduce(into: [ToolCallLocation]()) { result, location in
+            if !result.contains(location) { result.append(location) }
+        }
+        let shown = Array(unique.prefix(6))
+        return (shown, unique.count - shown.count)
+    }
+
     var commandDiffersFromTitle: Bool {
         guard let command else { return false }
         return command != title

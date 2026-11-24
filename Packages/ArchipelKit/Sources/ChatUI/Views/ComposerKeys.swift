@@ -23,6 +23,8 @@ enum ComposerAction: Equatable, Sendable {
     case moveCompletion(Int)
     case acceptCompletion
     case dismissCompletion
+    /// Close Find in the conversation.
+    case dismissFind
     /// Take the newest queued prompt back into the composer.
     case editQueuedPrompt
     /// Put an earlier prompt, or with `false` a later one, into the composer.
@@ -40,6 +42,8 @@ struct ComposerKeyContext: Equatable, Sendable {
     /// An input method is composing. Every key belongs to it until it commits.
     var hasMarkedText = false
     var isCompletionVisible = false
+    /// The find bar is open over the conversation, with the cursor back in the composer.
+    var isFindVisible = false
     var canSend = false
     var isTurnRunning = false
     var isDraftEmpty = true
@@ -79,6 +83,9 @@ enum ComposerKeys {
             if context.canAllowPermission, context.isDraftEmpty { return .allowPermission }
             return context.canSend ? .send : .swallow
         case .escape:
+            // Esc closes the cheapest thing first: the completion list, then Find, and only then
+            // answers a card or stops the agent. Closing Find must not stop a turn.
+            if context.isFindVisible { return .dismissFind }
             if context.canRejectPermission { return .rejectPermission }
             // Never left to the text view, where Esc opens the word completion list.
             return context.isTurnRunning ? .cancelTurn : .swallow
@@ -93,6 +100,21 @@ enum ComposerKeys {
         case .tab:
             return .passThrough
         }
+    }
+}
+
+/// Which row of a completion list is selected. The list changes under the selection with every
+/// keystroke, so the index is only ever read through here.
+enum CompletionSelection {
+    /// The row to show as selected in a list of `count`: the last one when the list got shorter.
+    static func index(_ index: Int, count: Int) -> Int {
+        max(0, min(index, count - 1))
+    }
+
+    /// The row an arrow key moves to. Wraps around, like the system's own completion lists.
+    static func index(_ index: Int, movedBy step: Int, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        return ((Self.index(index, count: count) + step) % count + count) % count
     }
 }
 

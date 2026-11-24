@@ -1,5 +1,6 @@
 import AgentKit
 import ArchipelCore
+import ChatUI
 import InspectorUI
 import SwiftUI
 
@@ -31,6 +32,7 @@ struct AppCommands: Commands {
         CommandGroup(after: .appInfo) { UpdateMenuItem(updater: updater) }
         CommandGroup(replacing: .newItem) { FileMenuItems(model: model, actions: actions) }
         CommandGroup(replacing: .saveItem) { SaveMenuItems(model: model, actions: actions) }
+        CommandGroup(after: .pasteboard) { FindMenuItems(actions: actions) }
         CommandGroup(after: .sidebar) { InspectorMenuItems(actions: actions) }
         CommandMenu("Go") { GoMenuItems(model: model, actions: actions) }
         CommandMenu("Project") { ProjectMenuItems(model: model, actions: actions) }
@@ -120,6 +122,30 @@ struct AppActions {
     func switchFocusedSessionInterface() {
         guard let id = model.focusedSessionID, let target = focusedSessionSwitchTarget else { return }
         model.requestInterfaceSwitch(target, for: id)
+    }
+
+    // MARK: Find
+
+    /// The chat in the focused tab. Find in the menu bar is for it alone: a file's editor and the
+    /// terminal each answer ⌘F in their own view.
+    var focusedChat: ChatSession? {
+        model.focusedSessionID.flatMap { model.chats[$0] }
+    }
+
+    /// Opens Find in the focused chat, or puts the cursor back into its field.
+    func findInChat() {
+        // With Settings or a sheet in front, the chat behind it is not what ⌘F is about.
+        guard AppModel.isMainWindow(NSApp.keyWindow), focusedChat?.showFind() == true else {
+            NSSound.beep()
+            return
+        }
+    }
+
+    func stepFindInChat(forward: Bool) {
+        guard AppModel.isMainWindow(NSApp.keyWindow), focusedChat?.stepFind(forward: forward) == true else {
+            NSSound.beep()
+            return
+        }
     }
 
     var focusedWebTab: ArchipelCore.Tab? {
@@ -337,6 +363,31 @@ private struct SaveMenuItems: View {
         Button("Save All", systemImage: "square.and.arrow.down.on.square") { model.saveAllDocuments() }
             .keyboardShortcut("s", modifiers: [.command, .option])
             .disabled(model.documents.dirtyURLs.isEmpty)
+    }
+}
+
+/// Edit > Find, for the conversation of the chat in the focused tab.
+///
+/// The shortcuts exist only while a chat has the focus. A file's editor handles ⌘F and ⌘G in
+/// its own view, and the terminal offers keys to the menu bar first, so a disabled item that
+/// kept its shortcut would swallow the key.
+private struct FindMenuItems: View {
+    let actions: AppActions
+
+    var body: some View {
+        // Only whether there is a chat is read here, never its transcript: a menu that followed
+        // the conversation would be rebuilt with every chunk of a reply.
+        let hasChat = actions.focusedChat != nil
+        Divider()
+        Menu("Find") {
+            Button("Find in Conversation…", systemImage: "magnifyingglass") { actions.findInChat() }
+                .keyboardShortcut(hasChat ? KeyboardShortcut("f") : nil)
+            Button("Find Next", systemImage: "chevron.down") { actions.stepFindInChat(forward: true) }
+                .keyboardShortcut(hasChat ? KeyboardShortcut("g") : nil)
+            Button("Find Previous", systemImage: "chevron.up") { actions.stepFindInChat(forward: false) }
+                .keyboardShortcut(hasChat ? KeyboardShortcut("g", modifiers: [.command, .shift]) : nil)
+        }
+        .disabled(!hasChat)
     }
 }
 

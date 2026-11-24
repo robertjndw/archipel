@@ -19,7 +19,7 @@ struct UserMessageView: View {
                 AttachmentFlow(items: chips, alignment: .trailing)
             }
             if !message.text.isEmpty {
-                Text(verbatim: message.text)
+                SearchableText(text: message.text)
                     .lineSpacing(3)
                     .textSelection(.enabled)
                     .padding(.horizontal, 12)
@@ -40,17 +40,20 @@ struct UserMessageView: View {
 /// The agent's reply: Markdown straight on the page, as wide as the column.
 struct AgentMessageView: View {
     let message: ChatMessage
-    /// Keeps a line free under the reply for the Copy button, which shows on hover. Reserving it
-    /// means the button never moves anything, and it is only done for the reply that ends a turn:
-    /// between two tool calls the free line would tear the turn apart.
+    /// Keeps a line free under the reply for the Copy button, which shows on hover, so the button
+    /// never moves anything. Only the reply that ends a turn gets it: between two tool calls the free
+    /// line would tear the turn apart.
     let showsCopyButton: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @State private var copied = false
 
+    private static let spacing: CGFloat = 8
+    private static let copyButtonSize: CGFloat = 22
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Self.spacing) {
             if !message.text.isEmpty {
                 MarkdownText(message.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -61,7 +64,9 @@ struct AgentMessageView: View {
             }
             if showsCopyButton {
                 copyButton
-                    .padding(.top, -4)
+                    // Closer to the text than the other parts are to each other, by as much as
+                    // makes the button's row the footer every finished reply has.
+                    .padding(.top, ChatMetrics.replyFooterHeight - Self.copyButtonSize - Self.spacing)
             }
         }
         .contentShape(.rect)
@@ -76,7 +81,7 @@ struct AgentMessageView: View {
         Button(action: copy) {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
                 .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
-                .frame(width: 22, height: 22)
+                .frame(width: Self.copyButtonSize, height: Self.copyButtonSize)
                 .contentShape(.rect)
         }
         .buttonStyle(.borderless)
@@ -106,10 +111,13 @@ struct AgentMessageView: View {
 
 // MARK: Thought
 
-/// The agent thinking: one quiet line, which opens to show what it thought.
+/// The agent's thinking: one quiet line, which opens to show what it thought.
+///
+/// It reads "Thought" even while the thought is still coming in. A row records a step, as a tool
+/// call's does while it runs, and the status line under the transcript says what is going on now.
+/// "Thinking" twice in a row would look like a mistake.
 struct ThoughtRow: View {
     let message: ChatMessage
-    let isStreaming: Bool
     let isExpanded: Bool
     let toggle: () -> Void
 
@@ -123,8 +131,7 @@ struct ThoughtRow: View {
                     Image(systemName: "brain")
                         .font(.system(size: 12))
                         .frame(width: ChatMetrics.symbolColumn)
-                    Text(isStreaming ? "Thinking…" : "Thought")
-                        .modifier(Pulse(isActive: isStreaming && !reduceMotion))
+                    Text("Thought")
                     DisclosureChevron(isExpanded: isExpanded)
                         .opacity(isHovered || isExpanded ? 1 : 0)
                     Spacer(minLength: 0)
@@ -135,13 +142,13 @@ struct ThoughtRow: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(isStreaming ? "Thinking" : "Thought")
+            .accessibilityLabel("Thought")
             .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
             .onHover { isHovered = $0 }
             .animation(reduceMotion ? nil : Motion.hover, value: isHovered)
 
             if isExpanded {
-                Text(verbatim: message.text)
+                SearchableText(text: message.text)
                     .font(.callout)
                     .lineSpacing(3)
                     .foregroundStyle(.secondary)
@@ -156,36 +163,95 @@ struct ThoughtRow: View {
     }
 }
 
-/// A slow breath for a label whose work is still going on.
-private struct Pulse: ViewModifier {
-    let isActive: Bool
+/// Plain text of the transcript, with Find's hits marked while a search is on.
+struct SearchableText: View {
+    let text: String
 
-    func body(content: Content) -> some View {
-        if isActive {
-            content.phaseAnimator([1.0, 0.45]) { view, opacity in
-                view.opacity(opacity)
-            } animation: { _ in
-                .easeInOut(duration: 0.9)
-            }
-        } else {
-            content
-        }
+    @Environment(\.textHighlight) private var highlight
+
+    var body: some View {
+        highlight.map { Text($0.apply(to: text)) } ?? Text(verbatim: text)
     }
 }
 
 // MARK: Working
 
-/// Shown at the end of the transcript while the agent is busy and nothing else on screen says so.
-struct WorkingIndicator: View {
+/// The line at the end of the transcript while a turn runs: what the agent is doing right now
+/// and, once the turn has gone on for a few seconds, for how long.
+///
+/// The words are the indicator: a band of light passes over them, with no spinner or dots.
+struct WorkingStatusLine: View {
+    /// What the turn is doing, from `WorkingStatus.phrase`.
+    let phrase: String
+    /// When the turn's working time began; nil leaves the time out.
+    let anchor: Date?
+
+    /// How long a phrase has to hold before it is shown. A run of quick tool calls would
+    /// otherwise flicker through five phrases in a second.
+    static let settleTime: Duration = .milliseconds(350)
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown: String
+
+    init(phrase: String, anchor: Date?) {
+        self.phrase = phrase
+        self.anchor = anchor
+        _shown = State(initialValue: phrase)
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(verbatim: shown)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .contentTransition(reduceMotion ? .identity : .interpolate)
+                .shimmer()
+            if let anchor {
+                ElapsedTimeLabel(anchor: anchor)
+            }
+        }
+        .font(.callout)
+        .frame(height: ChatMetrics.activityRowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: shown)
+        .task(id: phrase) {
+            guard phrase != shown else { return }
+            // Stopping is the answer to a click, so it shows at once.
+            if phrase != WorkingStatus.stopping {
+                try? await Task.sleep(for: Self.settleTime)
+                guard !Task.isCancelled else { return }
+            }
+            shown = phrase
+        }
+        .accessibilityElement(children: .combine)
+        // The time changes by itself; VoiceOver reads it when asked instead of every second.
+        .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityIdentifier("chat.working")
+    }
+}
+
+/// The running turn's time, ticking once a second. Always laid out, so its fading in after the
+/// first quiet seconds moves nothing, and never animated as it ticks.
+private struct ElapsedTimeLabel: View {
+    let anchor: Date
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Image(systemName: "ellipsis")
-            .font(.system(size: 24, weight: .bold))
-            .foregroundStyle(.secondary)
-            .symbolEffect(.variableColor.iterative, options: .repeat(.continuous), isActive: !reduceMotion)
-            .frame(height: ChatMetrics.activityRowHeight)
-            .accessibilityLabel("Working")
+        // Ticks on the turn's own seconds, so the text changes exactly when a second is over.
+        TimelineView(.periodic(from: anchor, by: 1)) { context in
+            let seconds = ElapsedTime.seconds(since: anchor, at: context.date)
+            let isShown = seconds >= ElapsedTime.quietSeconds
+            Text(verbatim: ElapsedTime.text(seconds: seconds))
+                .monospacedDigit()
+                // Not tertiary: the time is what answers "is it stuck?", and has to be read.
+                // The phrase beside it is told apart by its shimmer.
+                .foregroundStyle(.secondary)
+                .opacity(isShown ? 1 : 0)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.4), value: isShown)
+                .accessibilityLabel(ElapsedTime.spoken(seconds: seconds))
+                .accessibilityHidden(!isShown)
+        }
     }
 }
 
@@ -222,14 +288,31 @@ struct AttachmentChip: View {
             self.symbol = symbol
         }
 
+        /// `FileSymbol` knows files by their names; a folder has to be told apart first.
         init(url: URL) {
-            self.init(name: url.lastPathComponent, symbol: FileSymbol.name(for: url.lastPathComponent))
+            self.init(name: url.lastPathComponent, symbol: url.hasDirectoryPath ? Self.folderSymbol : FileSymbol.name(for: url.lastPathComponent))
+        }
+
+        /// In the composer, where two attachments can have one name: a second Package.swift
+        /// is told from the first by the folder it is in.
+        init(url: URL, among urls: [URL]) {
+            self.init(url: url)
+            name = Self.name(of: url, among: urls)
+        }
+
+        static func name(of url: URL, among urls: [URL]) -> String {
+            let name = url.lastPathComponent
+            guard urls.contains(where: { $0 != url && $0.lastPathComponent == name }) else { return name }
+            let folder = url.deletingLastPathComponent().lastPathComponent
+            return folder.isEmpty || folder == "/" ? name : "\(folder)/\(name)"
         }
 
         init?(block: ContentBlock) {
             switch block {
             case let .resourceLink(link):
-                self.init(name: link.name, symbol: FileSymbol.name(for: link.name))
+                // A folder goes out as a link whose address ends in a slash, which is all that is
+                // left of it once the prompt is sent.
+                self.init(name: link.name, symbol: link.uri.hasSuffix("/") ? Self.folderSymbol : FileSymbol.name(for: link.name))
             case let .image(_, _, uri):
                 let name = uri.flatMap(URL.init(string:))?.lastPathComponent
                 self.init(name: name.flatMap { $0.isEmpty ? nil : $0 } ?? "Image", symbol: "photo")
@@ -242,6 +325,8 @@ struct AttachmentChip: View {
                 return nil
             }
         }
+
+        private static let folderSymbol = "folder"
     }
 
     let item: Item

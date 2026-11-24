@@ -254,6 +254,15 @@ public struct ChatTranscript: Sendable, Equatable {
         }
     }
 
+    /// Shows one call as cancelled, unless it has finished already: the user refused it, and
+    /// not every agent reports what became of it. A later update from the agent still counts.
+    public mutating func markToolCallCancelled(id: String) {
+        guard let index = toolCallIndices[id] else { return }
+        items[index].modifyToolCall { call in
+            if !call.status.isFinished { call.status = .cancelled }
+        }
+    }
+
     // MARK: Folding
 
     private mutating func append(_ chunk: ContentChunk, as role: Role) {

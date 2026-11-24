@@ -24,6 +24,29 @@ extension ChatSession {
 
     /// A session showing `state`, with sample content and no process.
     public static func preview(_ state: PreviewState, agentName: String = "Claude Code") -> ChatSession {
+        let session = previewSession(state, agentName: agentName)
+        // Typing an @ in a live preview offers the sample project's files.
+        session.fileIndex = WorktreeFileIndex(root: URL(filePath: "/Users/me/Projects/Acme", directoryHint: .isDirectory), files: previewFiles)
+        return session
+    }
+
+    /// The sample project the preview conversations are about.
+    static let previewFiles = [
+        ".github/workflows/ci.yml",
+        ".gitignore",
+        "Package.swift",
+        "README.md",
+        "Sources/App/AcmeApp.swift",
+        "Sources/Login/LoginView.swift",
+        "Sources/Login/LoginViewModel.swift",
+        "Sources/Login/PasswordField.swift",
+        "Sources/Networking/Session.swift",
+        "Sources/Networking/SessionStore.swift",
+        "Tests/LoginTests/LoginViewModelTests.swift",
+        "Tests/NetworkingTests/SessionStoreTests.swift",
+    ]
+
+    private static func previewSession(_ state: PreviewState, agentName: String) -> ChatSession {
         let info = Implementation(name: "claude-agent-acp", title: agentName, version: "0.110.0")
         switch state {
         case .empty:

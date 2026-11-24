@@ -290,6 +290,30 @@ struct ChatSessionTests {
         }
     }
 
+    @Test func onlyImagesEveryModelTakesGoInline() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("chatui-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let names = ["icon.svg", "photo.heic", "scan.tiff", "favicon.ico", "shot.png", "photo.jpg", "clip.gif", "hero.webp"]
+        let files = names.map { directory.appendingPathComponent($0) }
+        for file in files { try Data([1, 2, 3]).write(to: file) }
+
+        // An SVG or HEIC goes as a link even to an agent that takes images: the model refuses
+        // a prompt with a media type it does not know.
+        let blocks = ChatSession.promptBlocks(text: "", attachments: files, acceptsImages: true)
+        let kinds = blocks.map { block -> String in
+            switch block {
+            case let .image(_, mimeType, _): mimeType
+            case let .resourceLink(link): "link:\(link.name)"
+            default: "other"
+            }
+        }
+        #expect(kinds == [
+            "link:icon.svg", "link:photo.heic", "link:scan.tiff", "link:favicon.ico",
+            "image/png", "image/jpeg", "image/gif", "image/webp",
+        ])
+    }
+
     @Test func burstsAreFoldedWithoutLossOrReordering() async throws {
         let harness = ChatHarness()
         try await harness.start()
@@ -368,11 +392,17 @@ struct ChatSessionTests {
         harness.clearEvents()
         await harness.session.respond(to: second, optionId: "reject")
         #expect(harness.session.permissionRequests.map(\.id) == [.int(0)])
+        // Agents need not report a refused call, so the transcript does; otherwise the status
+        // line keeps naming it as running.
+        #expect(harness.session.transcript.toolCall(id: "run-1")?.status == .cancelled)
+        #expect(harness.session.transcript.toolCall(id: "edit-1")?.status == .pending)
         // The chat still waits on the first, so the owner is asked to look again, not told it works.
         #expect(harness.events == [.agent(.attentionRequested(.permission, message: "Edit a.swift"))])
         await harness.session.respond(to: first, optionId: "allow")
         #expect(harness.session.permissionRequests.isEmpty)
         #expect(harness.events.last == .agent(.activity))
+        // An allowed call is the agent's to report on.
+        #expect(harness.session.transcript.toolCall(id: "edit-1")?.status == .pending)
         try await waitUntil("both answers arrive") { agent.responses.count == 2 }
         #expect(agent.responses.map(\.id) == [.string("p-2"), .int(0)])
         #expect(agent.responses[0].result == .success(["outcome": ["outcome": "selected", "optionId": "reject"]]))

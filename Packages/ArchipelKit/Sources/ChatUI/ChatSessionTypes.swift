@@ -84,6 +84,11 @@ extension ChatSession {
         /// Starts the process. Defaults to `ChatAgentConnection.spawn`.
         public var connect: @Sendable (ChatLaunch, _ workingDirectory: String) throws -> ChatAgentConnection
         public var timing: Timing
+        /// Lists the working directory's files for @ mentions, as relative paths without what
+        /// git ignores. Defaults to asking git. When it throws, as git does outside a repository,
+        /// the session walks the folder itself. An owner that knows git is missing should throw
+        /// without running it, or every call opens the system's install dialog.
+        public var listFiles: @Sendable (_ folder: URL) async throws -> [String] = WorktreeFileIndex.gitFiles
 
         public init(
             agentName: String,
@@ -225,6 +230,12 @@ public struct ChatControl: Sendable, Equatable, Identifiable {
         self.description = description
         self.category = category
         self.value = value
+    }
+
+    /// The chosen value of a select; nil for a toggle and for a value that is not a choice.
+    var currentValue: String? {
+        guard case let .select(current, _) = value else { return nil }
+        return current
     }
 
     /// The display name of the current choice, for a menu's label.

@@ -1,4 +1,5 @@
 import ACPKit
+import EditorUI
 import SwiftUI
 import UISupport
 
@@ -6,8 +7,12 @@ import UISupport
 struct ToolCallGroup: View {
     let calls: [ToolCall]
     let expanded: Set<String>
+    /// What Find marks in this run while a search is on.
+    var mark: RowFindMark?
     let toggle: (String) -> Void
     let openFile: (URL, Int?) -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -15,8 +20,29 @@ struct ToolCallGroup: View {
                 let id = ChatItem.toolCall(call).id
                 ToolCallRow(call: call, isExpanded: expanded.contains(id), toggle: { toggle(id) }, openFile: openFile)
                     .equatable()
+                    .environment(\.textHighlight, mark?.highlight(forCall: id))
+                    .background(alignment: .top) {
+                        if id == mark?.currentCall {
+                            FindCallMark()
+                                .transition(.opacity)
+                        }
+                    }
             }
         }
+        .animation(reduceMotion ? nil : Motion.hover, value: mark?.currentCall)
+    }
+}
+
+/// Marks the whole line of the tool call Find is on. The word is marked too, but a title cut
+/// short in the middle may not show it, so the line always says which call it is. It reaches
+/// past the line on both sides like the hover fill does, so the text keeps the column's edge.
+private struct FindCallMark: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: ChatMetrics.blockRadius, style: .continuous)
+            .fill(TextHighlight.currentColor.opacity(0.22))
+            .frame(height: ChatMetrics.activityRowHeight)
+            .padding(.horizontal, -6)
+            .accessibilityHidden(true)
     }
 }
 
@@ -73,11 +99,11 @@ private struct ToolCallHeader: View {
             Image(systemName: call.kind.symbolName)
                 .font(.system(size: 12))
                 .frame(width: ChatMetrics.symbolColumn)
-            Text(verbatim: call.displayTitle(relativeTo: workingDirectory))
+            SearchableText(text: call.displayTitle(relativeTo: workingDirectory))
                 .lineLimit(1)
                 .truncationMode(.middle)
             if let name = call.diffFileNameMissingFromTitle {
-                Text(verbatim: name)
+                SearchableText(text: name)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .foregroundStyle(.tertiary)

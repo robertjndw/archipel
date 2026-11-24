@@ -18,6 +18,9 @@ enum ChatMetrics {
     static let symbolColumn: CGFloat = 18
     static let symbolSpacing: CGFloat = 6
     static let activityRowHeight: CGFloat = 26
+    /// Room under a finished reply for the Copy button. Matches the status line that stood there
+    /// during the turn, so nothing moves when one replaces the other.
+    static let replyFooterHeight: CGFloat = 26
     /// Line height of 12pt monospaced text in output and diff blocks. Fixed so tinted diff lines,
     /// which are drawn apart from the text, land exactly behind it.
     static let codeLineHeight: CGFloat = 17
@@ -38,6 +41,11 @@ extension EnvironmentValues {
     @Entry var chatAgentSymbol = Image(systemName: "sparkles")
     /// The session's working directory, which paths are shown relative to. Nil in previews.
     @Entry var chatWorkingDirectory: String?
+    /// The agent's name as the user knows it. Per-agent state such as favorite models is stored
+    /// under it. Nil outside a chat.
+    @Entry var chatAgentName: String?
+    /// False while the composer has text or a permission card is docked there, so tips stay away.
+    @Entry var composerHasRoomForTips = true
     /// The chat's diffs; nil outside a chat, where `DiffCache.fallback` stands in. Optional so the
     /// default is not a new cache on every read.
     @Entry var chatDiffCache: DiffCache?

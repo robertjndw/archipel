@@ -1,3 +1,4 @@
+import EditorUI
 import SwiftUI
 
 /// A compact unified diff of one edit: tinted lines, no line numbers, capped in height.
@@ -41,12 +42,32 @@ struct InlineDiffView: View, Equatable {
     }
 
     private func diff(_ analysis: DiffAnalysis) -> some View {
+        DiffLines(analysis: analysis, maximumHeight: maximumHeight)
+    }
+
+    fileprivate static let verticalPadding: CGFloat = 6
+    fileprivate static let markerWidth: CGFloat = 24
+}
+
+/// The lines of a diff in their capped scroller. A view of its own for what Find needs of it:
+/// the scroller's position, and the search to read.
+private struct DiffLines: View {
+    let analysis: DiffAnalysis
+    let maximumHeight: CGFloat
+
+    @Environment(\.textHighlight) private var highlight
+    @State private var position = ScrollPosition(edge: .top)
+
+    var body: some View {
         let lines = analysis.lines
         let hidden = analysis.hiddenLineCount
         let rowCount = lines.count + (hidden > 0 ? 1 : 0)
-        let height = CGFloat(rowCount) * ChatMetrics.codeLineHeight + Self.verticalPadding * 2
+        let height = CGFloat(rowCount) * ChatMetrics.codeLineHeight + InlineDiffView.verticalPadding * 2
+        let shownHeight = min(height, maximumHeight)
+        // The line Find is on. Lines that read alike share the mark, and the first is shown.
+        let currentRow = highlight?.current.flatMap { current in lines.firstIndex { $0.kind != .gap && $0.text == current.text } }
 
-        return ScrollView(.vertical) {
+        ScrollView(.vertical) {
             // The tints span the block and stay put; only the text scrolls sideways over them.
             // Tinting each line's own background would end at the line's last character.
             ZStack(alignment: .topLeading) {
@@ -58,7 +79,8 @@ struct InlineDiffView: View, Equatable {
                 ScrollView(.horizontal) {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(lines) { line in
-                            Text(verbatim: line.text)
+                            // Marks Find's hits; without a search it is the plain text it was.
+                            SearchableText(text: line.text)
                                 .lineLimit(1)
                                 .fixedSize()
                                 .frame(height: ChatMetrics.codeLineHeight)
@@ -71,21 +93,24 @@ struct InlineDiffView: View, Equatable {
                     }
                     .font(ChatMetrics.codeFont)
                     .textSelection(.enabled)
-                    .padding(.leading, Self.markerWidth)
+                    .padding(.leading, InlineDiffView.markerWidth)
                     .padding(.trailing, 10)
                 }
                 .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             }
-            .padding(.vertical, Self.verticalPadding)
+            .padding(.vertical, InlineDiffView.verticalPadding)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .frame(height: min(height, maximumHeight))
+        .scrollPosition($position)
+        // Also when the diff first shows: Find opens the row with the hit already current.
+        .onChange(of: currentRow, initial: true) {
+            guard let currentRow else { return }
+            position.scrollTo(y: CodeBlockScroll.offset(centering: currentRow, padding: InlineDiffView.verticalPadding, blockHeight: shownHeight))
+        }
+        .frame(height: shownHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Changes: \(analysis.stats.added) lines added, \(analysis.stats.removed) removed")
     }
-
-    private static let verticalPadding: CGFloat = 6
-    fileprivate static let markerWidth: CGFloat = 24
 }
 
 private struct DiffLineBackground: View {

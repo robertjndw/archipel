@@ -16,3 +16,19 @@ enum RecentModels {
         ([value] + values(in: stored).filter { $0 != value }).prefix(capacity).joined(separator: "\n")
     }
 }
+
+/// The models the user starred with an agent, stored the same way and beside the recent ones.
+/// They have no order of their own: the list shows them where the agent has them, so a favorite
+/// keeps its place however many are added.
+enum FavoriteModels {
+    static func key(agentName: String) -> String { "chat.favoriteModels.\(agentName)" }
+
+    static func values(in stored: String) -> [String] {
+        RecentModels.values(in: stored)
+    }
+
+    static func toggling(_ value: String, in stored: String) -> String {
+        let values = values(in: stored)
+        return (values.contains(value) ? values.filter { $0 != value } : values + [value]).joined(separator: "\n")
+    }
+}
