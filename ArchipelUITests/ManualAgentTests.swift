@@ -229,10 +229,10 @@ final class ManualAgentTests: ArchipelUITestCase {
             guard let hooks = try self.hooksInSettingsFile() else { return true }
             return hooks.keys.allSatisfy { self.command(for: $0, in: hooks) == nil }
         }
-        // The link goes only after the file is rewritten, so checking once right after the entries
-        // vanish races the app.
-        waitUntil("turning it off removes the link too") {
-            (try? FileManager.default.destinationOfSymbolicLink(atPath: self.hookLink.path)) == nil
-        }
+        // Codex's hooks point at the same link, so it has to outlive Claude's entries.
+        XCTAssertNotNil(
+            try? FileManager.default.destinationOfSymbolicLink(atPath: hookLink.path),
+            "Turning the shell hooks off should leave the helper link for Codex."
+        )
     }
 }
