@@ -19,7 +19,13 @@ extension AppModel {
     /// Codex has no live feed, so its session logs are read at launch and after each Codex turn.
     func refreshCodexUsage() {
         Task {
-            let reading = await Task.detached(priority: .utility) { CodexSessionLogs.latestUsage() }.value
+            let reading = await Task.detached(priority: .utility) {
+                // The same CODEX_HOME the sessions are started with, which a shell profile usually
+                // sets and the app's own environment then lacks.
+                let codexHome = await LoginEnvironment.resolveVariable("CODEX_HOME")
+                let environment = codexHome.map { ["CODEX_HOME": $0] } ?? ProcessInfo.processInfo.environment
+                return CodexSessionLogs.latestUsage(in: CodexSessionLogs.defaultSessionsDirectory(environment: environment))
+            }.value
             if let reading { recordUsage(reading) }
         }
     }

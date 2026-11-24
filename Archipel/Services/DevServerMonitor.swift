@@ -13,7 +13,9 @@ import TerminalKit
 /// session is polled, not just visible ones, because tabs in the background
 /// show pills too and a banner can scroll away before the tab is selected.
 /// A URL only becomes a pill once something accepts connections on its port,
-/// which keeps URLs that are merely mentioned (docs, an agent's reply) out.
+/// which keeps URLs that are merely mentioned (docs, an agent's reply) out. A port whose listener
+/// belongs to another tab's processes is that tab's, so a tab that only mentions another tab's
+/// server gets no pill; see `DevServerAttribution` for why owning the listener is not required.
 @Observable
 final class DevServerMonitor {
     /// Confirmed servers per session, oldest first.
@@ -23,6 +25,8 @@ final class DevServerMonitor {
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var isScanning = false
     @ObservationIgnored private var tick = 0
+    /// When the app last came back to the front, after which the process scan needs a while to catch up.
+    @ObservationIgnored private var resumedAt: ContinuousClock.Instant?
 
     private struct ScanState {
         /// A restarted session gets a new terminal, and its old servers must not carry over.
@@ -31,6 +35,8 @@ final class DevServerMonitor {
         /// Seen in the output but not yet accepting connections, with the probes left before giving up.
         var candidates: [DevServerLink] = []
         var candidateProbesLeft: [Int: Int] = [:]
+        /// When each candidate port was first found open, to know when its owner should be known.
+        var openSince: [Int: ContinuousClock.Instant] = [:]
         /// Consecutive failed probes per confirmed port; one alone is not trusted.
         var misses: [Int: Int] = [:]
     }
@@ -41,7 +47,11 @@ final class DevServerMonitor {
     private static let candidateProbes = 5
     private static let missesBeforeRemoval = 2
 
-    func start(terminals: @escaping () -> [Session.ID: TerminalSession]) {
+    /// `processIDs` says which processes belong to each session, to tell whose listener a port is.
+    func start(
+        terminals: @escaping () -> [Session.ID: TerminalSession],
+        processIDs: @escaping () -> [Session.ID: [Int32]] = { [:] }
+    ) {
         task?.cancel()
         task = Task { [weak self] in
             var resumed = false
@@ -52,17 +62,18 @@ final class DevServerMonitor {
                 if !(await MainActor.run { NSApplication.shared.isActive }) {
                     for await _ in NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification) { break }
                     resumed = true
+                    self?.resumedAt = .now
                 } else if !resumed {
                     try? await Task.sleep(for: Self.interval)
                 }
                 guard !Task.isCancelled, let self else { return }
-                await self.scan(terminals(), recheckConfirmed: resumed)
+                await self.scan(terminals(), processIDs: processIDs(), recheckConfirmed: resumed)
                 resumed = false
             }
         }
     }
 
-    private func scan(_ terminals: [Session.ID: TerminalSession], recheckConfirmed: Bool = false) async {
+    private func scan(_ terminals: [Session.ID: TerminalSession], processIDs: [Session.ID: [Int32]], recheckConfirmed: Bool = false) async {
         guard !isScanning else { return }
         isScanning = true
         defer { isScanning = false }
@@ -100,6 +111,13 @@ final class DevServerMonitor {
         guard !probes.isEmpty else { return }
 
         let listening = await Self.listeningPorts(probes)
+        // Only open candidates need an owner; confirmed servers were vetted when they appeared.
+        let hasOpenCandidate = probes.keys.contains { id in
+            let open = listening[id] ?? []
+            return states[id]?.candidates.contains { open.contains($0.port) } == true
+        }
+        let listeners = hasOpenCandidate ? await Self.listenerPorts(of: processIDs) : [:]
+        let now = ContinuousClock.now
 
         for (id, probed) in probes {
             // The session may have closed or restarted while the probes ran.
@@ -121,11 +139,26 @@ final class DevServerMonitor {
                 }
             }
             for link in state.candidates {
-                if open.contains(link.port) {
+                guard open.contains(link.port) else {
+                    state.openSince[link.port] = nil
+                    state.candidateProbesLeft[link.port, default: 1] -= 1
+                    continue
+                }
+                let since = state.openSince[link.port] ?? now
+                state.openSince[link.port] = since
+                let settled = DevServerAttribution.isSettled(openSince: since, resumedAt: resumedAt, now: now)
+                switch DevServerAttribution.verdict(for: id, port: link.port, listeners: listeners, isSettled: settled) {
+                case .accept:
                     current = DevServerDetector.merge(known: current, detected: [link])
                     state.candidateProbesLeft[link.port] = nil
-                } else {
+                case .veto:
+                    // Spent rather than dropped at once: the owner's server may be the one that
+                    // just stopped, with this session's taking the port before the next process scan.
                     state.candidateProbesLeft[link.port, default: 1] -= 1
+                case .wait:
+                    // Waiting on the process scan is not the server failing to answer, so a slow
+                    // scan cannot run out a real server's probes.
+                    break
                 }
             }
             // Drop the counter along with the candidate: a leftover zero would stop the same
@@ -134,6 +167,7 @@ final class DevServerMonitor {
                 state.candidateProbesLeft[link.port] = nil
             }
             state.candidates.removeAll { state.candidateProbesLeft[$0.port] == nil }
+            state.openSince = state.openSince.filter { port, _ in state.candidates.contains { $0.port == port } }
             states[id] = state
             if current != (links[id] ?? []) {
                 links[id] = current.isEmpty ? nil : current
@@ -165,6 +199,17 @@ final class DevServerMonitor {
             }
             return result
         }
+    }
+
+    /// The ports each session's processes listen on.
+    nonisolated private static func listenerPorts(of sessions: [Session.ID: [Int32]]) async -> [Session.ID: Set<Int>] {
+        await Task.detached(priority: .utility) {
+            var result: [Session.ID: Set<Int>] = [:]
+            for (id, pids) in sessions {
+                result[id] = pids.reduce(into: Set<Int>()) { $0.formUnion(ProcessSampler.listeningPorts(of: $1)) }
+            }
+            return result
+        }.value
     }
 
     nonisolated private static func canConnect(to address: String, port: Int) -> Bool {

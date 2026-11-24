@@ -1,6 +1,7 @@
 import AppKit
 import ArchipelCore
 import GitKit
+import InspectorUI
 
 /// The last pull request answer for a worktree, with the branch it was asked for: after a branch
 /// switch the old answer must not be shown, even before the next lookup.
@@ -75,7 +76,9 @@ extension AppModel {
             pullRequests = pullRequests.filter { existing.contains($0.key) }
         }
         if !worktreesWithRemote.isSubset(of: existing) { worktreesWithRemote.formIntersection(existing) }
+        if !worktreesWithPublishRemote.isSubset(of: existing) { worktreesWithPublishRemote.formIntersection(existing) }
         pruneRemovedState(keeping: existing)
+        InspectorView.forgetWorktrees(except: workspace.allWorktrees.lazy.map(\.path))
         // A collapsed project shows none of its rows, so only the selected worktree, which the
         // inspector and the tab bar still draw from, is worth a git call there. Expanding the
         // project refreshes the rest; see `setProject(_:expanded:)`.
@@ -100,6 +103,7 @@ extension AppModel {
                 guard !Task.isCancelled, let self else { return }
                 if NSApp.isActive || self.isMainWindowVisible {
                     self.refreshGitStatus(lookingUpPullRequests: true)
+                    self.refreshMissingWorktrees()
                     self.fetchRemotesIfDue()
                     // An agent installed from one of the app's own terminals should not stay
                     // greyed out until the user happens to switch apps and back.
@@ -124,7 +128,11 @@ extension AppModel {
             guard !gitRefresh.fetchesInFlight.contains(project.id) else { continue }
             // Without an upstream anywhere there is nothing a fetch could make "behind".
             let ids = project.worktrees.map(\.id)
-            guard ids.contains(where: { gitSummaries[$0]?.upstream != nil }) else { continue }
+            // One that is gone or not there yet counts: the fetch is what notices the branch being pushed.
+            guard ids.contains(where: {
+                guard let summary = gitSummaries[$0] else { return false }
+                return summary.upstream != nil || summary.goneUpstream != nil || summary.pendingUpstream != nil
+            }) else { continue }
             gitRefresh.fetchesInFlight.insert(project.id)
             gitRefresh.fetchedAt[project.id] = .now
             let git = git
@@ -221,7 +229,12 @@ extension AppModel {
             }
             // An upstream already says there is a remote, so only a branch without one costs the call.
             var hasRemote = false
-            if let summary, summary.upstream == nil { hasRemote = await git.hasRemote(in: worktree.path) }
+            var hasPublishRemote = false
+            if let summary, summary.upstream == nil {
+                let remotes = await git.remoteNames(in: worktree.path)
+                hasRemote = !remotes.isEmpty
+                hasPublishRemote = GitClient.publishRemote(among: remotes, goneUpstream: summary.goneUpstream ?? summary.pendingUpstream) != nil
+            }
             guard let self else { return }
             if countedLines { self.gitRefresh.diffStatCheckedAt[id] = .now }
             self.gitRefresh.summariesInFlight.remove(id)
@@ -230,11 +243,15 @@ extension AppModel {
                 self.gitSummaries[id] = nil
                 self.pullRequests[id] = nil
                 self.worktreesWithRemote.remove(id)
+                self.worktreesWithPublishRemote.remove(id)
                 return
             }
             if self.gitSummaries[id] != summary { self.gitSummaries[id] = summary }
             if hasRemote != self.worktreesWithRemote.contains(id) {
                 if hasRemote { self.worktreesWithRemote.insert(id) } else { self.worktreesWithRemote.remove(id) }
+            }
+            if hasPublishRemote != self.worktreesWithPublishRemote.contains(id) {
+                if hasPublishRemote { self.worktreesWithPublishRemote.insert(id) } else { self.worktreesWithPublishRemote.remove(id) }
             }
             // Not when the branch was switched in the app since this status was read: the name
             // written then is newer, and the refresh the switch queued brings the matching status.

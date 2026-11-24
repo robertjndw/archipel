@@ -6,13 +6,28 @@ import Sparkle
 /// for everyone, prereleases tagged with the beta channel for those who opt in.
 @Observable
 final class Updater {
-    /// Debug builds carry build number 1, so every release looks newer and Sparkle would offer to
-    /// replace the build you are working on.
-    #if DEBUG
-    static let isEnabled = false
-    #else
-    static let isEnabled = true
-    #endif
+    /// Only builds from the release pipeline get a real build number. Debug builds and copies built
+    /// from source keep the placeholder 1, so every release would look newer and Sparkle would
+    /// offer to replace the build you made yourself.
+    static let isEnabled: Bool = {
+        #if DEBUG
+        return false
+        #else
+        return !isSourceBuild
+        #endif
+    }()
+
+    /// True for a build that did not come from the release pipeline, see docs/releasing.md. Debug
+    /// builds have the placeholder too, so check `isDebugBuild` first when telling the two apart.
+    static let isSourceBuild = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) == "1"
+
+    static let isDebugBuild: Bool = {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }()
 
     private(set) var canCheckForUpdates = false
     private(set) var lastCheckDate: Date?
@@ -38,6 +53,11 @@ final class Updater {
         controller = SPUStandardUpdaterController(startingUpdater: Self.isEnabled, updaterDelegate: delegate, userDriverDelegate: nil)
         checksAutomatically = controller.updater.automaticallyChecksForUpdates
         receivesBetaUpdates = UpdaterDelegate.receivesBetaUpdates
+        // Written once the choice is derived from the version, or a stable update would move a
+        // beta tester to the stable channel on the next launch. Assigning in init skips didSet.
+        if UserDefaults.standard.object(forKey: UpdaterDelegate.betaKey) == nil, receivesBetaUpdates {
+            UserDefaults.standard.set(true, forKey: UpdaterDelegate.betaKey)
+        }
         lastCheckDate = controller.updater.lastUpdateCheckDate
         // Background checks move the date too, so read it whenever a cycle ends rather than only
         // after a check from the button.

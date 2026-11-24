@@ -22,20 +22,31 @@ extension AppModel {
     /// repository as far as the last status poll could tell, and when the action could only fail:
     /// nothing to pull from, nowhere to publish to, no remote to fetch. The Changes tab's sync menu
     /// draws the same lines, except that this Push stays available with nothing ahead.
+    ///
+    /// A branch whose upstream was deleted has `upstream` nil in its summary, so it cannot be
+    /// pulled. It is not pushed from here either: that state is what a merged pull request leaves
+    /// behind, and a push would put the branch back on the remote, for every such worktree of a
+    /// batch at once. Publishing it again on purpose is in the Changes tab's sync menu.
+    /// "Nowhere to publish to" includes several remotes with none named origin, where git would
+    /// have to guess.
     func canSync(_ action: SyncAction, _ id: Worktree.ID?) -> Bool {
         guard let id, isGitAvailable, syncsInFlight[id] == nil, let summary = gitSummaries[id] else { return false }
         let hasRemote = summary.upstream != nil || worktreesWithRemote.contains(id)
         switch action {
         case .pull: return summary.branch != nil && summary.upstream != nil
-        case .push: return summary.branch != nil && hasRemote
+        case .push:
+            guard summary.branch != nil, summary.goneUpstream == nil else { return false }
+            return summary.upstream != nil || worktreesWithPublishRemote.contains(id)
         case .fetch: return hasRemote
         }
     }
 
-    /// A push publishes a branch that has no upstream yet, and the menu should say so.
+    /// A push publishes a branch that has no upstream yet, and the menu should say so. Not one
+    /// whose upstream is gone: `canSync` keeps that item disabled, and it should not read as an
+    /// invitation to publish while it is.
     func pushPublishes(_ id: Worktree.ID?) -> Bool {
         guard let summary = id.flatMap({ gitSummaries[$0] }) else { return false }
-        return summary.branch != nil && summary.upstream == nil
+        return summary.branch != nil && summary.upstream == nil && summary.goneUpstream == nil
     }
 
     func sync(_ action: SyncAction, worktree id: Worktree.ID) {

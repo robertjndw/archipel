@@ -166,8 +166,9 @@ final class AppSettings {
     /// The settings file the entries were written to. CLAUDE_CONFIG_DIR is read from a login shell,
     /// which can time out, so checks and removal use this path instead of guessing again.
     var claudeUserHooksFilePath: String? { didSet { defaults.set(claudeUserHooksFilePath, forKey: Key.claudeUserHooksFilePath) } }
-    /// The Codex hook command that has reported at least once, which means the user trusted it. A
-    /// different command (the path changed) has to be trusted again.
+    /// The Codex hook command the latest Codex sessions reported through, which means the user
+    /// trusts it. A different command (the path changed) has to be trusted again, and it is
+    /// cleared when a session finishes a turn without its hooks: the trust was taken back.
     var codexHooksTrustedCommand: String? { didSet { defaults.set(codexHooksTrustedCommand, forKey: Key.codexHooksTrustedCommand) } }
     var showsMenuBarExtra: Bool { didSet { defaults.set(showsMenuBarExtra, forKey: Key.showsMenuBarExtra) } }
     /// Banners for a session you are not looking at are redundant while Archipel itself is frontmost.
