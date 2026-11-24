@@ -3,17 +3,50 @@ import Synchronization
 import Testing
 @testable import GitKit
 
+/// Stands in for the Trash, so a test run leaves nothing in the real one: files are moved into a
+/// folder of the test's own, where what was handed over can be read back.
+final class TestTrash: Sendable {
+    private let folder: URL
+    private let moved = Mutex<[String: URL]>([:])
+
+    init(in base: URL) {
+        folder = base.appending(path: "trash")
+    }
+
+    func client() -> GitClient {
+        GitClient(moveToTrash: { [self] in try move($0) })
+    }
+
+    private func move(_ url: URL) throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let destination = folder.appending(path: UUID().uuidString)
+        try FileManager.default.moveItem(at: url, to: destination)
+        moved.withLock { $0[url.path] = destination }
+    }
+
+    /// The paths that were trashed, as they were before.
+    var paths: Set<String> { moved.withLock { Set($0.keys) } }
+
+    /// What the file that used to be at `url` holds now that it is in the trash, nil if it never got there.
+    func contents(of url: URL) -> String? {
+        moved.withLock { $0[url.path] }.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+    }
+}
+
 /// Each test gets a fresh repository in its own temp directory, removed in deinit.
 final class GitClientTests {
     let base: URL
     let repo: URL
-    let git = GitClient()
+    let trash: TestTrash
+    let git: GitClient
 
     init() throws {
         // git reports /private/var paths; resolvingSymlinksInPath would map them back to /var, realpath does not.
         let temp = realpath(FileManager.default.temporaryDirectory.path, nil).map { String(cString: $0) } ?? NSTemporaryDirectory()
         base = URL(filePath: temp).appending(path: "GitKitTests-\(UUID().uuidString)")
         repo = base.appending(path: "repo")
+        trash = TestTrash(in: base)
+        git = trash.client()
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
         try sh("init", "-q", "-b", "main")
         try sh("config", "user.name", "GitKit Tests")
@@ -110,6 +143,9 @@ final class GitClientTests {
         #expect(FileManager.default.fileExists(atPath: repo.appending(path: "gone.txt").path))
         #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "new [1].txt").path))
         #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: []))
+        // The untracked file is the only one git cannot bring back, and the only one trashed.
+        #expect(trash.paths == [repo.appending(path: "new [1].txt").path])
+        #expect(trash.contents(of: repo.appending(path: "new [1].txt")) == "n\n")
     }
 
     @Test func discardUnstagedTrashesIntentToAddFilesInsteadOfEmptyingThem() async throws {
@@ -127,6 +163,7 @@ final class GitClientTests {
 
         // Gone from the folder and from the index, rather than left behind as an empty file.
         #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "intended [1].txt").path))
+        #expect(trash.contents(of: repo.appending(path: "intended [1].txt")) == "not committed anywhere\n")
         status = try await git.status(in: repo)
         #expect(status == GitStatus(branch: "main", staged: [], unstaged: [GitFileChange(path: "kept.txt", kind: .added)]))
         #expect(try String(contentsOf: repo.appending(path: "kept.txt"), encoding: .utf8) == "also intended\n")
@@ -330,23 +367,259 @@ final class GitClientTests {
         #expect(running.withLock { $0.now } == 0)
     }
 
-    @Test func discardStagedResetsToHeadAndRemovesAdditions() async throws {
+    @Test func discardStagedResetsToHeadAndTrashesAdditions() async throws {
+        let added = "added.txt"
+        let renamed = "renamed.txt"
         try write("a.txt", "a\n")
         try write("old.txt", "o\n")
         try commitAll()
         try write("a.txt", "changed\n")
-        try write("added.txt", "x\n")
-        try sh("mv", "old.txt", "new.txt")
+        try write(added, "only copy\n")
+        try sh("mv", "old.txt", renamed)
         try await git.stageAll(in: repo)
+        // Edited after staging: the index no longer has what is on disk either.
+        try write(added, "only copy, edited since\n")
 
         let status = try await git.status(in: repo)
         try await git.discardStaged(status.staged, in: repo)
 
         #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "a\n")
-        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "added.txt").path))
-        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "new.txt").path))
-        #expect(FileManager.default.fileExists(atPath: repo.appending(path: "old.txt").path))
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: added).path))
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: renamed).path))
+        #expect(try String(contentsOf: repo.appending(path: "old.txt"), encoding: .utf8) == "o\n")
         #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: []))
+
+        // No commit ever held these two, so they have to be recoverable: handed to the trash as
+        // they were on disk, which `git rm -f` would not do.
+        #expect(trash.paths == [repo.appending(path: added).path, repo.appending(path: renamed).path])
+        #expect(trash.contents(of: repo.appending(path: added)) == "only copy, edited since\n")
+        #expect(trash.contents(of: repo.appending(path: renamed)) == "o\n")
+    }
+
+    @Test func discardSaysSoWhenTheVolumeHasNoTrash() async throws {
+        // What `trashItem` reports on network shares and some external volumes.
+        let git = GitClient(moveToTrash: { _ in throw CocoaError(.featureUnsupported) })
+        try write("a.txt", "a\n")
+        try commitAll()
+        try write("a.txt", "changed\n")
+        try write("new.txt", "only copy\n")
+        try await git.stageAll(in: repo)
+
+        do {
+            try await git.discardStaged(try await git.status(in: repo).staged, in: repo)
+            Issue.record("expected the file that could not be trashed to be reported")
+        } catch let error as GitError {
+            #expect(error.message == "new.txt was unstaged and left in place because this volume has no Trash.")
+        }
+        // Nothing is lost, and the file that could be reset was not held up by the one that could not.
+        #expect(try String(contentsOf: repo.appending(path: "new.txt"), encoding: .utf8) == "only copy\n")
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "a\n")
+        #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: [GitFileChange(path: "new.txt", kind: .untracked)]))
+
+        try write("other.txt", "second\n")
+        do {
+            try await git.discardUnstaged(try await git.status(in: repo).unstaged, in: repo)
+            Issue.record("expected the untracked files to be reported")
+        } catch let error as GitError {
+            #expect(error.message == "2 files were left in place because this volume has no Trash.")
+        }
+        #expect(FileManager.default.fileExists(atPath: repo.appending(path: "other.txt").path))
+
+        // Any other failure keeps the system's own reason.
+        let failing = GitClient(moveToTrash: { _ in throw CocoaError(.fileWriteNoPermission) })
+        do {
+            try await failing.discardUnstaged([GitFileChange(path: "other.txt", kind: .untracked)], in: repo)
+            Issue.record("expected the failed move to be reported")
+        } catch let error as GitError {
+            #expect(error.message.hasPrefix("other.txt was left in place because it could not be moved to the Trash: "))
+        }
+    }
+
+    @Test func discardStagedDropsAStagedCopyWithoutTouchingItsSource() async throws {
+        try write("source.txt", String(repeating: "line\n", count: 40))
+        try commitAll()
+        try FileManager.default.copyItem(at: repo.appending(path: "source.txt"), to: repo.appending(path: "copy.txt"))
+        try sh("add", "copy.txt")
+
+        try await git.discardStaged([GitFileChange(path: "copy.txt", originalPath: "source.txt", kind: .copied)], in: repo)
+
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "copy.txt").path))
+        #expect(FileManager.default.fileExists(atPath: repo.appending(path: "source.txt").path))
+        #expect(trash.paths == [repo.appending(path: "copy.txt").path])
+        #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: []))
+    }
+
+    @Test func discardLeavesANestedRepositoryAlone() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        try write("a.txt", "changed\n")
+        try write("loose.txt", "untracked\n")
+        let nested = repo.appending(path: ".claude/worktrees/task")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try shIn(nested, "init", "-q")
+        try write(".claude/worktrees/task/work.txt", "an agent is in here\n")
+
+        let status = try await git.status(in: repo)
+        let folder = GitFileChange(path: ".claude/worktrees/task/", kind: .untracked)
+        #expect(status.unstaged.contains(folder))
+        #expect(folder.isDirectory)
+        #expect(!GitFileChange(path: "loose.txt", kind: .untracked).isDirectory)
+
+        // As Discard All would pass it, and on its own.
+        try await git.discardUnstaged(status.unstaged, in: repo)
+        try await git.discardUnstaged([folder], in: repo)
+
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "a\n")
+        #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "loose.txt").path))
+        #expect(try String(contentsOf: nested.appending(path: "work.txt"), encoding: .utf8) == "an agent is in here\n")
+        #expect(try await git.status(in: repo).unstaged == [folder])
+        #expect(trash.paths == [repo.appending(path: "loose.txt").path])
+    }
+
+    @Test func discardingAStagedNestedRepositoryOnlyDropsItsEntry() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        let nested = repo.appending(path: "vendor/lib")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try shIn(nested, "init", "-q", "-b", "main")
+        try shIn(nested, "config", "user.name", "GitKit Tests")
+        try shIn(nested, "config", "user.email", "tests@example.invalid")
+        try shIn(nested, "config", "commit.gpgsign", "false")
+        try write("vendor/lib/file.txt", "inside\n")
+        try shIn(nested, "add", "-A")
+        try shIn(nested, "commit", "-q", "-m", "inner")
+        // Staged as a gitlink: one added entry that stands for the whole folder.
+        try sh("-c", "advice.addEmbeddedRepo=false", "add", "vendor/lib")
+
+        let status = try await git.status(in: repo)
+        #expect(status.staged == [GitFileChange(path: "vendor/lib", kind: .added)])
+        try await git.discardStaged(status.staged, in: repo)
+
+        #expect(try String(contentsOf: nested.appending(path: "file.txt"), encoding: .utf8) == "inside\n")
+        #expect(try await git.status(in: repo).staged.isEmpty)
+        #expect(trash.paths.isEmpty)
+    }
+
+    @Test func batchesKeepEveryPathInOrderUnderTheLimit() {
+        #expect(GitClient.batches([]).isEmpty)
+        #expect(GitClient.batches(["a", "b"]) == [["a", "b"]])
+        let paths = (0..<100).map { "folder/file-\($0).txt" }
+        let batches = GitClient.batches(paths, byteLimit: 400)
+        #expect(batches.count > 1)
+        #expect(batches.flatMap(\.self) == paths)
+        #expect(batches.allSatisfy { !$0.isEmpty && $0.reduce(0) { $0 + $1.utf8.count } <= 400 })
+        // Short paths stay far under the byte limit, and still must not all go into one command.
+        let short = (0..<5000).map { "f\($0)" }
+        let counted = GitClient.batches(short)
+        #expect(counted.map(\.count) == [2000, 2000, 1000])
+        #expect(counted.flatMap(\.self) == short)
+        // A single path over the limit still gets a command of its own.
+        #expect(GitClient.batches(["short", String(repeating: "x", count: 900), "short"], byteLimit: 400).map(\.count) == [1, 1, 1])
+    }
+
+    @Test func discardHandlesMorePathsThanOneCommandLineHolds() async throws {
+        // Long names, so that together they are past the 1 MB the kernel allows for arguments.
+        let folder = String(repeating: "d", count: 200)
+        let names = (0..<4500).map { "\(folder)/\(String(repeating: "f", count: 40))-\($0).txt" }
+        #expect(names.reduce(0) { $0 + $1.utf8.count } > 1_048_576)
+        try FileManager.default.createDirectory(at: repo.appending(path: folder), withIntermediateDirectories: true)
+        for name in names {
+            FileManager.default.createFile(atPath: repo.appending(path: name).path, contents: Data("x\n".utf8))
+        }
+        try commitAll()
+        try FileManager.default.removeItem(at: repo.appending(path: folder))
+
+        let status = try await git.status(in: repo)
+        #expect(status.unstaged.count == names.count)
+        try await git.discardUnstaged(status.unstaged, in: repo)
+        #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: []))
+
+        // The staged side, and unstaging, take the same lists.
+        try FileManager.default.removeItem(at: repo.appending(path: folder))
+        try await git.stage(names, in: repo)
+        #expect(try await git.status(in: repo).staged.count == names.count)
+        try await git.unstage(names, in: repo)
+        #expect(try await git.status(in: repo).staged.isEmpty)
+        try await git.stage(names, in: repo)
+        try await git.discardStaged(try await git.status(in: repo).staged, in: repo)
+        #expect(try await git.status(in: repo) == GitStatus(branch: "main", staged: [], unstaged: []))
+    }
+
+    @Test func searchPATHIsNotWaitedForByReadsButByWrites() async throws {
+        // A resolution of its own, held open, so nothing here depends on the process-wide one.
+        let path = SearchPATH()
+        let marker = base.appending(path: "login-shell-bin").path
+        let inherited = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        let (gate, release) = AsyncStream.makeStream(of: Void.self)
+        path.resolve {
+            for await _ in gate { break }
+            return "\(marker):\(inherited)"
+        }
+
+        // An alias that runs in a shell, which prints the PATH git itself was started with.
+        let printPATH = ["-c", "alias.print-path=!printf %s \"$PATH\"", "print-path"]
+        let finished = Mutex(Set<String>())
+        func start(_ name: String, readOnly: Bool) -> Task<String, any Error> {
+            Task { [repo] in
+                defer { finished.withLock { _ = $0.insert(name) } }
+                return try await GitProcess.run(printPATH, in: repo, readOnly: readOnly, searchPATH: path).stdout
+            }
+        }
+        let write = start("write", readOnly: false)
+        let read = start("read", readOnly: true)
+
+        // The read comes back while the shell is still being asked. The limit only turns a read
+        // that waits after all into a failure where it would otherwise hang the test.
+        for _ in 0..<1500 where !finished.withLock({ $0.contains("read") }) { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(finished.withLock { $0 } == ["read"])
+        release.yield()
+        #expect(try await !read.value.contains(marker))
+        // The write started first and is the one that sat it out, to run its hooks with the answer.
+        #expect(try await write.value.contains(marker))
+    }
+
+    @Test func searchPATHIsUnknownUntilResolvedAndWhenEmpty() async throws {
+        let path = SearchPATH()
+        #expect(path.known == nil)
+        #expect(await path.value() == nil)
+
+        let (gate, release) = AsyncStream.makeStream(of: Void.self)
+        path.resolve {
+            for await _ in gate { break }
+            return "/resolved/bin:/usr/bin"
+        }
+        #expect(path.known == nil)
+        async let waited = path.value()
+        release.yield()
+        #expect(await waited == "/resolved/bin:/usr/bin")
+        // `known` follows a moment after the resolution itself.
+        for _ in 0..<500 where path.known == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(path.known == "/resolved/bin:/usr/bin")
+
+        // A shell that printed nothing must not leave git without any PATH.
+        let empty = SearchPATH()
+        empty.resolve { "" }
+        #expect(await empty.value() == nil)
+        #expect(empty.known == nil)
+    }
+
+    @Test func hooksRunWithTheResolvedSearchPATH() async throws {
+        // Process-wide, like the app's one call at launch. The inherited PATH stays part of it, so
+        // tests running next to this one see nothing they did not have before.
+        let marker = base.appending(path: "login-shell-bin").path
+        let inherited = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        GitClient.resolveSearchPATH { "\(marker):\(inherited)" }
+
+        try sh("config", "core.hooksPath", ".git/hooks")
+        let hook = repo.appending(path: ".git/hooks/pre-commit")
+        try "#!/bin/sh\nprintf '%s' \"$PATH\" > \"$(git rev-parse --show-toplevel)/../hook-path\"\n".write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "with a hook", in: repo)
+
+        let seen = try String(contentsOf: base.appending(path: "hook-path"), encoding: .utf8)
+        #expect(seen.split(separator: ":").contains(Substring(marker)))
     }
 
     @Test func discardStagedWorksWithoutCommits() async throws {
@@ -357,6 +630,7 @@ final class GitClientTests {
         try await git.discardStaged(status.staged, in: repo)
 
         #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "first.txt").path))
+        #expect(trash.contents(of: repo.appending(path: "first.txt")) == "1\n")
     }
 
     @Test func worktreeLifecycle() async throws {
@@ -486,6 +760,24 @@ final class GitClientTests {
         #expect(entries.map(\.isPrunable) == [false, true])
     }
 
+    @Test func repairReconnectsMovedWorktreesAndRepository() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        let wt = base.appending(path: "wt")
+        try await git.addWorktree(repository: repo, path: wt, branch: "feature", createBranch: true)
+
+        let movedWorktree = base.appending(path: "wt-moved")
+        try FileManager.default.moveItem(at: wt, to: movedWorktree)
+        try await git.repairWorktrees(in: movedWorktree)
+        #expect(try await git.worktrees(of: repo).map(\.path.path) == [repo.path, movedWorktree.path])
+
+        let movedRepo = base.appending(path: "repo-moved")
+        try FileManager.default.moveItem(at: repo, to: movedRepo)
+        try await git.repairWorktrees(in: movedRepo, paths: [movedWorktree])
+        #expect(await git.currentBranch(in: movedWorktree) == "feature")
+        #expect(try await git.worktrees(of: movedWorktree).map(\.path.path) == [movedRepo.path, movedWorktree.path])
+    }
+
     @Test func currentBranchAndRepositoryDetection() async throws {
         let plain = base.appending(path: "plain")
         try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
@@ -576,6 +868,40 @@ final class GitClientTests {
         #expect(renamed.newPath == "kept.txt")
 
         #expect(try await git.fileDiff(path: "missing.txt", staged: false, in: repo) == nil)
+    }
+
+    @Test func fileDiffSizeIsTheLargerSideOfTheComparison() async throws {
+        // Before the first commit there is no HEAD to ask.
+        try write("untracked.log", String(repeating: "x", count: 300))
+        #expect(try await git.fileDiffSize(path: "untracked.log", staged: false, in: repo) == 300)
+        #expect(try await git.fileDiffSize(path: "untracked.log", staged: true, in: repo) == 0)
+
+        try write("big.txt", String(repeating: "y", count: 1_000))
+        try write("sub/file.txt", "12345")
+        try commitAll()
+        // The working tree shrank: the index side is the larger one.
+        try write("big.txt", "y")
+        #expect(try await git.fileDiffSize(path: "big.txt", staged: false, in: repo) == 1_000)
+        try sh("add", "big.txt")
+        #expect(try await git.fileDiffSize(path: "big.txt", staged: true, in: repo) == 1_000)
+        // Paths count from the top of the repository, wherever the folder asked from is.
+        #expect(try await git.fileDiffSize(path: "sub/file.txt", staged: false, in: repo.appending(path: "sub")) == 5)
+        // A deleted file has only its old side.
+        try FileManager.default.removeItem(at: repo.appending(path: "sub/file.txt"))
+        #expect(try await git.fileDiffSize(path: "sub/file.txt", staged: false, in: repo) == 5)
+    }
+
+    @Test func fileDiffSizeTakesANameThatLooksLikeAnIndexStageLiterally() async throws {
+        // To git, `:2:notes.txt` is "our" side of a conflicted notes.txt, which does not exist here.
+        try write("2:notes.txt", String(repeating: "z", count: 700))
+        try write("notes.txt", "short")
+        try commitAll()
+        try write("2:notes.txt", "z")
+        #expect(try await git.fileDiffSize(path: "2:notes.txt", staged: false, in: repo) == 700)
+        try sh("add", "-A")
+        try write("2:notes.txt", String(repeating: "z", count: 900))
+        #expect(try await git.fileDiffSize(path: "2:notes.txt", staged: true, in: repo) == 700)
+        #expect(try await git.fileDiffSize(path: "2:notes.txt", staged: false, in: repo) == 900)
     }
 
     @Test func fileDiffReportsBinaryAndWorksWithoutCommits() async throws {

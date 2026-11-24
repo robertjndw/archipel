@@ -110,7 +110,9 @@ final class ChangesModelTests {
         model.discardAll(confirmed)
         try await until { model.status.unstaged.allSatisfy { $0.path != "a.txt" } }
 
-        #expect(model.actionError == nil)
+        // Not an error, but b.txt was left out and the user should hear about it.
+        #expect(model.actionError == "1 file changed while the question was open and was not discarded.")
+        model.actionError = nil
         #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "a\n")
         // Agreed to as a modification, now a deletion: restoring it was never asked for.
         #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "b.txt").path))
@@ -135,6 +137,233 @@ final class ChangesModelTests {
         try await until { model.status.unstaged.map(\.path) == ["a.txt"] }
 
         #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "written while the dialog was open\n")
+        // b.txt went, a.txt did not, and the user is told instead of left to wonder.
+        #expect(model.actionError == "1 file changed while the question was open and was not discarded.")
+        model.actionError = nil
+    }
+
+    @Test func aDiscardThatIsSkippedSaysSo() async throws {
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        let a = try #require(model.status.unstaged.first { $0.path == "a.txt" })
+        let seen = model.stamps(of: [a])
+        try write("a.txt", "written while the dialog was open\n")
+
+        model.discard(a, staged: false, seen: seen)
+        #expect(model.actionError?.hasPrefix("Nothing was discarded: a.txt changed") == true)
+        model.actionError = nil
+        model.discardAll([a], seen: seen)
+        #expect(model.actionError?.hasPrefix("Nothing was discarded") == true)
+        model.actionError = nil
+
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8) == "written while the dialog was open\n")
+    }
+
+    @Test func aDiscardOfAnEntryThatWentAwaySaysThatAndNotThatItChanged() async throws {
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        let confirmed = model.status.unstaged
+        let a = try #require(confirmed.first { $0.path == "a.txt" })
+
+        // What an agent's commit does behind the dialog.
+        try git("commit", "-q", "-m", "by the agent", "a.txt")
+        await model.refresh()
+
+        model.discard(a, staged: false)
+        #expect(model.actionError == "Nothing was discarded: a.txt has no unstaged changes any more.")
+        model.actionError = nil
+        model.discardAll([a])
+        #expect(model.actionError == "Nothing was discarded: the file has no unstaged changes any more.")
+        model.actionError = nil
+        #expect(try git("log", "-1", "--format=%s") == "by the agent")
+    }
+
+    @Test func aRefusedDiscardKeepsItsNoticeWhenAnEarlierActionFinishes() async throws {
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        let a = try #require(model.status.unstaged.first { $0.path == "a.txt" })
+        let b = try #require(model.status.unstaged.first { $0.path == "b.txt" })
+        let seen = model.stamps(of: [a])
+        try write("a.txt", "written while the dialog was open\n")
+
+        // Still queued when the discard is turned down, and done only after the notice is up.
+        model.stage(b)
+        model.discard(a, staged: false, seen: seen)
+        let notice = try #require(model.actionError)
+        #expect(notice.hasPrefix("Nothing was discarded"))
+        try await until { model.status.staged.map(\.path) == ["b.txt"] }
+
+        #expect(model.actionError == notice)
+        model.actionError = nil
+    }
+
+    @Test func aStageThatWorksClearsTheErrorOfTheOneBeforeIt() async throws {
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        let b = try #require(model.status.unstaged.first { $0.path == "b.txt" })
+
+        model.stage(GitFileChange(path: "missing.txt", kind: .modified))
+        try await until { model.actionError != nil }
+        model.stage(b)
+        try await until { model.status.staged.map(\.path) == ["b.txt"] }
+        #expect(model.actionError == nil)
+    }
+
+    @Test func aStagedFolderIsToldFromAStagedFile() async throws {
+        try FileManager.default.createDirectory(at: repo.appending(path: "vendor/lib"), withIntermediateDirectories: true)
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        // How status lists a nested repository once it is staged: no trailing slash.
+        #expect(model.isFolder(GitFileChange(path: "vendor/lib", kind: .added)))
+        #expect(model.isFolder(GitFileChange(path: "elsewhere/", kind: .untracked)))
+        #expect(!model.isFolder(GitFileChange(path: "a.txt", kind: .added)))
+        #expect(!model.isFolder(GitFileChange(path: "missing.txt", kind: .added)))
+    }
+
+    @Test func aRemovedWorktreeTakesItsKeptModelWithIt() async throws {
+        let store = ChangesModelStore.shared
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        model.actionError = "rejected by the remote"
+        #expect(store.model(for: repo, searchPATH: { "" }) === model)
+
+        store.forget(repo)
+        #expect(store.model(for: repo, searchPATH: { "" }) !== model)
+        // Whatever the old model still has to say does not bring it back for the next worktree
+        // that is created at this path.
+        model.actionError = "and one more thing"
+        #expect(store.model(for: repo, searchPATH: { "" }) !== model)
+    }
+
+    @Test func aKeptModelIsNotHandedOutOnceItsFolderIsGone() async throws {
+        let store = ChangesModelStore.shared
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        model.actionError = "rejected by the remote"
+        #expect(store.model(for: repo, searchPATH: { "" }) === model)
+
+        // Removed without the store being told.
+        try FileManager.default.removeItem(at: repo)
+        #expect(store.model(for: repo, searchPATH: { "" }) !== model)
+        // A new worktree at the same path is another folder, and gets a model of its own.
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        #expect(store.model(for: repo, searchPATH: { "" }) !== model)
+    }
+
+    @Test func commitDoesNotBecomeCommitAllWhenTheStagedFilesAreGone() async throws {
+        try write("new.txt", "never offered\n")
+        try git("add", "a.txt")
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        model.message = "only a"
+        #expect(model.commitControl.mode == .commit)
+
+        // What an agent's own `git reset` (or commit) does between the last poll and the click.
+        try git("reset", "-q")
+        model.commit()
+        try await idle(model)
+
+        let error = try #require(model.actionError)
+        #expect(error.contains("no longer what the list showed"))
+        #expect(try git("log", "--format=%s") == "first")
+        // Nothing was staged on the way either.
+        #expect(model.status.staged.isEmpty)
+        #expect(model.status.unstaged.map(\.path) == ["a.txt", "b.txt", "new.txt"])
+        #expect(model.message == "only a")
+        model.message = ""
+        model.actionError = nil
+    }
+
+    @Test func stageAllLeavesConflictedFilesUnstaged() async throws {
+        try git("commit", "-q", "-am", "ours")
+        try git("checkout", "-q", "-b", "other", "HEAD~1")
+        try write("a.txt", "theirs\n")
+        try git("commit", "-q", "-am", "theirs")
+        try git("checkout", "-q", "main")
+        try git("merge", "-q", "other")
+        try write("b.txt", "b3\n")
+        try write("new.txt", "new\n")
+
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        #expect(model.status.unstaged.contains { $0.path == "a.txt" && $0.kind == .conflicted })
+
+        model.stageAll()
+        try await until { model.status.staged.map(\.path).sorted() == ["b.txt", "new.txt"] }
+
+        #expect(model.actionError == nil)
+        // Still unmerged: `git add -A` would have marked it resolved with the markers in it.
+        #expect(model.status.unstaged == [GitFileChange(path: "a.txt", kind: .conflicted)])
+        #expect(try String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8).contains("<<<<<<<"))
+    }
+
+    /// A rename git only sees in the working tree (the new name added with `git add -N`) is one
+    /// entry with two paths. Staging just the new name would leave the old one deleted and unstaged.
+    @Test func stageAllAroundAConflictStagesBothNamesOfARename() async throws {
+        try git("commit", "-q", "-am", "ours")
+        try git("checkout", "-q", "-b", "other", "HEAD~1")
+        try write("a.txt", "theirs\n")
+        try git("commit", "-q", "-am", "theirs")
+        try git("checkout", "-q", "main")
+        try git("merge", "-q", "other")
+        try FileManager.default.moveItem(at: repo.appending(path: "b.txt"), to: repo.appending(path: "moved.txt"))
+        try git("add", "-N", "moved.txt")
+
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        #expect(model.status.unstaged.contains { $0.path == "moved.txt" && $0.originalPath == "b.txt" })
+
+        model.stageAll()
+        try await until { model.status.unstaged.count == 1 }
+
+        #expect(model.actionError == nil)
+        #expect(model.status.unstaged == [GitFileChange(path: "a.txt", kind: .conflicted)])
+    }
+
+    @Test func stageAllStagesEverythingWithoutConflicts() async throws {
+        try write("new.txt", "new\n")
+        try FileManager.default.removeItem(at: repo.appending(path: "b.txt"))
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        model.stageAll()
+        try await until { model.status.staged.count == 3 }
+        #expect(model.status.unstaged.isEmpty)
+        #expect(model.actionError == nil)
+    }
+
+    @Test func aRunningCommitAndItsErrorSurviveLeavingTheWorktree() async throws {
+        // Slow, then rejected: first there is progress to come back to, then an error.
+        try installHook("#!/bin/sh\nsleep 1\necho 'lint failed' >&2\nexit 1\n")
+        let store = ChangesModelStore.shared
+        var model: ChangesModel? = ChangesModel(root: repo, searchPATH: { "" })
+        await model?.refresh()
+        model?.message = "rejected"
+        model?.commit()
+        // The inspector turns to another worktree and drops its reference.
+        model = nil
+
+        // Coming back while git runs finds the same model: busy, so Commit cannot be sent twice.
+        let returned = store.model(for: repo, searchPATH: { "" })
+        #expect(returned.activity == .commit)
+        #expect(!returned.commitControl.isEnabled)
+        try await idle(returned)
+        #expect(returned.actionError?.contains("lint failed") == true)
+
+        // And once more with the commit long over: the error is still waiting to be read.
+        #expect(store.model(for: repo, searchPATH: { "" }) === returned)
+        returned.actionError = nil
+        #expect(store.model(for: repo, searchPATH: { "" }) !== returned)
+        returned.message = ""
+    }
+
+    @Test func aModelWithNothingPendingIsNotKept() async throws {
+        let store = ChangesModelStore.shared
+        let model = ChangesModel(root: repo, searchPATH: { "" })
+        await model.refresh()
+        model.message = "everything"
+        model.commit()
+        #expect(store.model(for: repo, searchPATH: { "" }) === model)
+        try await idle(model)
+        #expect(model.actionError == nil)
+        // A clean finish leaves nothing to come back for, so the next visit starts fresh.
+        #expect(store.model(for: repo, searchPATH: { "" }) !== model)
     }
 
     @Test func commitAllStagesEverythingWhenNothingIsStaged() async throws {

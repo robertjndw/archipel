@@ -105,6 +105,28 @@ final class FileTreeModelTests {
         #expect(model.rootError == nil)
     }
 
+    @Test func aSubfolderThatCannotBeReadSaysSoUntilItCanAgain() async throws {
+        let readable = Mutex(false)
+        let root = URL(filePath: "/tree")
+        let secrets = root.appending(path: "secrets")
+        let model = FileTreeModel(root: root) { directory in
+            if directory.lastPathComponent == "secrets", !readable.withLock({ $0 }) { throw CocoaError(.fileReadNoPermission) }
+            return [FileNode(url: directory.appending(path: "file"), name: "file", isDirectory: false)]
+        }
+        await model.load(root)
+        await model.load(secrets)
+        // Nothing to list either way. The error is what tells this folder from an empty one.
+        #expect(model.nodes(in: secrets) == [])
+        #expect(model.listingError(in: secrets) != nil)
+        #expect(model.listingError(in: root) == nil)
+        #expect(model.rootError == nil)
+
+        readable.withLock { $0 = true }
+        await model.load(secrets)
+        #expect(model.listingError(in: secrets) == nil)
+        #expect(model.nodes(in: secrets)?.count == 1)
+    }
+
     @Test func refreshReloadsOnlyFoldersThatCanBeSeen() async throws {
         let version = Mutex(1)
         let root = URL(filePath: "/tree")

@@ -9,17 +9,21 @@ enum GitParser {
     static func status(_ output: String) -> GitStatus {
         var result = GitStatus.empty
         var fields = output.unicodeScalars.split(separator: "\0").makeIterator()
+        var hasCounts = false
+        var isUnborn = false
 
         while let field = fields.next() {
             guard let type = field.first else { continue }
             switch type {
             case "#":
-                if let head = field.dropPrefix("# branch.head ") {
+                if let commit = field.dropPrefix("# branch.oid ") {
+                    isUnborn = commit == "(initial)"
+                } else if let head = field.dropPrefix("# branch.head ") {
                     result.branch = head == "(detached)" ? nil : head
                 } else if let upstream = field.dropPrefix("# branch.upstream ") {
                     result.upstream = upstream
                 } else if let counts = field.dropPrefix("# branch.ab ") {
-                    // Absent entirely when there is no upstream or it is gone, which leaves both at 0.
+                    hasCounts = true
                     let parts = counts.split(separator: " ")
                     if parts.count == 2, parts[0].hasPrefix("+"), parts[1].hasPrefix("-"),
                        let ahead = Int(parts[0].dropFirst()), let behind = Int(parts[1].dropFirst()) {
@@ -48,6 +52,16 @@ enum GitParser {
                 break
             }
         }
+        // git still names a configured upstream whose branch does not exist, but has nothing to
+        // count against and leaves `branch.ab` out. Read as a plain upstream, that is "0 ahead,
+        // 0 behind": up to date with a branch that is not there.
+        if !hasCounts, let upstream = result.upstream {
+            // A branch without a commit cannot have been pushed and then deleted: this is the
+            // clone of an empty repository. With commits, status alone cannot tell the two apart,
+            // and `GitClient` looks at the remote before it settles on "gone".
+            if isUnborn { result.pendingUpstream = upstream } else { result.goneUpstream = upstream }
+            result.upstream = nil
+        }
         return result
     }
 
@@ -55,7 +69,8 @@ enum GitParser {
         let status = status(output)
         let paths = Set((status.staged + status.unstaged).map(\.path))
         return GitSummary(branch: status.branch, upstream: status.upstream, ahead: status.ahead,
-                          behind: status.behind, changedFiles: paths.count)
+                          behind: status.behind, changedFiles: paths.count, goneUpstream: status.goneUpstream,
+                          pendingUpstream: status.pendingUpstream)
     }
 
     /// Parses NUL-separated `ls-files -z` output.

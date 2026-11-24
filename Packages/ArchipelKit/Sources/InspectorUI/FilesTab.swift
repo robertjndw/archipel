@@ -15,6 +15,9 @@ final class FileTreeModel {
     /// listing may or may not have one, so equal folders would not find each other as URLs.
     private var children: [String: [FileNode]] = [:]
     private(set) var rootError: String?
+    /// Why a folder below the root could not be listed, by path key. It lists as empty, and
+    /// without this an unreadable folder would look the same as one with nothing in it.
+    private var listingErrors: [String: String] = [:]
     /// Path key to the URL to list.
     private var expanded: [String: URL] = [:]
     private let listDirectory: @Sendable (URL) async throws -> [FileNode]
@@ -28,6 +31,10 @@ final class FileTreeModel {
     /// Nil until the folder has been listed once.
     func nodes(in directory: URL) -> [FileNode]? {
         children[directory.pathKey]
+    }
+
+    func listingError(in directory: URL) -> String? {
+        listingErrors[directory.pathKey]
     }
 
     /// Whether a listed URL is a folder, from the listings already loaded rather than another stat.
@@ -75,12 +82,14 @@ final class FileTreeModel {
             let nodes = try await listDirectory(directory)
             if children[key] != nodes { children[key] = nodes }
             if isRoot, rootError != nil { rootError = nil }
+            if listingErrors[key] != nil { listingErrors[key] = nil }
         } catch {
+            let message = error.localizedDescription
             if isRoot {
-                let message = error.localizedDescription
                 if rootError != message { rootError = message }
-            } else if children[key] != [] {
-                children[key] = []
+            } else {
+                if children[key] != [] { children[key] = [] }
+                if listingErrors[key] != message { listingErrors[key] = message }
             }
         }
     }
@@ -202,7 +211,11 @@ private struct FileTreeRows: View {
     let model: FileTreeModel
 
     var body: some View {
-        if let nodes = model.nodes(in: directory) {
+        if let error = model.listingError(in: directory) {
+            Label("Can't read this folder", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.secondary)
+                .help(error)
+        } else if let nodes = model.nodes(in: directory) {
             ForEach(nodes) { node in
                 if node.isDirectory {
                     DisclosureGroup(isExpanded: expansion(of: node.url)) {
@@ -268,6 +281,17 @@ private struct FileRow: View {
 
 #Preview("Collapsed") {
     FilesTab(model: PreviewSamples.fileTree(), actions: PreviewSamples.actions)
+        .frame(width: 300, height: 320)
+        .background(Color.inspectorBackground)
+}
+
+#Preview("Can't Read Subfolder") {
+    let model = FileTreeModel(root: PreviewSamples.root) { directory in
+        if directory.lastPathComponent == "Sources" { throw CocoaError(.fileReadNoPermission) }
+        return try await PreviewSamples.listDirectory(directory)
+    }
+    model.setExpanded(PreviewSamples.root.appending(path: "Sources", directoryHint: .isDirectory), true)
+    return FilesTab(model: model, actions: PreviewSamples.actions)
         .frame(width: 300, height: 320)
         .background(Color.inspectorBackground)
 }

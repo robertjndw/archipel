@@ -57,6 +57,7 @@ public struct InspectorView: View {
         Group {
             if let root {
                 // A new identity per root throws away the old models, tasks and expansion state.
+                // Except a Changes model with git still running: see `ChangesModelStore`.
                 InspectorContent(
                     root: root,
                     tab: tab,
@@ -75,6 +76,19 @@ public struct InspectorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Drops what the inspector keeps for worktrees beyond their time on screen (a Changes model
+    /// with an error still to show, an unsent commit message) for all but `roots`. A removed
+    /// worktree's path can be reused, and the new worktree must not start with the old one's state.
+    ///
+    /// Cheap enough to call on a timer: it does nothing while nothing is kept.
+    @MainActor
+    public static func forgetWorktrees(except roots: some Sequence<URL>) {
+        guard !ChangesModelStore.shared.isEmpty || !CommitMessageDrafts.shared.isEmpty else { return }
+        let keys = Set(roots.map(\.pathKey))
+        ChangesModelStore.shared.forget(except: keys)
+        CommitMessageDrafts.shared.forget(except: keys)
     }
 
     public enum Tab: String, CaseIterable, Identifiable {
@@ -212,7 +226,9 @@ private struct InspectorContent: View {
         }
         .onAppear {
             guard models == nil else { return }
-            models = Models(files: FileTreeModel(root: root), changes: ChangesModel(root: root, searchPATH: searchPATH))
+            // The Changes model of an earlier visit, if it still has a commit, push or pull running
+            // or an error from one to show.
+            models = Models(files: FileTreeModel(root: root), changes: ChangesModelStore.shared.model(for: root, searchPATH: searchPATH))
         }
     }
 }
