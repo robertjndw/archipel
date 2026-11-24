@@ -1,3 +1,4 @@
+import AppKit
 import ArchipelCore
 import XCTest
 
@@ -182,7 +183,7 @@ final class TabTests: ArchipelUITestCase {
         let row = paletteRow(startingWith: "notes.txt")
         assertExists(row, "Open Quickly should list notes.txt.")
         row.click()
-        let editor = mainWindow.textViews.element(boundBy: 0)
+        let editor = fileEditorTextView
         assertExists(editor, "The file should open in the editor.")
         editor.click()
         app.typeKey(.downArrow, modifierFlags: .command)
@@ -210,6 +211,59 @@ final class TabTests: ArchipelUITestCase {
             app.typeText("touch marker\n")
             RunLoop.current.run(until: Date().addingTimeInterval(1))
             return FileManager.default.fileExists(atPath: marker.path)
+        }
+    }
+
+    func testCopyPathOfAFileTab() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try launch(with: repository.workspace())
+
+        app.typeKey("p", modifierFlags: .command)
+        assertExists(paletteField, "⌘P should open the palette.")
+        app.typeText("notes")
+        assertExists(paletteRow(startingWith: "notes.txt"), "The worktree's files should be searchable.")
+        app.typeKey(.return, modifierFlags: [])
+        assertExists(tab("notes.txt"), "The file should open in a tab.")
+
+        // The test runner shares the pasteboard with the app, so it starts out empty to make the
+        // copy the only thing that can be on it.
+        NSPasteboard.general.clearContents()
+        tab("notes.txt").rightClick()
+        chooseContextMenu("Copy Path")
+
+        let expected = repository.url.appending(path: "notes.txt").resolvingSymlinksInPath().path
+        waitUntil("the file's path is on the pasteboard") {
+            guard let copied = NSPasteboard.general.string(forType: .string) else { return false }
+            return URL(fileURLWithPath: copied).resolvingSymlinksInPath().path == expected
+        }
+    }
+
+    func testOpenFileFromADiffTab() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try repository.write("notes.txt", "first line\nsecond line\n")
+        try launch(with: repository.workspace())
+
+        showChanges()
+        assertExists(unstagedChange("notes.txt"), "The modified file should be listed.")
+        unstagedChange("notes.txt").doubleClick()
+        assertExists(tab("notes.txt"), "Opening a change should give its diff a tab.")
+        waitUntil("the diff tab is saved") {
+            try self.sandbox.savedWorkspace().allWorktrees[0].panes[0].tabs.map(\.content) == [.diff(path: "notes.txt", staged: false)]
+        }
+
+        tab("notes.txt").rightClick()
+        chooseContextMenu("Open File")
+
+        assertExists(fileEditorTextView, "Open File should show the file in the editor.")
+        waitUntil("the file has a tab of its own next to the diff") {
+            let contents = try self.sandbox.savedWorkspace().allWorktrees[0].panes[0].tabs.map(\.content)
+            return contents.count == 2 && contents.contains { content in
+                if case .file(let url) = content { return url.lastPathComponent == "notes.txt" }
+                return false
+            }
+        }
+        waitUntil("the editor shows the file as it is on disk") {
+            (self.fileEditorTextView.value as? String)?.contains("second line") == true
         }
     }
 }

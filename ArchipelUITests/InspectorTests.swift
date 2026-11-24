@@ -90,7 +90,8 @@ final class InspectorTests: ArchipelUITestCase {
         assertExists(mainWindow.radioButtons["Side by Side"], "The change should open in the diff viewer.")
 
         mainWindow.buttons["Open in Editor"].click()
-        let editor = mainWindow.textViews.element(boundBy: 0)
+        // By identifier: a terminal is a text view to accessibility as well.
+        let editor = mainWindow.textViews.matching(identifier: "editor.text").element(boundBy: 0)
         assertExists(editor, "Open in Editor should show the file in the editor.")
         // Opens next to the diff instead of replacing it, and not as a preview tab.
         waitUntil("the diff and the file are both saved as tabs") {
@@ -110,6 +111,30 @@ final class InspectorTests: ArchipelUITestCase {
         waitUntil("the edit is on disk") {
             try repository.contents(of: "notes.txt").hasPrefix("first line\nsecond line\nthird line")
         }
+    }
+
+    func testADiffOverTheSizeLimitSaysSoUntilTheFileShrinks() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try repository.commit("big.txt", "small\n", message: "add big.txt")
+        // Over the diff viewer's 5 MB, in short lines so it is plainly text.
+        let line = String(repeating: "0123456789", count: 10) + "\n"
+        try repository.write("big.txt", String(repeating: line, count: 60_000))
+        try launch(with: repository.workspace())
+
+        showChanges()
+        assertExists(unstagedChange("big.txt"), "The grown file should be listed.")
+        unstagedChange("big.txt").doubleClick()
+        assertExists(tab("big.txt"), "Opening a change should give its diff a tab.")
+        let tooLarge = mainWindow.staticTexts["File Too Large"]
+        assertExists(tooLarge, "A diff over the limit should say so instead of loading it.")
+        XCTAssertFalse(mainWindow.radioButtons["Side by Side"].exists, "There is no comparison to present.")
+
+        try repository.write("big.txt", "small\nand a little more\n")
+        assertExists(mainWindow.radioButtons["Side by Side"], "Back under the limit, the diff should be shown again.")
+        assertGone(tooLarge, "The size warning should go once the file is small again.")
+
+        try repository.git("checkout", "--", "big.txt")
+        assertExists(staticText(containing: "This file matches the staged version."), "A restored file has nothing left to compare.")
     }
 
     func testHidingAndShowingTheInspector() throws {
