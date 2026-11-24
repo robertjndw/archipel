@@ -63,14 +63,14 @@ struct SubagentRosterTests {
         // Inside the turn the session goes back to work, after it back to its finished turn.
         var during = working()
         during.apply(.subagentStarted(id: "a"), isBeingViewed: false, at: start)
-        during.apply(.attentionRequested(.permission, message: nil), isBeingViewed: false, at: start + 5)
+        during.apply(.attentionRequested(.permission, message: nil, subagent: "a"), isBeingViewed: false, at: start + 5)
         during.apply(.subagentActivity(id: "a"), isBeingViewed: false, at: start + 10)
         #expect(during.status == .working)
 
         var after = working()
         after.apply(.subagentStarted(id: "a"), isBeingViewed: false, at: start)
         after.apply(.turnFinished(message: nil), isBeingViewed: false, at: start + 5)
-        after.apply(.attentionRequested(.permission, message: nil), isBeingViewed: false, at: start + 10)
+        after.apply(.attentionRequested(.permission, message: nil, subagent: "a"), isBeingViewed: false, at: start + 10)
         after.apply(.subagentActivity(id: "a"), isBeingViewed: false, at: start + 15)
         #expect(after.status == .finished)
     }

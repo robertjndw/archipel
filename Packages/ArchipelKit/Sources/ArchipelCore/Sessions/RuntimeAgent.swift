@@ -208,6 +208,23 @@ public enum AgentProcessMatcher {
     public static func isShell(label: String) -> Bool {
         shells.contains(label.hasPrefix("-") ? String(label.dropFirst()) : label)
     }
+
+    /// Whether a process with these arguments is a shell waiting for the user to type, as opposed
+    /// to one running a script or a `-c` command. `name` is the kernel's name for the process,
+    /// used when its arguments could not be read.
+    ///
+    /// An argument that is not an option counts as a script, which also takes the value of an
+    /// option for one (`bash --rcfile x`). That errs towards "something is running", the side
+    /// that asks before a tab is closed.
+    public static func isInteractiveShell(name: String, arguments: [String]) -> Bool {
+        let executable = arguments.first.map { $0.split(separator: "/").last.map(String.init) ?? $0 } ?? name
+        guard isShell(label: executable) else { return false }
+        return arguments.dropFirst().allSatisfy { argument in
+            guard argument.hasPrefix("-") else { return false }
+            // `-c` also hides in a group of short options, as in `zsh -lc`.
+            return argument.hasPrefix("--") || !argument.contains("c")
+        }
+    }
 }
 
 /// Claude's own OSC 9 desktop notifications, the only requests a Claude without hooks reports.

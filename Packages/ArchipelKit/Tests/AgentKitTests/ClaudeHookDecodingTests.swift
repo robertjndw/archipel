@@ -38,8 +38,8 @@ struct ClaudeHookDecodingTests {
         (Fixtures.userPromptSubmit, .promptSubmitted),
         (Fixtures.preToolUse, .activity),
         (Fixtures.postToolUse, .activity),
-        (Fixtures.permissionRequest, .attentionRequested(.permission, message: "Bash")),
-        (Fixtures.notification("permission_prompt"), .attentionRequested(.permission, message: "Claude needs your permission")),
+        (Fixtures.permissionRequest, .attentionRequested(.permission, message: "Bash: rm -rf node_modules")),
+        (Fixtures.notification("permission_prompt"), .attentionReminder(.permission, message: "Claude needs your permission")),
         (Fixtures.notification("elicitation_dialog"), .attentionRequested(.question, message: "Claude needs your permission")),
         (Fixtures.notification("elicitation_url_dialog"), .attentionRequested(.question, message: "Claude needs your permission")),
         (Fixtures.notification("agent_needs_input"), .attentionRequested(.question, message: "Claude needs your permission")),
@@ -57,7 +57,9 @@ struct ClaudeHookDecodingTests {
         Fixtures.notification("idle_prompt"),
         Fixtures.notification("auth_success"),
         Fixtures.notification("elicitation_complete"),
-        #"{"session_id": "abc", "hook_event_name": "SomethingNew"}"#,
+        #"{"session_id": "\#(Fixtures.claudeSessionID)", "hook_event_name": "SomethingNew"}"#,
+        // Compacting restarts nothing, so the subagents of the running turn stay listed.
+        #"{\#(Fixtures.common), "hook_event_name": "SessionStart", "source": "compact"}"#,
     ])
     func claudeEventsWithoutStatusMeaning(json: String) throws {
         let result = try claude(json)
@@ -88,7 +90,7 @@ struct ClaudeHookDecodingTests {
         // A failing subagent must not end its parent's turn.
         (#"{"session_id": "abc", "hook_event_name": "StopFailure", "agent_id": "a1", "error": "rate_limit"}"#, .subagentFinished(id: "a1")),
         // A subagent asking for approval still needs the user.
-        (#"{"session_id": "abc", "hook_event_name": "PermissionRequest", "agent_id": "a1", "tool_name": "Bash"}"#, .attentionRequested(.permission, message: "Bash")),
+        (#"{"session_id": "abc", "hook_event_name": "PermissionRequest", "agent_id": "a1", "tool_name": "Bash"}"#, .attentionRequested(.permission, message: "Bash", subagent: "a1")),
     ])
     func subagentEvents(json: String, expected: AgentEvent) throws {
         #expect(try claude(json).event == expected)

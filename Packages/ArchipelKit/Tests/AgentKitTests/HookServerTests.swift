@@ -25,8 +25,9 @@ struct HookServerTests {
         let messages = await collect(1, from: server)
         #expect(messages == [HookMessage(
             sessionID: sessionID,
-            event: .attentionRequested(.permission, message: "Bash"),
+            event: .attentionRequested(.permission, message: "Bash: rm -rf node_modules"),
             agentSessionID: Fixtures.claudeSessionID,
+            transcriptPath: "/Users/me/.claude/projects/x/4f0c.jsonl",
             source: "claude"
         )])
     }
@@ -68,8 +69,9 @@ struct HookServerTests {
         let messages = await collect(1, from: server)
         #expect(messages == [HookMessage(
             sessionID: sessionID,
-            event: .attentionRequested(.permission, message: "Bash"),
+            event: .attentionRequested(.permission, message: "Bash: rm -rf node_modules"),
             agentSessionID: Fixtures.claudeSessionID,
+            transcriptPath: "/Users/me/.claude/projects/x/4f0c.jsonl",
             source: "claude"
         )])
     }
@@ -285,7 +287,7 @@ struct HookServerTests {
         #expect(run.stdout.isEmpty)
         #expect(await collect(1, from: server) == [HookMessage(
             sessionID: sessionID,
-            event: .attentionRequested(.permission, message: "Write"),
+            event: .attentionRequested(.permission, message: "Write: /tmp/big.swift"),
             agentSessionID: Fixtures.claudeSessionID,
             source: "claude"
         )])
@@ -314,7 +316,7 @@ struct HookServerTests {
         #expect(run.status == 0)
         let message = try #require(await collect(1, from: server).first)
         #expect(message.agentSessionID == "ses_big")
-        guard case .attentionRequested(.permission, let text)? = message.event else {
+        guard case .attentionRequested(.permission, let text, _, _)? = message.event else {
             Issue.record("Expected a permission request, got \(String(describing: message.event))")
             return
         }

@@ -27,6 +27,7 @@ public struct HeldNotifications: Equatable, Sendable {
         for id in sessionIDs.reversed() {
             // Read means the user opened the session in the app while still sharing.
             guard let activity = activities[id], activity.unread else { continue }
+            let counted = summary.total
             switch activity.status {
             case .needsAttention:
                 summary.needYou += 1
@@ -40,6 +41,7 @@ public struct HeldNotifications: Equatable, Sendable {
             default:
                 break
             }
+            if summary.total > counted { summary.covered.insert(id) }
         }
         return summary.sessionID == nil ? nil : summary
     }
@@ -48,8 +50,11 @@ public struct HeldNotifications: Equatable, Sendable {
         public var finished = 0
         public var needYou = 0
         public var ended = 0
+        /// Every session the counts stand for.
+        public fileprivate(set) var covered: Set<Session.ID> = []
         fileprivate var needYouTarget: Session.ID?
         fileprivate var otherTarget: Session.ID?
+        fileprivate var total: Int { finished + needYou + ended }
 
         /// The session the notification opens: one that waits for the user wins over one that is done.
         public var sessionID: Session.ID? { needYouTarget ?? otherTarget }
@@ -62,5 +67,20 @@ public struct HeldNotifications: Equatable, Sendable {
             if ended > 0 { parts.append(ended == 1 ? "1 session ended" : "\(ended) sessions ended") }
             return parts.joined(separator: ", ")
         }
+    }
+}
+
+/// The sessions a posted summary still speaks for. "2 agents finished, 1 needs you" stays worth
+/// showing until the user has been to all three, not just the one the notification opens.
+public struct SummaryCoverage: Equatable, Sendable {
+    private var remaining: Set<Session.ID>
+
+    public init(_ sessions: Set<Session.ID> = []) {
+        remaining = sessions
+    }
+
+    /// True when `id` was the last session the summary had left, which is when to withdraw it.
+    public mutating func clear(_ id: Session.ID) -> Bool {
+        remaining.remove(id) != nil && remaining.isEmpty
     }
 }
