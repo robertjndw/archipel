@@ -85,8 +85,15 @@ private struct TerminalSearchField: View {
         .accessibilityIdentifier("terminal.search")
         // Not on every appearance: the bar comes back with its terminal for as long as the search
         // is open, and the keyboard belongs to the pane the user is in then.
-        .onAppear { if takeFocusRequest() { isFocused = true } }
-        .onChange(of: focusRequests) { if takeFocusRequest() { isFocused = true } }
+        .onAppear(perform: takeKeyboardIfAsked)
+        .onChange(of: focusRequests, takeKeyboardIfAsked)
+    }
+
+    private func takeKeyboardIfAsked() {
+        guard takeFocusRequest() else { return }
+        // Cmd-F reaches here from inside the terminal's own key handling, and the terminal is
+        // first responder again once that event is through. A turn later the focus stays.
+        DispatchQueue.main.async { isFocused = true }
     }
 }
 
