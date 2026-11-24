@@ -17,7 +17,8 @@ extension AppModel {
         EffectiveAgent.resolve(
             persisted: session.agent,
             runtime: isPlainShell(session) ? runtimeAgents[session.id]?.agent : nil,
-            hooksSeen: hookedSessions.contains(session.id)
+            hooksSeen: hookedSessions.contains(session.id),
+            interface: session.effectiveInterface
         )
     }
 

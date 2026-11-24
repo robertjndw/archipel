@@ -1,0 +1,36 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "ses_df314d7daffexLI7TMuAjl3biD",
+    "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call_b2bd7e161a4b4518a0617a21",
+      "status": "failed",
+      "kind": "edit",
+      "title": "write",
+      "locations": [
+        {
+          "path": "/Users/someone/project/rejected.txt"
+        }
+      ],
+      "rawInput": {
+        "path": "rejected.txt",
+        "content": "no"
+      },
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "The user declined this tool call"
+          }
+        }
+      ],
+      "rawOutput": {
+        "metadata": {},
+        "error": "The user declined this tool call"
+      }
+    }
+  }
+}

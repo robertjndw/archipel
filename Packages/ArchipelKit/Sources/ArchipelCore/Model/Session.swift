@@ -17,6 +17,9 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
     /// Copied from the preset the session was started from, so editing or deleting the preset
     /// later doesn't affect it. Nil means it follows the agent's default preset, also on resume.
     public var arguments: String?
+    /// What the session was started as. Whether it can run that way is up to the agent, so read
+    /// `effectiveInterface` rather than this to decide how to show it.
+    public var interface: SessionInterface
     public var createdAt: Date
 
     public init(
@@ -28,6 +31,7 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         agentSessionID: String? = nil,
         script: ScriptKind? = nil,
         arguments: String? = nil,
+        interface: SessionInterface = .terminal,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -38,6 +42,7 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         self.agentSessionID = agentSessionID
         self.script = script
         self.arguments = arguments
+        self.interface = interface
         self.createdAt = createdAt
     }
 
@@ -53,6 +58,8 @@ public struct Session: Codable, Equatable, Identifiable, Sendable {
         // failing the whole workspace file.
         script = try c.decodeIfPresent(String.self, forKey: .script).flatMap(ScriptKind.init(rawValue:))
         arguments = try c.decodeIfPresent(String.self, forKey: .arguments)
+        // A string for the same reason as `script`: an interface from a later version opens as a terminal.
+        interface = try c.decodeIfPresent(String.self, forKey: .interface).flatMap(SessionInterface.init(rawValue:)) ?? .terminal
         createdAt = try c.decode(Date.self, forKey: .createdAt)
     }
 

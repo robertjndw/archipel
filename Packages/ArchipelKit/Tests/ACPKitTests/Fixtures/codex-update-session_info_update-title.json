@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "01a20ceb-2a9f-7c00-b32a-71f21d55070e",
+    "update": {
+      "sessionUpdate": "session_info_update",
+      "title": "Create a file named allowed.txt containing exactly the text yes. Use your file write/edit tool, not a shell command."
+    }
+  }
+}

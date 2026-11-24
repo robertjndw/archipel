@@ -1,5 +1,6 @@
 import AppKit
 import ArchipelCore
+import ChatUI
 import GitKit
 import Observation
 import SwiftUI
@@ -9,6 +10,8 @@ import UniformTypeIdentifiers
 enum TabPreview: Equatable {
     /// The last lines of a terminal, read bottom up like the terminal itself.
     case terminal([String])
+    /// The end of a chat's last reply, read bottom up like a terminal but wrapped, since it is prose.
+    case chat(String)
     /// The top of a text file, where the editor opens it.
     case text([String])
     case image(NSImage)
@@ -63,7 +66,7 @@ final class TabSwitcherModel {
         // Of the tabs never visited, only running sessions are listed. Old file and diff tabs
         // would just be clutter.
         let candidates = app.recentTabs.candidates(in: app.workspace, includesUnvisited: { (tab: ArchipelCore.Tab) in
-            if case .session(let id) = tab.content { return app.terminals[id] != nil }
+            if case .session(let id) = tab.content { return app.terminals[id] != nil || app.chats[id] != nil }
             return false
         }, limit: Self.limit)
         guard var gesture = TabSwitch(candidates: candidates, current: app.focusedTab?.id) else {
@@ -136,10 +139,15 @@ final class TabSwitcherModel {
     private func refreshTerminals() {
         guard let gesture, let app else { return }
         for id in gesture.candidates {
-            guard case .session(let sessionID)? = app.workspace.tab(id: id)?.content,
-                  let terminal = app.terminals[sessionID]
-            else { continue }
-            let preview = TabPreview.terminal(SessionPeek.tail(of: terminal.readVisibleText(), lines: Self.previewLines))
+            guard case .session(let sessionID)? = app.workspace.tab(id: id)?.content else { continue }
+            let preview: TabPreview
+            if let terminal = app.terminals[sessionID] {
+                preview = .terminal(SessionPeek.tail(of: terminal.readVisibleText(), lines: Self.previewLines))
+            } else if let text = app.chats[sessionID]?.previewText {
+                preview = .chat(SessionPeek.tail(of: text, lines: Self.previewLines).joined(separator: "\n"))
+            } else {
+                continue
+            }
             if previews[id] != preview { previews[id] = preview }
         }
     }

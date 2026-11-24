@@ -52,6 +52,14 @@ struct OpenCodeAdapterTests {
         #expect(opencode.launchCommand(for: context(directory: nil)).environment["OPENCODE_CLI_CONFIG_CONTENT"] == nil)
     }
 
+    @Test func chatSupport() throws {
+        let acp = try #require(opencode.acp)
+        #expect(acp.registryID == "opencode")
+        #expect(acp.launch == .cli(arguments: ["acp"]))
+        #expect(acp.sharesConversationIDs)
+        #expect(acp.environment.isEmpty)
+    }
+
     @Test func capabilities() {
         let capabilities = opencode.capabilities
         #expect(capabilities.sessionID == .presetByApp)

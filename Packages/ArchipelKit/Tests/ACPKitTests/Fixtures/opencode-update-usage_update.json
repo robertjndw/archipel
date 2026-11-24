@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "ses_df3193135ffeTlLv2y8SLsigBU",
+    "update": {
+      "sessionUpdate": "usage_update",
+      "used": 20239,
+      "size": 1048576,
+      "cost": {
+        "amount": 0,
+        "currency": "USD"
+      }
+    }
+  }
+}

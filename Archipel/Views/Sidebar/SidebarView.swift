@@ -329,15 +329,31 @@ struct NewSessionButtons: View {
     var body: some View {
         ForEach(model.enabledAgents, id: \.id) { agent in
             let canStart = model.canStartSession(with: agent)
-            Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
+            let item = Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
                 model.newSession(in: worktree, agent: agent, pane: pane)
             }
             .disabled(!canStart)
             .help(canStart ? "" : agent.missingCommandHint)
+            if agent.acp != nil {
+                // Becomes an alternate NSMenuItem, like Option in the Finder's File menu. "Open In"
+                // below offers the same for those who never hold Option.
+                let other = model.defaultInterface(for: agent).other
+                item.modifierKeyAlternate(.option) {
+                    Button("New \(agent.displayName) Session in \(other.title)", symbol: agent.symbolName) {
+                        model.newSession(in: worktree, agent: agent, pane: pane, interface: other)
+                    }
+                    .disabled(!canStart)
+                }
+            } else {
+                item
+            }
         }
         let presets = model.presetsInMenuOrder
-        if !presets.isEmpty {
+        let switchable = model.enabledAgents.filter { $0.acp != nil }
+        if !presets.isEmpty || !switchable.isEmpty {
             Divider()
+        }
+        if !presets.isEmpty {
             Menu("New Session with Preset", systemImage: "rectangle.stack") {
                 ForEach(presets, id: \.preset.id) { entry in
                     Button("\(entry.agent.displayName): \(entry.preset.title)", symbol: entry.agent.symbolName) {
@@ -349,6 +365,40 @@ struct NewSessionButtons: View {
                 Button("Edit Presets…") {
                     SettingsView.select(.agents)
                     openSettings()
+                }
+            }
+        }
+        if !switchable.isEmpty {
+            OpenInMenu(agents: switchable, worktree: worktree, pane: pane)
+        }
+    }
+}
+
+/// Each agent that can run either way, in the interface its plain item does not open. Grouped by
+/// interface rather than by agent, since with mixed defaults "Claude Code" may mean a chat and
+/// "Codex" a terminal. Presets never appear: their arguments only mean something in a terminal.
+private struct OpenInMenu: View {
+    @Environment(AppModel.self) private var model
+    let agents: [any AgentAdapter]
+    let worktree: Worktree.ID
+    var pane: Pane.ID?
+
+    var body: some View {
+        let groups = SessionInterface.allCases.compactMap { interface in
+            let members = agents.filter { model.defaultInterface(for: $0) != interface }
+            return members.isEmpty ? nil : (interface: interface, agents: members)
+        }
+        Menu("Open In", systemImage: groups.count == 1 ? groups[0].interface.symbolName : "rectangle.on.rectangle") {
+            ForEach(groups, id: \.interface) { group in
+                Section(group.interface.title) {
+                    ForEach(group.agents, id: \.id) { agent in
+                        let canStart = model.canStartSession(with: agent)
+                        Button(agent.displayName, symbol: agent.symbolName) {
+                            model.newSession(in: worktree, agent: agent, pane: pane, interface: group.interface)
+                        }
+                        .disabled(!canStart)
+                        .help(canStart ? "" : agent.missingCommandHint)
+                    }
                 }
             }
         }

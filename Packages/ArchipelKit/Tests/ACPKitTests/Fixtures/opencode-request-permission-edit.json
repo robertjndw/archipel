@@ -1,0 +1,49 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "method": "session/request_permission",
+  "params": {
+    "sessionId": "ses_df31537f4ffelFIdi0tfHnv0u5",
+    "toolCall": {
+      "toolCallId": "call_f398a203075742cf8696b348",
+      "name": "write",
+      "title": "allowed.txt",
+      "kind": "edit",
+      "status": "pending",
+      "locations": [
+        {
+          "path": "/Users/someone/project/allowed.txt"
+        }
+      ],
+      "rawInput": {
+        "path": "allowed.txt",
+        "content": "yes"
+      },
+      "content": [
+        {
+          "type": "diff",
+          "path": "/Users/someone/project/allowed.txt",
+          "oldText": null,
+          "newText": "yes"
+        }
+      ]
+    },
+    "options": [
+      {
+        "optionId": "once",
+        "kind": "allow_once",
+        "name": "Allow once"
+      },
+      {
+        "optionId": "always",
+        "kind": "allow_always",
+        "name": "Always allow"
+      },
+      {
+        "optionId": "reject",
+        "kind": "reject_once",
+        "name": "Reject"
+      }
+    ]
+  }
+}

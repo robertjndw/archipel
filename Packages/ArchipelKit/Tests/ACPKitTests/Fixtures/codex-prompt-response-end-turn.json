@@ -1,0 +1,40 @@
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "stopReason": "end_turn",
+    "usage": {
+      "totalTokens": 16806,
+      "inputTokens": 9889,
+      "cachedReadTokens": 6912,
+      "cachedWriteTokens": 0,
+      "outputTokens": 5,
+      "thoughtTokens": 0
+    },
+    "_meta": {
+      "quota": {
+        "token_count": {
+          "totalTokens": 16806,
+          "inputTokens": 9889,
+          "cachedInputTokens": 6912,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 5,
+          "reasoningOutputTokens": 0
+        },
+        "model_usage": [
+          {
+            "model": "gpt-5.6-terra",
+            "token_count": {
+              "totalTokens": 16806,
+              "inputTokens": 9889,
+              "cachedInputTokens": 6912,
+              "cacheWriteInputTokens": 0,
+              "outputTokens": 5,
+              "reasoningOutputTokens": 0
+            }
+          }
+        ]
+      }
+    }
+  }
+}

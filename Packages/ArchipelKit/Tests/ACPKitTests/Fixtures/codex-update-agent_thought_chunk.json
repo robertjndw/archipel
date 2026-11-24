@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+    "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "rs_08bcde649f69b01f016b055aa63f5c87d294133fc986eb0fd5",
+      "content": {
+        "type": "text",
+        "text": "\n\n"
+      }
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "method": "session/request_permission",
+  "params": {
+    "toolCall": {
+      "toolCallId": "toolu_01TDwHqzAgrGQNBUS3ne7yKY",
+      "name": "ExitPlanMode",
+      "status": "pending",
+      "rawInput": {
+        "plan": "1. Append a new line `bye` to the end of `hello.txt` (adding a newline first if the file lacks a trailing one).\n2. Verify with `cat hello.txt` that `bye` is the last line and nothing else changed.\n",
+        "planFilePath": "/Users/someone/.claude/plans/plan-do-not-ask-serene-flame-of-e9b70dc5-95d0-41f8-836c-fdda84d337ff.md"
+      },
+      "title": "Approve Plan",
+      "kind": "switch_mode",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "1. Append a new line `bye` to the end of `hello.txt` (adding a newline first if the file lacks a trailing one).\n2. Verify with `cat hello.txt` that `bye` is the last line and nothing else changed.\n"
+          }
+        }
+      ]
+    },
+    "options": [
+      {
+        "optionId": "exit-plan-default",
+        "name": "Yes, manually approve edits",
+        "kind": "allow_once"
+      },
+      {
+        "optionId": "exit-plan-auto",
+        "name": "Yes, and use auto mode",
+        "kind": "allow_always"
+      },
+      {
+        "optionId": "reject",
+        "name": "No, keep planning",
+        "kind": "reject_once"
+      }
+    ],
+    "sessionId": "e9b70dc5-95d0-41f8-836c-fdda84d337ff"
+  }
+}

@@ -9,6 +9,8 @@ enum SidebarTips {
         PeekTip()
         IslandSwipeTip()
         NeedsMeTip()
+        // Not a sidebar feature, but in the group so it never pops up beside one of the others.
+        ChatTip()
     }
 
     @Parameter static var worktreeCount: Int = 0
@@ -16,6 +18,7 @@ enum SidebarTips {
 
     nonisolated fileprivate static let worktreeSwitchEvent = Tips.Event(id: "worktreeSwitched")
     nonisolated fileprivate static let agentWaitedEvent = Tips.Event(id: "agentWaited")
+    nonisolated fileprivate static let terminalSessionStartedEvent = Tips.Event(id: "terminalSessionStarted")
 
     // Kept as functions so the model does not need TipKit, whose Tab collides with the app's own.
     // Every donation is a write to TipKit's store. Once the tip is gone there's no point.
@@ -27,6 +30,11 @@ enum SidebarTips {
         if case .invalidated = NeedsMeTip().status { return }
         Task { await agentWaitedEvent.donate() }
     }
+    /// A new terminal session of an agent that could have opened as a chat.
+    static func terminalSessionStarted() {
+        if case .invalidated = ChatTip().status { return }
+        Task { await terminalSessionStartedEvent.donate() }
+    }
     static func workspaceChanged(_ workspace: Workspace) {
         let islands = workspace.islands.count
         let worktrees = workspace.islands.reduce(0) { $0 + $1.projects.reduce(0) { $0 + $1.worktrees.count } }
@@ -36,6 +44,7 @@ enum SidebarTips {
     static func peeked() { PeekTip().invalidate(reason: .actionPerformed) }
     static func islandSwitched() { IslandSwipeTip().invalidate(reason: .actionPerformed) }
     static func needsMeFilterUsed() { NeedsMeTip().invalidate(reason: .actionPerformed) }
+    static func chatOpened() { ChatTip().invalidate(reason: .actionPerformed) }
 
     /// Called once at launch. The store sits in the support folder so builds with another support
     /// directory (Debug, UI tests, throwaway runs) do not share what the user has already seen.
@@ -80,6 +89,18 @@ struct NeedsMeTip: Tip {
 
     var rules: [Rule] {
         #Rule(SidebarTips.agentWaitedEvent) { $0.donations.count >= 1 }
+    }
+}
+
+/// Shown on the tab bar's plus button. Three terminal sessions in, the user has a habit worth
+/// offering an alternative to, and the plus button is where the next one starts.
+struct ChatTip: Tip {
+    var title: Text { Text("Open a Session as a Chat") }
+    var message: Text? { Text("See the conversation as a chat instead of a terminal. Choose Open In from this menu, or make Chat the default in Settings > Agents.") }
+    var image: Image? { Image(systemName: "bubble.left.and.text.bubble.right") }
+
+    var rules: [Rule] {
+        #Rule(SidebarTips.terminalSessionStartedEvent) { $0.donations.count >= 3 }
     }
 }
 

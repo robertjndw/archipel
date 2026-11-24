@@ -18,6 +18,10 @@ public struct CodexAdapter: AgentAdapter {
     /// report a session its notify messages are noise.
     public var fallbackHookSources: Set<String> { [Self.notifySource] }
 
+    public var acp: ACPSupport? {
+        ACPSupport(registryID: "codex-acp", launch: .registry(cliExecutableVariable: nil), sharesConversationIDs: true)
+    }
+
     public var capabilities: AgentCapabilities {
         AgentCapabilities(
             sessionID: .reportedByHook,

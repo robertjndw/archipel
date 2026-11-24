@@ -1,6 +1,7 @@
 import AgentKit
 import AppKit
 import ArchipelCore
+import ChatUI
 import EditorUI
 import GitKit
 import Observation
@@ -43,10 +44,15 @@ final class AppModel {
     /// pointer otherwise.
     private(set) var needsMePin: Worktree.ID?
     private(set) var terminals: [Session.ID: TerminalSession] = [:]
-    private(set) var launchFailures: [Session.ID: String] = [:]
+    /// Sessions shown as a chat, from the moment their launch starts. A chat that failed or ended
+    /// stays here, since its view is where the user reads why and tries again. See AppModel+Chat.
+    var chats: [Session.ID: ChatSession] = [:]
+    /// Chats replaced by a restart or a switch, until their agent has stopped. See AppModel+Chat.
+    @ObservationIgnored var stoppingChats: [Session.ID: Task<Void, Never>] = [:]
+    var launchFailures: [Session.ID: String] = [:]
     /// Counts the launches asked for per session. A launch waits for the login PATH, and a restart
     /// or Run in that time asks for another one with a different command; only the latest may start.
-    @ObservationIgnored private var launchGenerations: [Session.ID: Int] = [:]
+    @ObservationIgnored var launchGenerations: [Session.ID: Int] = [:]
     /// The glow each worktree row last played. Not persisted, so nothing glows after a launch.
     private(set) var statusPulses: [Worktree.ID: StatusPulseCount] = [:]
     /// Glows of worktrees whose row is not in the sidebar. A collapsed project plays them on its
@@ -184,6 +190,10 @@ final class AppModel {
     @ObservationIgnored var gitWatch = GitWatchState()
     private let store: WorkspaceStore
     private let terminalApp: TerminalApp?
+    /// False when Ghostty failed to start; chats still work then, terminals do not.
+    var hasTerminalEngine: Bool { terminalApp != nil }
+    /// Where chats get their agents from; nil in previews, which must never download or start one.
+    let chatAgents: ChatAgentSources?
     /// The Ghostty colors the panes draw around terminals; nil without a terminal engine.
     private(set) var terminalColors: TerminalColors?
     private let hookServer: HookServer
@@ -207,7 +217,7 @@ final class AppModel {
     @ObservationIgnored private var loginXDGConfigHome: String?
     /// Sessions whose agent has reported through its hooks since it last started.
     private(set) var hookedSessions = HookedSessions()
-    private var loginPATH: Task<String, Never>
+    private(set) var loginPATH: Task<String, Never>
     private var eventTasks: [Session.ID: Task<Void, Never>] = [:]
     private var saveTask: Task<Void, Never>?
     /// When the oldest change not yet on disk was made.
@@ -262,6 +272,11 @@ final class AppModel {
             settings: settings
         )
         loginPATH = Task.detached { await LoginEnvironment.resolvePATH() }
+        chatAgents = ChatAgentSources(supportDirectory: support)
+        // A chat agent is a child process on the other end of a pipe. One that dies while the app
+        // writes to it would otherwise take the whole app down with SIGPIPE instead of failing the
+        // write, which the chat reports as a lost connection.
+        signal(SIGPIPE, SIG_IGN)
 
         var problems: [String] = []
         do {
@@ -360,6 +375,7 @@ final class AppModel {
         hookExecutableURL = scratch.appending(path: "archipel-hook")
         reviewComments = ReviewCommentStore()
         terminalApp = nil
+        chatAgents = nil
         loginPATH = Task { "/usr/bin:/bin" }
         canSave = false
         // Its own suite, so flipping a toggle in the canvas never reaches the Debug app's defaults.
@@ -1170,8 +1186,15 @@ final class AppModel {
     // MARK: Sessions
 
     /// The preset's arguments are copied onto the session, so later edits to the preset don't
-    /// change it. Without a preset the session follows the agent's default preset.
-    func newSession(in worktreeID: Worktree.ID, agent: any AgentAdapter, preset: LaunchPreset? = nil, pane: Pane.ID? = nil) {
+    /// change it. Without a preset the session follows the agent's default preset. A nil
+    /// `interface` means the one the user prefers for the agent.
+    func newSession(
+        in worktreeID: Worktree.ID,
+        agent: any AgentAdapter,
+        preset: LaunchPreset? = nil,
+        pane: Pane.ID? = nil,
+        interface: SessionInterface? = nil
+    ) {
         guard let worktree = workspace.worktree(id: worktreeID) else { return }
         // Numbered per agent, not per preset, so "Claude Code (Opus) 2" means the second Claude tab.
         let count = worktree.sessions.count { $0.agent.rawValue == agent.id }
@@ -1179,8 +1202,15 @@ final class AppModel {
         let session = Session(
             title: count == 0 ? baseTitle : "\(baseTitle) \(count + 1)",
             agent: AgentKind(rawValue: agent.id),
-            arguments: preset?.arguments
+            arguments: preset?.arguments,
+            interface: .forNewSession(
+                of: agent,
+                preferred: interface ?? settings.interface(for: agent.id),
+                usesPreset: preset != nil
+            )
         )
+        // A preset can only ever run in a terminal, so it says nothing about wanting a chat.
+        if session.interface == .terminal, agent.acp != nil, preset == nil { SidebarTips.terminalSessionStarted() }
         changingSelection {
             _ = $0.addSession(session, to: worktreeID, pane: pane)
             $0.selectSession(session.id)
@@ -1212,8 +1242,8 @@ final class AppModel {
         open(.web(url), in: worktreeID, preview: true)
     }
 
-    /// A link ⌘-clicked in a session's terminal opens in that session's worktree.
-    private func openTerminalLink(_ link: TerminalLink, alternate: Bool, from sessionID: Session.ID) {
+    /// A link ⌘-clicked in a session's terminal, or clicked in its chat, opens in that session's worktree.
+    func openSessionLink(_ link: TerminalLink, alternate: Bool, from sessionID: Session.ID) {
         let worktreeID = workspace.worktree(containing: sessionID)?.id
         switch link {
         case .web(let url):
@@ -1332,6 +1362,7 @@ final class AppModel {
         enum Action {
             case close(Tab)
             case restart(fresh: Bool)
+            case switchInterface(to: SessionInterface)
         }
 
         let sessionID: Session.ID
@@ -1346,6 +1377,8 @@ final class AppModel {
             switch action {
             case .close: "Close Tab"
             case .restart: "Restart"
+            case .switchInterface(.acp): "Switch to Chat"
+            case .switchInterface(.terminal): "Switch to Terminal"
             }
         }
     }
@@ -1353,7 +1386,7 @@ final class AppModel {
     /// Stopping a session that is working or waiting on an answer throws that turn away, and one
     /// with background tasks takes those down with it, so those ask first. Nil for idle, finished
     /// and exited sessions, which have nothing in flight.
-    private func interruption(of id: Session.ID, by action: SessionInterruption.Action) -> SessionInterruption? {
+    func interruption(of id: Session.ID, by action: SessionInterruption.Action) -> SessionInterruption? {
         guard let session = workspace.session(id: id), let activity = activities[id],
               activity.hasWorkInFlight
         else { return nil }
@@ -1391,6 +1424,14 @@ final class AppModel {
             } else {
                 "The agent will be stopped. Its conversation is kept and resumes when the session starts again."
             }
+        case .switchInterface(let interface):
+            let place = interface == .acp ? "Chat" : "Terminal"
+            title = "Switch \"\(session.displayTitle)\" to \(place) while it is \(state)?"
+            // Only agents that can carry the conversation over are offered the switch, unless there
+            // is no conversation yet; see `canSwitchInterface`.
+            message = session.agentSessionID == nil
+                ? "The agent will be stopped and starts again with a new conversation."
+                : "The agent will be stopped. Its conversation is kept and continues in the \(place.lowercased())."
         }
         return SessionInterruption(sessionID: id, action: action, title: title, message: message)
     }
@@ -1402,6 +1443,8 @@ final class AppModel {
             if workspace.tab(id: tab.id) != nil { closeNow(tab) }
         case .restart(let fresh):
             restartSessionNow(interruption.sessionID, fresh: fresh)
+        case .switchInterface(let interface):
+            setInterface(interface, for: interruption.sessionID)
         }
     }
 
@@ -1469,20 +1512,37 @@ final class AppModel {
     /// Starts the session's process unless it has one or already ended. A failed launch or an exit
     /// stays on screen with its message until the user asks to try again; `restartSessionNow` clears
     /// that state before it calls this. Without the check every selection change would relaunch it.
-    private func ensureRunning(_ id: Session.ID) {
+    func ensureRunning(_ id: Session.ID) {
         if launchFailures[id] != nil { return }
         if case .exited? = activities[id]?.status { return }
-        guard terminals[id] == nil, let session = workspace.session(id: id),
-              let worktree = workspace.worktree(containing: id), let terminalApp
+        guard terminals[id] == nil, chats[id] == nil, let session = workspace.session(id: id),
+              let worktree = workspace.worktree(containing: id)
         else { return }
+        let isChat = session.effectiveInterface == .acp
+        // A chat runs without the terminal engine, so it still works when Ghostty failed to start.
+        guard isChat ? chatAgents != nil : terminalApp != nil else { return }
         let adapter = session.agent.adapter
         let script = scriptSessions[id]
+
+        // Here and not at launch: starting an agent is what gives the question its context.
+        if script == nil, adapter.capabilities.acceptsPrompts { notifier.requestAuthorizationIfNeeded() }
+        launchFailures[id] = nil
+        // The agent may be trusted differently this time, so it has to prove its hooks again.
+        hookedSessions.reset(id)
+        apply(.launched, to: id)
+        launchGenerations[id, default: 0] += 1
+        let launch = launchGenerations[id]
+        if isChat {
+            launchChat(id, adapter: adapter, in: worktree, launch: launch)
+            return
+        }
+        guard let terminalApp else { return }
+
         let location = WorktreeEnvironment(
             worktreePath: worktree.path,
             rootPath: workspace.project(containing: id)?.folderURL ?? worktree.path,
             branch: worktree.branch
         )
-
         var command = if let script {
             ScriptLaunch.command(
                 script: script.command,
@@ -1497,17 +1557,10 @@ final class AppModel {
         } else {
             agentCommand(for: session, adapter: adapter).adding(location)
         }
-
-        // Here and not at launch: starting an agent is what gives the question its context.
-        if script == nil, adapter.capabilities.acceptsPrompts { notifier.requestAuthorizationIfNeeded() }
-        launchFailures[id] = nil
-        // The agent may be trusted differently this time, so it has to prove its hooks again.
-        hookedSessions.reset(id)
-        apply(.launched, to: id)
-        launchGenerations[id, default: 0] += 1
-        let launch = launchGenerations[id]
         Task {
             let path = await loginPATH.value
+            // A switch from a chat resumes its conversation, which its agent may still be at.
+            await waitForStoppingChat(of: id)
             // The session may have been closed, started by another path or asked to start
             // something else while we waited.
             guard launch == launchGenerations[id], terminals[id] == nil, workspace.session(id: id) != nil else { return }
@@ -1612,7 +1665,7 @@ final class AppModel {
                 case .progress(let progress):
                     self.receiveProgress(progress, for: id)
                 case .openLink(let link, let alternate):
-                    self.openTerminalLink(link, alternate: alternate, from: id)
+                    self.openSessionLink(link, alternate: alternate, from: id)
                 case .workingDirectoryChanged, .closeRequested:
                     break
                 }
@@ -1645,15 +1698,25 @@ final class AppModel {
 
     /// A restart keeps what belongs to the session rather than its process: the script it reruns and
     /// review comments still waiting to be delivered.
-    private func tearDown(_ id: Session.ID, restarting: Bool = false) {
+    func tearDown(_ id: Session.ID, restarting: Bool = false) {
         forgetRuntimeAgent(id)
         eventTasks.removeValue(forKey: id)?.cancel()
         terminals.removeValue(forKey: id)?.close()
+        if let chat = chats.removeValue(forKey: id) {
+            if restarting {
+                stopReplacedChat(chat, of: id)
+            } else {
+                // The agent gets a few seconds to exit on its own, which is not worth holding up a
+                // close for. Released without this, its process would outlive the tab.
+                Task { await chat.shutDown() }
+            }
+        }
         terminalStartTimes[id] = nil
         activities[id] = nil
         launchFailures[id] = nil
         if !restarting {
             launchGenerations[id] = nil
+            stoppingChats[id] = nil
             scriptSessions[id] = nil
             pendingReviews[id] = nil
             forgetContext(of: id)
@@ -1666,6 +1729,9 @@ final class AppModel {
         // Limits belong to the account, so a reading counts even if its session was closed meanwhile.
         if let reading = message.usage { recordUsage(reading) }
         guard let session = workspace.session(id: message.sessionID) else { return }
+        // A chat's agent never gets the hook environment, so a hook naming a chat comes from the
+        // terminal it replaced, which is on its way out and would only muddle the chat's status.
+        if session.effectiveInterface == .acp { return }
         if message.origin == .userSettings {
             // The user's hooks also fire for a hand-started Claude in a Codex or script tab. Only
             // plain shells track one.
@@ -1923,7 +1989,7 @@ final class AppModel {
 
     /// Cheap enough for every key press: only an unread session does any work, or one whose request
     /// was marked as read without being answered.
-    private func acknowledge(_ id: Session.ID) {
+    func acknowledge(_ id: Session.ID) {
         guard activities[id]?.unread == true || hasUnreportedRequest(id) else { return }
         markViewed(id)
     }
@@ -1999,5 +2065,8 @@ final class AppModel {
         hookServer.stop()
         stopGitWatching()
         for terminal in terminals.values { terminal.close() }
+        // Quitting cannot wait the seconds `shutDown()` gives each agent, and unlike a
+        // terminal's process, nothing else would end a chat's agent when the app goes.
+        for chat in chats.values { chat.terminateNow() }
     }
 }

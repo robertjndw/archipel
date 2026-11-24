@@ -67,6 +67,17 @@ struct ClaudeAdapterTests {
         #expect(claude.hookSources == ["claude", "claude-statusline"])
     }
 
+    @Test func chatSupport() throws {
+        let acp = try #require(claude.acp)
+        #expect(acp.registryID == "claude-acp")
+        #expect(acp.launch == .registry(cliExecutableVariable: "CLAUDE_CODE_EXECUTABLE"))
+        #expect(acp.sharesConversationIDs)
+        // The user's own hooks stay quiet, and no hook can reach the app from a chat.
+        #expect(acp.environment == [ClaudeUserHooks.launchedByArchipelVariable: ClaudeUserHooks.launchedByArchipelValue])
+        #expect(acp.environment["ARCHIPEL_SESSION_ID"] == nil)
+        #expect(acp.environment["ARCHIPEL_SOCKET"] == nil)
+    }
+
     @Test func terminalNotificationsOfAHandStartedClaude() {
         // A hand-started Claude prints "waiting for input" after every turn, so it is skipped.
         for body in ["Claude needs your permission to use Bash", "Claude is waiting for your input", "something else"] {

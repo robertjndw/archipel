@@ -1,0 +1,18 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "01a20ce9-a01c-7d30-bf69-eb361238ffcc",
+    "update": {
+      "sessionUpdate": "session_info_update",
+      "_meta": {
+        "codex": {
+          "threadStatus": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      }
+    }
+  }
+}

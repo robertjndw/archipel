@@ -24,7 +24,23 @@ public struct EffectiveAgent: Equatable, Sendable {
 
     /// `hooksSeen`: the session's hooks have reported, which turns an agent with
     /// `LifecycleSource.hooksOnceSeen` into one that reports through hooks.
-    public static func resolve(persisted: AgentKind, runtime: RuntimeAgent?, hooksSeen: Bool = false) -> EffectiveAgent {
+    /// `interface`: what the session runs as. A chat learns every request and turn end from the
+    /// protocol from the start, so it reports precisely whatever the agent's terminal lifecycle is,
+    /// and there is no shell in which another agent could be found.
+    public static func resolve(
+        persisted: AgentKind,
+        runtime: RuntimeAgent?,
+        hooksSeen: Bool = false,
+        interface: SessionInterface = .terminal
+    ) -> EffectiveAgent {
+        if interface == .acp {
+            return EffectiveAgent(
+                kind: persisted,
+                acceptsPrompts: persisted.adapter.capabilities.acceptsPrompts,
+                reportsLifecycleThroughHooks: true,
+                isDetected: false
+            )
+        }
         if persisted == .shell, let runtime {
             return EffectiveAgent(
                 kind: runtime.kind,

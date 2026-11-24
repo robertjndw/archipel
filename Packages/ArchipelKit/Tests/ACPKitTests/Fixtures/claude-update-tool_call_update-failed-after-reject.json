@@ -1,0 +1,28 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "6ff0ac53-c9dd-40bb-8149-52b85f6e907d",
+    "update": {
+      "_meta": {
+        "claudeCode": {
+          "toolName": "Edit",
+          "nonExecutionKind": "permission-rule"
+        }
+      },
+      "toolCallId": "toolu_01AGuQH4X1PuuRSv72ABFRxT",
+      "sessionUpdate": "tool_call_update",
+      "status": "failed",
+      "rawOutput": "User refused permission to run tool",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "```\nUser refused permission to run tool\n```"
+          }
+        }
+      ]
+    }
+  }
+}

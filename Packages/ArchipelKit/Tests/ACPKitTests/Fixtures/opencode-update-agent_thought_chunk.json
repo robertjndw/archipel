@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+    "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_20cea0ae7001DHMQ5MvXOp8Hu4:reasoning:0",
+      "content": {
+        "type": "text",
+        "text": "The user asks me to read READ"
+      }
+    }
+  }
+}

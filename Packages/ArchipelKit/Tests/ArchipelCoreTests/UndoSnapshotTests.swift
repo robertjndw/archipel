@@ -37,6 +37,17 @@ struct UndoSnapshotTests {
         #expect(invariantsHold(ws))
     }
 
+    @Test func reopeningAChatSessionKeepsItsInterface() throws {
+        var (ws, _, _, _) = fixture()
+        ws.updateSession(id: b.id) { $0.interface = .acp }
+        let tab = try #require(ws.tab(showing: b.id))
+        let closed = try #require(ws.closedTab(id: tab.id))
+        ws.closeTab(id: tab.id)
+
+        ws.reopen(closed)
+        #expect(ws.session(id: b.id)?.interface == .acp)
+    }
+
     @Test func reopeningTheLastTabOfASplitRebuildsThePane() throws {
         var (ws, _, m, _) = fixture()
         let tab = try #require(ws.tab(showing: c.id))

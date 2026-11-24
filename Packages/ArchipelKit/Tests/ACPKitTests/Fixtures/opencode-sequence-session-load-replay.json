@@ -1,0 +1,263 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "messageId": "msg_20cea0aaf001BgQbcSHe1EPJPN",
+        "content": {
+          "type": "text",
+          "text": "Read README.md and tell me the secret fruit in one word."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_20cea0ae7001DHMQ5MvXOp8Hu4:reasoning:0",
+        "content": {
+          "type": "text",
+          "text": "The user asks me to read README.md and tell them the secret fruit in one word. I should find and read the README.md file in the working directory, then answer with just the secret fruit in one word.\n\nLet me look for the README.md file first."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_65b0a50eada14c8095f6a212",
+        "name": "glob",
+        "title": "glob",
+        "kind": "search",
+        "status": "pending",
+        "locations": [],
+        "rawInput": {
+          "pattern": "README.md"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_65b0a50eada14c8095f6a212",
+        "status": "completed",
+        "locations": [],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "/Users/someone/project/README.md"
+            }
+          }
+        ],
+        "rawOutput": {
+          "metadata": {
+            "count": 1,
+            "truncated": false
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_3ef10d500c0144ce9987f7f2",
+        "name": "read",
+        "title": "read",
+        "kind": "read",
+        "status": "pending",
+        "locations": [
+          {
+            "path": "/Users/someone/project/README.md"
+          }
+        ],
+        "rawInput": {
+          "path": "/Users/someone/project/README.md"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_3ef10d500c0144ce9987f7f2",
+        "status": "completed",
+        "locations": [
+          {
+            "path": "/Users/someone/project/README.md"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Read file /Users/someone/project/README.md, lines 1-3\n1: # Sample repo\n2: \n3: The secret fruit is mango."
+            }
+          }
+        ],
+        "rawOutput": {
+          "metadata": {
+            "truncated": false
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_20cea177d001G7EP9R0Zipz0Di:reasoning:0",
+        "content": {
+          "type": "text",
+          "text": "The README says \"The secret fruit is mango.\" So the secret fruit in one word is \"mango\"."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_20cea177d001G7EP9R0Zipz0Di",
+        "content": {
+          "type": "text",
+          "text": "mango"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "messageId": "msg_20cea20f9001e41Ec1od0uXdrK",
+        "content": {
+          "type": "text",
+          "text": "Create a file named hello.txt containing exactly the text hi. Use your file write/edit tool, not a shell command."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_20cea210f001V3lNUsr56LXxry:reasoning:0",
+        "content": {
+          "type": "text",
+          "text": "The user wants me to create a file named hello.txt containing exactly the text \"hi\". I should use the write tool, not a shell command. Let me create it in the current working directory.\n\nThe working directory is /Users/someone/project\n\n\"Containing exactly the text hi\" - I'll write \"hi\" as the file content. Should there be a trailing newline? \"Exactly the text hi\" suggests just \"hi\". I'll write it without a trailing newline to be safe. Actually, most write tools would write the string as-is. Let me use the write tool with content \"hi\"."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_b9a74a1ded9d48cabbe99dcf",
+        "name": "write",
+        "title": "write",
+        "kind": "edit",
+        "status": "pending",
+        "locations": [
+          {
+            "path": "/Users/someone/project/hello.txt"
+          }
+        ],
+        "rawInput": {
+          "path": "/Users/someone/project/hello.txt",
+          "content": "hi"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_b9a74a1ded9d48cabbe99dcf",
+        "status": "completed",
+        "locations": [
+          {
+            "path": "/Users/someone/project/hello.txt"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Wrote file successfully: hello.txt"
+            }
+          }
+        ],
+        "rawOutput": {
+          "metadata": {
+            "truncated": false
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_20cea2f15001IcxKVm8Rx75HV2",
+        "content": {
+          "type": "text",
+          "text": "Created `hello.txt` with the text `hi`."
+        }
+      }
+    }
+  }
+]

@@ -1,6 +1,7 @@
 #if DEBUG
 import AgentKit
 import ArchipelCore
+import ChatUI
 import Foundation
 import GitKit
 
@@ -185,6 +186,16 @@ extension AppModel {
             activities: PreviewFixtures.activities,
             launchFailures: [PreviewFixtures.claudeSessionID: "Could not find `claude` on your PATH."]
         )
+        model.gitSummaries = PreviewFixtures.gitSummaries
+        return model
+    }
+
+    /// Like `preview()`, but the main worktree's Claude session is a chat showing `state`.
+    static func chatPreview(_ state: ChatSession.PreviewState = .finished) -> AppModel {
+        var workspace = PreviewFixtures.workspace
+        workspace.updateSession(id: PreviewFixtures.claudeSessionID) { $0.interface = .acp }
+        let model = AppModel(preview: workspace, activities: PreviewFixtures.activities)
+        model.chats[PreviewFixtures.claudeSessionID] = .preview(state)
         model.gitSummaries = PreviewFixtures.gitSummaries
         return model
     }

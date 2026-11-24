@@ -19,6 +19,10 @@ struct ShellAdapterTests {
         #expect(ClaudeAdapter().executableToLocate == "claude")
     }
 
+    @Test func hasNoChat() {
+        #expect(shell.acp == nil)
+    }
+
     @Test func capabilities() {
         let capabilities = shell.capabilities
         #expect(capabilities.sessionID == .none)

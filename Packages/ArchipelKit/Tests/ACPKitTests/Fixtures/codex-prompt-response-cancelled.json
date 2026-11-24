@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "stopReason": "cancelled",
+    "usage": null,
+    "_meta": {
+      "quota": {
+        "token_count": null,
+        "model_usage": []
+      }
+    }
+  }
+}

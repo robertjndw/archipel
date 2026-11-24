@@ -1,5 +1,6 @@
 import AgentKit
 import ArchipelCore
+import ChatUI
 import EditorUI
 import Foundation
 
@@ -74,7 +75,7 @@ extension AppModel {
         }
     }
 
-    private func deliverPendingReview(to id: Session.ID) {
+    func deliverPendingReview(to id: Session.ID) {
         guard let pending = pendingReviews[id] else { return }
         guard let session = workspace.session(id: id) else {
             pendingReviews[id] = nil
@@ -86,6 +87,7 @@ extension AppModel {
             problem = "\(session.displayTitle) stopped before the review comments could be sent. Your comments are kept."
             return
         }
+        if let chat = chats[id] { return deliver(pending, to: chat, of: id) }
         guard let terminal = terminals[id], status != .starting, status != .notStarted,
               let startedAt = terminalStartTimes[id]
         else { return }
@@ -127,6 +129,24 @@ extension AppModel {
             try? await Task.sleep(for: .milliseconds(80))
             guard let self, self.terminals[id] === terminal else { return }
             terminal.focus()
+        }
+    }
+
+    /// A chat's composer takes the prompt whatever the agent is doing, with no settle time and no
+    /// menu to land in. It goes into the draft rather than out, for the same reason it is not sent
+    /// with Return in a terminal: the user should see the prompt before it is sent.
+    private func deliver(_ pending: PendingReview, to chat: ChatSession, of id: Session.ID) {
+        pendingReviews[id] = nil
+        let comments = reviewComments.comments(in: pending.root)
+        guard !comments.isEmpty else { return }
+        let prompt = ReviewPrompt.text(for: comments)
+        chat.draft = chat.draft.isEmpty ? prompt : chat.draft + "\n\n" + prompt
+        reviewComments.removeAll(in: pending.root)
+        // Selecting swapped tabs, and a composer that is not on screen yet misses the request.
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard let self, self.chats[id] === chat else { return }
+            chat.requestComposerFocus()
         }
     }
 

@@ -1,6 +1,7 @@
 import AgentKit
 import AppKit
 import ArchipelCore
+import ChatUI
 import SwiftUI
 import TerminalKit
 
@@ -164,7 +165,7 @@ extension AppModel {
             in: worktree,
             activities: activities,
             focusedSessionID: workspace.focusedSessionID(in: worktree.id),
-            isLive: { terminals[$0] != nil }
+            isLive: { terminals[$0] != nil || chats[$0] != nil }
         )
     }
 }
@@ -185,11 +186,12 @@ extension View {
 }
 
 extension PaneSurface {
-    /// The surface the pane would show this target on: the terminal's for a session, the text
-    /// background for a worktree without sessions.
+    /// The surface the pane would show this target on: the terminal's for a terminal session, the
+    /// text background for a chat and for a worktree without sessions.
     @MainActor
     init(target: SessionPeek.Target, in model: AppModel) {
-        self.init(showsSession: target.sessionID != nil, colors: model.terminalColors)
+        let session = target.sessionID.flatMap { model.workspace.session(id: $0) }
+        self.init(showsTerminal: session?.effectiveInterface == .terminal, colors: model.terminalColors)
     }
 }
 
@@ -263,6 +265,9 @@ struct SessionPeekView: View {
             }
             .id(session.id)
             .frame(height: 380)
+        } else if let session, let chat = model.chats[session.id], let text = chat.previewText {
+            ChatPeekTail(text: SessionPeek.tail(of: text, lines: Self.lineCount).joined(separator: "\n"), foreground: surface.foreground)
+                .frame(height: 380)
         } else {
             placeholder(session)
                 .frame(height: 220)
@@ -279,6 +284,12 @@ struct SessionPeekView: View {
                 )
             } else if let failure = session.flatMap({ model.launchFailures[$0.id] }) {
                 ContentUnavailableView("Could Not Start", systemImage: "exclamationmark.triangle", description: Text(failure))
+            } else if let session, model.chats[session.id] != nil {
+                ContentUnavailableView(
+                    "No Messages Yet",
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text("Open this chat to start the conversation.")
+                )
             } else {
                 ContentUnavailableView(
                     "Not Running",
@@ -342,6 +353,31 @@ struct PeekTail: View {
                     let latest = read()
                     if latest != text { text = latest }
                 }
+            }
+    }
+}
+
+/// The end of a chat's last reply, pinned to the bottom like `PeekTail`. Prose rather than terminal
+/// lines, so it wraps to the popover instead of running off its edge, and the chat's own
+/// observation keeps it current without polling.
+private struct ChatPeekTail: View {
+    let text: String
+    let foreground: Color
+
+    var body: some View {
+        Color.clear
+            .overlay(alignment: .bottomLeading) {
+                Text(verbatim: text)
+                    .font(.callout)
+                    .foregroundStyle(foreground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 6)
+            }
+            .clipped()
+            .mask {
+                LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.22)], startPoint: .top, endPoint: .bottom)
             }
     }
 }
@@ -451,6 +487,16 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
 #Preview("Session could not start") {
     SessionPeekView(target: SessionPeek.Target(worktreeID: PreviewFixtures.mainWorktreeID, sessionID: PreviewFixtures.claudeSessionID))
         .environment(AppModel.launchFailurePreview())
+}
+
+#Preview("Chat") {
+    SessionPeekView(target: SessionPeek.Target(worktreeID: PreviewFixtures.mainWorktreeID, sessionID: PreviewFixtures.claudeSessionID))
+        .environment(AppModel.chatPreview())
+}
+
+#Preview("Chat installing") {
+    SessionPeekView(target: SessionPeek.Target(worktreeID: PreviewFixtures.mainWorktreeID, sessionID: PreviewFixtures.claudeSessionID))
+        .environment(AppModel.chatPreview(.installing))
 }
 
 #Preview("Worktree without sessions") {

@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "a8853e53-9dde-4310-847f-bf512090e360",
+    "update": {
+      "sessionUpdate": "usage_update",
+      "used": 31268,
+      "size": 1000000,
+      "_meta": {
+        "_claude/model": "claude-opus-5-5"
+      }
+    }
+  }
+}

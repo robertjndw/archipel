@@ -35,19 +35,36 @@ struct PaletteCommand: Identifiable {
         let project = model.project(ofWorktree: worktreeID)
         let session = actions.focusedSession
         let publishes = model.pushPublishes(worktreeID)
+        // Unavailable commands are left out, so the fallback never shows.
+        let switchTarget = actions.focusedSessionSwitchTarget ?? .acp
 
         // Same rule as the File menu: every agent is listed, the first three show a shortcut.
         let shortcutHints = ["⌘T", "⌥⌘T", "⇧⌘T"]
-        let newSessions = model.agentsInMenuOrder.enumerated().map { index, agent in
-            PaletteCommand(
+        let newSessions = model.agentsInMenuOrder.enumerated().flatMap { index, agent in
+            let isAvailable = hasSelection && model.canStartSession(with: agent)
+            var commands = [PaletteCommand(
                 id: "new-\(agent.id)",
                 title: "New \(agent.displayName) Session",
                 symbol: agent.symbolName,
                 shortcutHint: index < shortcutHints.count ? shortcutHints[index] : nil,
-                isAvailable: hasSelection && model.canStartSession(with: agent)
+                isAvailable: isAvailable
             ) {
                 if let worktreeID { model.newSession(in: worktreeID, agent: agent) }
+            }]
+            if agent.acp != nil {
+                let other = model.defaultInterface(for: agent).other
+                commands.append(PaletteCommand(
+                    id: "new-\(agent.id)-\(other.rawValue)",
+                    title: other == .acp ? "New \(agent.displayName) Chat" : "New \(agent.displayName) Terminal Session",
+                    symbol: agent.symbolName,
+                    isAvailable: isAvailable,
+                    // The File menu's wording, so either phrasing finds it.
+                    alias: "New \(agent.displayName) Session in \(other.title)"
+                ) {
+                    if let worktreeID { model.newSession(in: worktreeID, agent: agent, interface: other) }
+                })
             }
+            return commands
         }
 
         // Flat entries rather than a submenu, so typing a preset's name finds the command.
@@ -139,6 +156,13 @@ struct PaletteCommand: Identifiable {
                 symbol: "plus.bubble",
                 isAvailable: session?.agentSessionID != nil
             ) { actions.restartFocusedSession(fresh: true) },
+            PaletteCommand(
+                id: "switch-interface",
+                title: "Switch to \(switchTarget.title)",
+                symbol: switchTarget.symbolName,
+                shortcutHint: "⌃⌘C",
+                isAvailable: actions.focusedSessionSwitchTarget != nil
+            ) { actions.switchFocusedSessionInterface() },
             PaletteCommand(
                 id: "next-attention",
                 title: "Next Session Needing Attention",

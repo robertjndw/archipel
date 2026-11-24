@@ -1,0 +1,29 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "a8853e53-9dde-4310-847f-bf512090e360",
+    "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+        {
+          "name": "compact",
+          "description": "Summarize the conversation so far to free up context",
+          "input": {
+            "hint": "optional focus"
+          }
+        },
+        {
+          "name": "review",
+          "description": "Review the current changes",
+          "input": null
+        },
+        {
+          "name": "init",
+          "description": "Write a project instructions file",
+          "input": null
+        }
+      ]
+    }
+  }
+}

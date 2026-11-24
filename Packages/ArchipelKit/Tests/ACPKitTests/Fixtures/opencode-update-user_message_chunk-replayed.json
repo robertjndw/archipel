@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+    "update": {
+      "sessionUpdate": "user_message_chunk",
+      "messageId": "msg_20cea0aaf001BgQbcSHe1EPJPN",
+      "content": {
+        "type": "text",
+        "text": "Read README.md and tell me the secret fruit in one word."
+      }
+    }
+  }
+}

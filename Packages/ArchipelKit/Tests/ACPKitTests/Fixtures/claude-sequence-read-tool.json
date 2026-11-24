@@ -1,0 +1,104 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01KXgKcyVftv1HPLF3jqqV5V",
+        "sessionUpdate": "tool_call",
+        "name": "Read",
+        "rawInput": {},
+        "status": "pending",
+        "title": "Read File",
+        "kind": "read",
+        "content": [],
+        "locations": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01KXgKcyVftv1HPLF3jqqV5V",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/Users/someone/project/README.md"
+        },
+        "title": "Read README.md",
+        "locations": [
+          {
+            "path": "/Users/someone/project/README.md",
+            "line": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "type": "text",
+              "file": {
+                "filePath": "/Users/someone/project/README.md",
+                "content": "# Sample repo\n\nThe secret fruit is mango.\n",
+                "numLines": 4,
+                "startLine": 1,
+                "totalLines": 4
+              }
+            },
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01KXgKcyVftv1HPLF3jqqV5V",
+        "sessionUpdate": "tool_call_update"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01KXgKcyVftv1HPLF3jqqV5V",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "1\t# Sample repo\n2\t\n3\tThe secret fruit is mango.\n4\t",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```\n1\t# Sample repo\n2\t\n3\tThe secret fruit is mango.\n```"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

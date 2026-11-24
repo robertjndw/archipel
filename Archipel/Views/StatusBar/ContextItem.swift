@@ -2,9 +2,9 @@ import AgentKit
 import ArchipelCore
 import SwiftUI
 
-/// How full the focused Claude session's context window is, and how long its prompt cache stays
-/// warm. Nothing at all for other tabs and before the first reply, since a guess would look like a
-/// measurement.
+/// How full the focused session's context window is, and how long its prompt cache stays warm.
+/// Claude's terminal sessions report it, and so do chats of any agent. Nothing at all for other tabs
+/// and before the first reply, since a guess would look like a measurement.
 struct ContextItem: View {
     @Environment(AppModel.self) private var model
     @State private var showsDetails = false
@@ -183,8 +183,10 @@ struct ContextDetails: View {
             TimelineView(.explicit(cache.map { [$0.expiresAt] } ?? [])) { timeline in
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(alignment: .firstTextBaseline) {
-                        // Only Claude's status line reports the context window.
-                        Label(model.workspace.session(id: sessionID)?.displayTitle ?? ClaudeAdapter().displayName, symbol: ClaudeAdapter().symbolName)
+                        // Claude's status line reports the context window, and so does every chat.
+                        let session = model.workspace.session(id: sessionID)
+                        let agent = session.map { model.effectiveAgent(for: $0).adapter } ?? ClaudeAdapter()
+                        Label(session?.displayTitle ?? agent.displayName, symbol: agent.symbolName)
                             .font(.headline)
                             .lineLimit(1)
                         Spacer()
