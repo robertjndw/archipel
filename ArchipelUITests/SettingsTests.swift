@@ -65,7 +65,7 @@ final class SettingsTests: ArchipelUITestCase {
         settingsWindow.toolbars.buttons["Agents"].click()
         waitUntil("Settings shows Agents") { self.settingsWindow.title == "Agents" }
         selectAgent("codex", named: "Codex", in: settingsWindow)
-        let enabled = settingsWindow.switches["settings.agents.codex.enabled"]
+        let enabled = agentSwitch("codex", in: settingsWindow)
         XCTAssertEqual(enabled.value as? Int, 1, "Codex should start out enabled.")
         enabled.click()
         waitUntil("Codex is switched off") { enabled.value as? Int == 0 }

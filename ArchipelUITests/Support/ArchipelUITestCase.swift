@@ -192,11 +192,17 @@ class ArchipelUITestCase: XCTestCase {
         assertExists(row, "Settings > Agents should list \(name).", file: file, line: line)
         row.click()
         assertExists(
-            settingsWindow.switches["settings.agents.\(id).enabled"],
+            agentSwitch(id, in: settingsWindow),
             "Selecting \(name) should show its settings.",
             file: file,
             line: line
         )
+    }
+
+    /// The switch in the selected agent's header. It isn't a Form toggle row, so SwiftUI exposes it
+    /// as a plain toggle and `switches[...]` won't find it.
+    func agentSwitch(_ id: String, in settingsWindow: XCUIElement) -> XCUIElement {
+        settingsWindow.descendants(matching: .any)["settings.agents.\(id).enabled"]
     }
 
     // MARK: Waiting
