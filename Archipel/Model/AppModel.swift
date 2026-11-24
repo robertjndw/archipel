@@ -727,12 +727,12 @@ final class AppModel {
         notifier.clear(sessionID: id)
     }
 
-    /// Clears the unread state of a worktree's sessions without opening them. Pending requests
-    /// are left alone, since nobody looked at the session to answer them.
     func hasUnread(in worktree: Worktree) -> Bool {
         worktree.sessions.contains { activities[$0.id]?.unread == true }
     }
 
+    /// Clears the unread state of a worktree's sessions without opening them. Pending requests
+    /// are left alone, since nobody looked at the session to answer them.
     func markRead(worktree id: Worktree.ID) {
         for session in workspace.worktree(id: id)?.sessions ?? [] { clearUnread(session.id) }
     }
