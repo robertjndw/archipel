@@ -1,4 +1,5 @@
 import AgentKit
+import AppKit
 import ArchipelCore
 import EditorUI
 import InspectorUI
@@ -676,8 +677,6 @@ private struct TabRowControls<Content: View>: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(GlyphButtonStyle())
                 .foregroundStyle(.secondary)
-                // For the menu, which the button style does not reach.
-                .frame(width: Chrome.controlHeight + 4, height: Chrome.controlHeight)
         }
     }
 }
@@ -891,25 +890,106 @@ private func previewTabBars() -> some View {
 }
 #endif
 
-/// Its own view so a re-render of the tab bar doesn't rebuild the menu while it's open, which
-/// closes any open submenu. Moving the pointer out of the bar toward the presets submenu is
-/// already enough to re-render it.
+/// Pops an AppKit menu instead of using a SwiftUI `Menu`. SwiftUI rewrites the items of an open
+/// `Menu` on every render of the window, and rewriting the presets item closes its submenu. With a
+/// session printing output that happens all the time, so the presets were nearly impossible to reach.
+///
+/// Same items as `NewSessionButtons`. Change one, change the other.
 private struct NewSessionMenu: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
     let worktree: Worktree.ID
     let pane: Pane.ID
+    @State private var anchor = MenuAnchor()
 
     var body: some View {
-        Menu {
-            NewSessionButtons(worktree: worktree, pane: pane)
-        } label: {
-            Image(systemName: "plus")
+        Button("New Session", systemImage: "plus", action: showMenu)
+            .background(MenuAnchorView(anchor: anchor))
+            .help("New Session")
+            .accessibilityIdentifier("pane.newSession")
+    }
+
+    private func showMenu() {
+        guard let view = anchor.view else { return }
+        let actions = MenuActions()
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for agent in model.enabledAgents {
+            let canStart = model.canStartSession(with: agent)
+            let item = actions.item("New \(agent.displayName) Session", enabled: canStart) {
+                model.newSession(in: worktree, agent: agent, pane: pane)
+            }
+            if !canStart { item.toolTip = agent.missingCommandHint }
+            menu.addItem(item)
         }
-        .toolbarGroupMenu()
-        // A borderless menu draws its label in the tint, which would make it the loudest
-        // thing in the row.
-        .tint(.secondary)
-        .help("New Session")
-        .accessibilityLabel("New Session")
-        .accessibilityIdentifier("pane.newSession")
+        let presets = model.presetsInMenuOrder
+        if !presets.isEmpty {
+            let submenu = NSMenu()
+            submenu.autoenablesItems = false
+            for entry in presets {
+                submenu.addItem(actions.item("\(entry.agent.displayName): \(entry.preset.title)", enabled: model.canStartSession(with: entry.agent)) {
+                    model.newSession(in: worktree, agent: entry.agent, preset: entry.preset, pane: pane)
+                })
+            }
+            submenu.addItem(.separator())
+            submenu.addItem(actions.item("Edit Presets…") {
+                SettingsView.select(.agents)
+                openSettings()
+            })
+            let presetsItem = NSMenuItem(title: "New Session with Preset", action: nil, keyEquivalent: "")
+            presetsItem.submenu = submenu
+            // The File menu has an item with the same title. The UI tests look this one up by identifier.
+            presetsItem.identifier = NSUserInterfaceItemIdentifier("pane.newSession.presets")
+            menu.addItem(.separator())
+            menu.addItem(presetsItem)
+        }
+        // Opens below the button like a pull-down. popUp blocks until the menu closes, so `actions`
+        // lives long enough.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.maxY + 4), in: view)
+    }
+}
+
+/// NSMenuItem holds its target weakly, so the caller has to keep this around.
+@MainActor
+private final class MenuActions: NSObject {
+    private var actions: [() -> Void] = []
+
+    func item(_ title: String, enabled: Bool = true, action: @escaping () -> Void) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
+        item.target = self
+        item.tag = actions.count
+        item.isEnabled = enabled
+        actions.append(action)
+        return item
+    }
+
+    @objc private func choose(_ sender: NSMenuItem) {
+        actions[sender.tag]()
+    }
+}
+
+/// Gives the menu an NSView to position itself against.
+private final class MenuAnchor {
+    weak var view: NSView?
+}
+
+private struct MenuAnchorView: NSViewRepresentable {
+    let anchor: MenuAnchor
+
+    func makeNSView(context: Context) -> NSView {
+        let view = AnchorView()
+        anchor.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        anchor.view = view
+    }
+
+    /// Flipped so `bounds.maxY` is the bottom edge of the button. Returns nil from hitTest so clicks
+    /// go to the button.
+    private final class AnchorView: NSView {
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
