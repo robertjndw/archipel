@@ -163,12 +163,12 @@ final class LaunchPresetTests: ArchipelUITestCase {
     ///
     /// Hovered and then confirmed with Return: a click on an item of this pop-up menu is
     /// synthesized but never reaches its action, and the submenu's items have no frame until
-    /// hovering their parent opens it. Queried through the plus button, because the File menu
-    /// holds items of the same titles.
+    /// hovering their parent opens it. The submenu is looked up by identifier because the File
+    /// menu has items with the same titles.
     private func startSession(from preset: String, using plus: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         assertExists(plus, "The pane should have a plus button.", file: file, line: line)
         plus.click()
-        let submenu = plus.menuItems["New Session with Preset"]
+        let submenu = app.menuItems["pane.newSession.presets"]
         assertExists(submenu, "The plus menu should offer New Session with Preset.", file: file, line: line)
         submenu.hover()
         let item = submenu.menuItems[preset]

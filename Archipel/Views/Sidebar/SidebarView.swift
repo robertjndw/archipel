@@ -328,6 +328,7 @@ private struct SidebarHeader: View {
     }
 }
 
+/// `NewSessionMenu` in the tab bar builds the same menu in AppKit. Change one, change the other.
 struct NewSessionButtons: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
