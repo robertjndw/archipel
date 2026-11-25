@@ -214,7 +214,7 @@ private struct PeekZoomCard: View {
 
     var body: some View {
         let frame = frame ?? state.start
-        let shape = RoundedRectangle(cornerRadius: radius ?? state.startRadius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: radius ?? state.startRadius, style: Chrome.paneCornerStyle)
         // The picture keeps its aspect ratio and scales with the card's width. It fades out before it
         // gets blurry, and by then the card already has the pane's color and shape.
         Image(nsImage: state.image)

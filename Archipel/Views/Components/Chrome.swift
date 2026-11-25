@@ -20,11 +20,19 @@ enum Chrome {
         style == .comfortable ? paneGap : 0
     }
     /// Corner radius of a pane: concentric with the window's corners, which sit `paneGap` away
-    /// from the outer cards, and drawn with the same continuous curve. Every corner gets it, the
-    /// inner ones too, so all cards have one shape. Square in the compact style.
+    /// from the outer cards. Every corner gets it, the inner ones too, so all cards have one shape.
+    /// Square in the compact style.
     static func paneRadius(for style: AppSettings.PaneStyle, windowRadius: CGFloat) -> CGFloat {
         style == .comfortable ? concentricRadius(windowRadius, inset: paneGap) : 0
     }
+    /// Circular, not continuous like the window corner. A continuous corner this small turns
+    /// almost all at once, which looks like a cut-off corner on 1x displays. The gap to the
+    /// window edge still stays within 0.2pt of `paneGap`.
+    static let paneCornerStyle: RoundedCornerStyle = .circular
+    /// Opacity of the white hairline inside a pane's edge. AppKit draws a similar one along the
+    /// window edge. Against a black terminal it smooths out the stair steps of the corner on 1x
+    /// displays; on light content you don't see it.
+    static let paneEdgeOpacity: Double = 0.08
     /// Radius for a shape nested `inset` inside a corner of `radius`. Clamped to 4pt so it never
     /// turns square.
     static func concentricRadius(_ radius: CGFloat, inset: CGFloat) -> CGFloat {

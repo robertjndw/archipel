@@ -104,9 +104,15 @@ private struct PaneCard: ViewModifier {
         // A plain rounded rectangle rather than ConcentricRectangle, so every corner gets the same
         // radius and it comes from the window's real corner radius instead of a fallback value.
         let radius = Chrome.paneRadius(for: style, windowRadius: windowRadius)
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: radius, style: Chrome.paneCornerStyle)
         content
             .clipShape(shape)
+            .overlay {
+                // Hidden through opacity instead of an `if`, for the identity reason above.
+                // Compact panes touch each other, so the line would just draw a grid there.
+                shape.strokeBorder(.white.opacity(style == .comfortable ? Chrome.paneEdgeOpacity : 0), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
             .padding(EdgeInsets(
                 top: gap,
                 leading: isFirst ? (hasColumnBefore ? 0 : gap) : gap / 2,
