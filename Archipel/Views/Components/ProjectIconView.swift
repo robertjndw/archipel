@@ -77,7 +77,7 @@ private struct ProjectIconGallery: View {
             GridRow {
                 Text("Tints").foregroundStyle(.secondary)
                 HStack(spacing: 6) {
-                    ForEach(Tint.allCases, id: \.self) { tint in
+                    ForEach(Tint.presets, id: \.self) { tint in
                         ProjectIconTile(icon: .automatic, image: nil, name: tint.displayName, color: tint.color)
                     }
                 }
