@@ -159,4 +159,33 @@ final class FileTreeModelTests {
         #expect(model.isExpanded(app))
         #expect(model.nodes(in: app)?.last?.name == "v2")
     }
+
+    @Test func forgetDropsTrashedFoldersAndWhatIsBelowThem() async throws {
+        let root = URL(filePath: "/tree")
+        let sources = root.appending(path: "Sources")
+        let app = sources.appending(path: "App")
+        let other = root.appending(path: "Other")
+        let model = FileTreeModel(root: root) { directory in
+            [FileNode(url: directory.appending(path: "x"), name: "x", isDirectory: true)]
+        }
+        for folder in [sources, app, other] { await model.setExpanded(folder, true)?.value }
+
+        model.forget([sources])
+        #expect(!model.isExpanded(sources))
+        #expect(!model.isExpanded(app))
+        #expect(model.nodes(in: sources) == nil)
+        #expect(model.nodes(in: app) == nil)
+        #expect(model.isExpanded(other))
+        #expect(model.nodes(in: other) != nil)
+    }
+
+    @Test func trashSkipsWhatIsInsideAnotherTrashedFolder() {
+        let urls = [
+            URL(filePath: "/tree/Sources/", directoryHint: .isDirectory),
+            URL(filePath: "/tree/Sources/App/main.swift"),
+            URL(filePath: "/tree/SourcesExtra"),
+            URL(filePath: "/tree/README.md"),
+        ]
+        #expect(FileActions.outermost(urls).map(\.pathKey) == ["/tree/Sources", "/tree/SourcesExtra", "/tree/README.md"])
+    }
 }

@@ -69,6 +69,17 @@ final class FileTreeModel {
         }
     }
 
+    /// Otherwise a refresh keeps listing folders that no longer exist.
+    func forget(_ urls: [URL]) {
+        let keys = urls.map(\.pathKey)
+        func isTrashed(_ key: String) -> Bool {
+            keys.contains { key.isAtOrBelow($0) }
+        }
+        expanded = expanded.filter { !isTrashed($0.key) }
+        children = children.filter { !isTrashed($0.key) }
+        listingErrors = listingErrors.filter { !isTrashed($0.key) }
+    }
+
     func relativePath(of url: URL) -> String {
         let base = root.standardizedFileURL.pathComponents
         let components = url.standardizedFileURL.pathComponents
@@ -134,6 +145,13 @@ extension URL {
     }
 }
 
+extension String {
+    /// Compares whole components, so `/a/foobar` isn't inside `/a/foo`.
+    func isAtOrBelow(_ ancestor: String) -> Bool {
+        self == ancestor || hasPrefix(ancestor.hasSuffix("/") ? ancestor : ancestor + "/")
+    }
+}
+
 struct FilesTab: View {
     let model: FileTreeModel
     let actions: InspectorActions
@@ -168,6 +186,15 @@ struct FilesTab: View {
                 } primaryAction: { urls in
                     open(urls)
                 }
+                // The context menu's shortcut only fires while the menu is open, hence this.
+                // Command is required so a bare Delete can't trash anything. The Delete key sends
+                // U+007F, which `.delete` (U+0008) doesn't match, and Caps Lock shouldn't matter.
+                .onKeyPress(keys: [.delete, KeyEquivalent("\u{7F}")], phases: .down) { press in
+                    guard press.modifiers.intersection([.command, .option, .control, .shift]) == .command,
+                          !selection.isEmpty else { return .ignored }
+                    trash(selection)
+                    return .handled
+                }
                 .onChange(of: selection) { _, selection in
                     // Clicking or arrowing onto a file previews it; folders only expand and collapse.
                     guard selection.count == 1, let url = selection.first, !model.isDirectory(url) else { return }
@@ -201,6 +228,26 @@ struct FilesTab: View {
             Divider()
             Button("Copy Path", systemImage: "document.on.document") { FileActions.copy(urls.map(\.path)) }
             Button("Copy Relative Path", systemImage: "document.on.document") { FileActions.copy(urls.map(model.relativePath(of:))) }
+            Divider()
+            Button("Move to Trash", systemImage: "trash") { trash(Set(urls)) }
+                .keyboardShortcut(.delete, modifiers: .command)
+        }
+    }
+
+    private func trash(_ urls: Set<URL>) {
+        let result = FileActions.trash(urls.sorted { $0.path < $1.path })
+        if !result.trashed.isEmpty {
+            model.forget(result.trashed)
+            let keys = result.trashed.map(\.pathKey)
+            selection = selection.filter { url in
+                let key = url.pathKey
+                return !keys.contains { key.isAtOrBelow($0) }
+            }
+            actions.didTrash(result.trashed)
+            refresh()
+        }
+        if !result.failures.isEmpty {
+            actions.reportProblem("Not everything could be moved to the Trash. " + result.failures.joined(separator: " "))
         }
     }
 
