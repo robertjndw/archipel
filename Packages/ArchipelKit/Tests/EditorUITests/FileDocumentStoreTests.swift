@@ -582,4 +582,130 @@ final class FileDocumentStoreTests {
         #expect(store.dirtyURLs.isEmpty)
         #expect(store.buffer(for: url) !== buffer)
     }
+
+    @Test func aRewriteThatOnlyChangesLineEndingsIsKeptBySaves() async throws {
+        let url = try file("endings.txt", Data([0xEF, 0xBB, 0xBF]) + Data("one\r\ntwo\r\n".utf8))
+        let buffer = await open(url)
+
+        // An agent normalises the file. The text the editor shows does not change.
+        try Data("one\ntwo\n".utf8).write(to: url, options: .atomic)
+        await buffer.reload()
+        #expect(buffer.text == "one\ntwo\n")
+        type("!", at: 3, in: buffer)
+        try store.save(url)
+        #expect(try Data(contentsOf: url) == Data("one!\ntwo\n".utf8))
+    }
+
+    @Test func aSaveThatFindsOnlyNewLineEndingsKeepsThem() async throws {
+        let url = try file("unseen.txt", Data("one\r\ntwo\r\n".utf8))
+        let buffer = await open(url)
+        type("!", at: 3, in: buffer)
+
+        // No reload: the tab is hidden, so the save is the first to look.
+        try Data("one\ntwo\n".utf8).write(to: url, options: .atomic)
+        try store.save(url)
+        #expect(try Data(contentsOf: url) == Data("one!\ntwo\n".utf8))
+    }
+
+    @Test func aFileWithAVeryLongLineIsNotOpenedAsText() async throws {
+        let ordinary = try file("long.json", Data((String(repeating: "x", count: 4_000) + "\n").utf8))
+        #expect(await open(ordinary).state == .text)
+        // The limit itself is still allowed.
+        let atTheLimit = try file("limit.txt", Data((String(repeating: "x", count: TextBuffer.maximumLineLength) + "\n").utf8))
+        #expect(await open(atTheLimit).state == .text)
+
+        let minified = String(repeating: "a;", count: TextBuffer.maximumLineLength)
+        let url = try file("bundle.min.js", Data(("// header\n" + minified).utf8))
+        let buffer = await open(url)
+        #expect(buffer.state == .lineTooLong(minified.utf16.count))
+
+        // Editing a file that a build then minifies raises a conflict rather than taking it in.
+        let source = try file("app.js", Data("let a = 1\n".utf8))
+        let edited = await open(source)
+        type("x", at: 0, in: edited)
+        try Data(minified.utf8).write(to: source, options: .atomic)
+        await edited.reload()
+        #expect(edited.conflict == .changed)
+        #expect(edited.text == "xlet a = 1\n")
+        edited.discardChanges()
+        // Two reloads, for the reason given in the binary test above.
+        await edited.reload()
+        await edited.reload()
+        #expect(edited.state == .lineTooLong(minified.utf16.count))
+    }
+
+    /// The save is what finds the change here, not the watcher, as from a hidden tab or Save All.
+    @Test func aSaveThatFindsAVeryLongLineOnDiskDoesNotOfferItForReload() async throws {
+        let url = try file("app.js", Data("let a = 1\n".utf8))
+        let buffer = await open(url)
+        type("x", at: 0, in: buffer)
+        let minified = String(repeating: "a;", count: TextBuffer.maximumLineLength)
+        try Data(minified.utf8).write(to: url, options: .atomic)
+
+        #expect(throws: SaveConflictError.self) { try self.store.save(url) }
+        #expect(buffer.conflict == .changed)
+        buffer.discardChanges()
+        // Taking that text in would put the line the editor refuses to lay out on screen.
+        #expect(buffer.text != minified)
+        await buffer.reload()
+        await buffer.reload()
+        #expect(buffer.state == .lineTooLong(minified.utf16.count))
+    }
+
+    @Test func textALegacyEncodingCannotHoldCanBeSavedAsUTF8() async throws {
+        let url = try file("legacy.txt", Data([0x63, 0x61, 0x66, 0xE9, 0x0D, 0x0A]))
+        let buffer = await open(url)
+        type("\u{1F600}", at: 0, in: buffer)
+        #expect(throws: TextFileFormat.EncodingError.self) { try self.store.save(url) }
+        #expect(buffer.saveFailedOnEncoding)
+
+        try buffer.saveAsUTF8()
+        #expect(!buffer.saveFailedOnEncoding)
+        #expect(buffer.saveError == nil)
+        #expect(!store.isDirty(url))
+        // Line endings stay as they were.
+        #expect(try Data(contentsOf: url) == Data("\u{1F600}caf\u{e9}\r\n".utf8))
+
+        // The file is UTF-8 now, so an ordinary save later on must not go back to the old encoding.
+        type("!", at: 0, in: buffer)
+        try store.save(url)
+        #expect(try Data(contentsOf: url) == Data("!\u{1F600}caf\u{e9}\r\n".utf8))
+    }
+
+    @Test func savingAsUTF8SurvivesATouchOfTheLegacyFile() async throws {
+        let legacy = Data([0x63, 0x61, 0x66, 0xE9, 0x0A])
+        let url = try file("touched-legacy.txt", legacy)
+        let buffer = await open(url)
+        type("\u{1F600}", at: 0, in: buffer)
+        #expect(throws: TextFileFormat.EncodingError.self) { try self.store.save(url) }
+
+        // Rewritten with the same bytes while the encoding bar is up: the save has to adopt the
+        // new fingerprint, and still write the encoding the user just chose.
+        try legacy.write(to: url, options: .atomic)
+        try buffer.saveAsUTF8()
+        #expect(!store.isDirty(url))
+        #expect(try Data(contentsOf: url) == Data("\u{1F600}caf\u{e9}\n".utf8))
+    }
+
+    @Test func aLongLineTheUserSavedIsNotAConflictWhenTheFileIsTouched() async throws {
+        let url = try file("data.json", Data("[]\n".utf8))
+        let buffer = await open(url)
+        let long = "[" + String(repeating: "1,", count: TextBuffer.maximumLineLength) + "1]"
+        buffer.textStorage.replaceCharacters(in: NSRange(location: 0, length: 2), with: long)
+        try store.save(url)
+
+        type(" ", at: 0, in: buffer)
+        // Touched with the same contents while the tab is hidden, then saved from there.
+        try Data((long + "\n").utf8).write(to: url, options: .atomic)
+        try store.save(url)
+        #expect(buffer.conflict == nil)
+        #expect(try String(contentsOf: url, encoding: .utf8) == " " + long + "\n")
+    }
+
+    @Test func aLongLineOfCJKTextOpensAsText() async throws {
+        // 20,000 characters is 60,000 UTF-8 bytes, which is over the limit if bytes were counted.
+        let line = String(repeating: "\u{6f22}", count: 20_000)
+        let buffer = await open(try file("cjk.txt", Data((line + "\n").utf8)))
+        #expect(buffer.state == .text)
+    }
 }

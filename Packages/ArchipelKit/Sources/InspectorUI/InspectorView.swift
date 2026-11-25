@@ -3,37 +3,29 @@ import SwiftUI
 import UISupport
 
 public struct InspectorView: View {
-    private let root: URL?
+    private let git: GitWorktreeState?
     private let actions: InspectorActions
-    private let searchPATH: @MainActor () async -> String
-    private let knownPullRequest: @MainActor () -> GitPullRequest?
     @Binding private var focusCommitMessage: Bool
     @AppStorage(InspectorView.selectedTabKey) private var tab: Tab = .files
 
     /// The host shares this key to switch tabs from its own commands (Show Files, Show Changes, Commit…).
     public static let selectedTabKey = "InspectorUI.selectedTab"
 
-    /// `root` is the selected worktree's folder; nil shows an empty state. The view fully resets when root changes.
-    /// A single click or arrow key opens a preview (`preview` true); a double click or Return opens for keeps.
-    /// `searchPATH` supplies the user's login-shell PATH, which is where `gh` is found.
+    /// `git` is the selected worktree's state, the same object the host's sidebar and menus read,
+    /// and its root is the folder shown; nil shows an empty state. The view fully resets when it
+    /// changes. A single click or arrow key opens a preview (`preview` true); a double click or
+    /// Return opens for keeps.
     /// Setting `focusCommitMessage` puts the cursor in the commit message field once the Changes tab
     /// shows it; the inspector sets it back to false.
     /// With `onSwitchBranch`, the branch name in the Changes tab becomes a button that calls it.
-    /// `knownPullRequest` is the host's latest PR for the worktree's branch. The Changes tab looks up
-    /// its own only now and then, so when the host's answer changes it asks again. It's a closure so
-    /// that only the tab reading it redraws when the host's lookups come in.
     public init(
-        root: URL?,
-        searchPATH: @escaping @MainActor () async -> String,
-        knownPullRequest: @escaping @MainActor () -> GitPullRequest? = { nil },
+        git: GitWorktreeState?,
         focusCommitMessage: Binding<Bool> = .constant(false),
         onOpenFile: @escaping (_ url: URL, _ preview: Bool) -> Void,
         onOpenDiff: @escaping (_ path: String, _ staged: Bool, _ preview: Bool) -> Void,
         onSwitchBranch: (() -> Void)? = nil
     ) {
-        self.root = root
-        self.searchPATH = searchPATH
-        self.knownPullRequest = knownPullRequest
+        self.git = git
         _focusCommitMessage = focusCommitMessage
         actions = InspectorActions(openFile: onOpenFile, openDiff: onOpenDiff, switchBranch: onSwitchBranch)
     }
@@ -55,17 +47,16 @@ public struct InspectorView: View {
     @ViewBuilder
     private var content: some View {
         Group {
-            if let root {
-                // A new identity per root throws away the old models, tasks and expansion state.
+            if let git {
+                // A new identity per worktree throws away the old models, tasks and expansion
+                // state. Except a Changes model with git still running: see `ChangesModelStore`.
                 InspectorContent(
-                    root: root,
+                    git: git,
                     tab: tab,
                     actions: actions,
-                    searchPATH: searchPATH,
-                    knownPullRequest: knownPullRequest,
                     focusCommitMessage: $focusCommitMessage
                 )
-                    .id(root)
+                    .id(ObjectIdentifier(git))
             } else {
                 ContentUnavailableView(
                     "No Worktree Selected",
@@ -75,6 +66,19 @@ public struct InspectorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Drops what the inspector keeps for worktrees beyond their time on screen (a Changes model
+    /// with an error still to show, an unsent commit message) for all but `roots`. A removed
+    /// worktree's path can be reused, and the new worktree must not start with the old one's state.
+    ///
+    /// Cheap enough to call on a timer: it does nothing while nothing is kept.
+    @MainActor
+    public static func forgetWorktrees(except roots: some Sequence<URL>) {
+        guard !ChangesModelStore.shared.isEmpty || !CommitMessageDrafts.shared.isEmpty else { return }
+        let keys = Set(roots.map(\.pathKey))
+        ChangesModelStore.shared.forget(except: keys)
+        CommitMessageDrafts.shared.forget(except: keys)
     }
 
     public enum Tab: String, CaseIterable, Identifiable {
@@ -162,11 +166,9 @@ private struct SelectedTabBounds: PreferenceKey {
 
 /// Owns both models so switching tabs keeps the file tree's expansion and the last known status.
 private struct InspectorContent: View {
-    let root: URL
+    let git: GitWorktreeState
     let tab: InspectorView.Tab
     let actions: InspectorActions
-    let searchPATH: @MainActor () async -> String
-    let knownPullRequest: @MainActor () -> GitPullRequest?
     @Binding var focusCommitMessage: Bool
     /// Made on appear rather than in init: the parent rebuilds this struct on every update, and a
     /// model made in init would be allocated, along with its GitClient, each time and thrown away.
@@ -178,18 +180,14 @@ private struct InspectorContent: View {
     }
 
     init(
-        root: URL,
+        git: GitWorktreeState,
         tab: InspectorView.Tab,
         actions: InspectorActions,
-        searchPATH: @escaping @MainActor () async -> String,
-        knownPullRequest: @escaping @MainActor () -> GitPullRequest?,
         focusCommitMessage: Binding<Bool>
     ) {
-        self.root = root
+        self.git = git
         self.tab = tab
         self.actions = actions
-        self.searchPATH = searchPATH
-        self.knownPullRequest = knownPullRequest
         _focusCommitMessage = focusCommitMessage
     }
 
@@ -199,12 +197,7 @@ private struct InspectorContent: View {
                 switch tab {
                 case .files: FilesTab(model: models.files, actions: actions)
                 case .changes:
-                    ChangesTab(
-                        model: models.changes,
-                        actions: actions,
-                        focusCommitMessage: $focusCommitMessage,
-                        knownPullRequest: knownPullRequest()
-                    )
+                    ChangesTab(model: models.changes, actions: actions, focusCommitMessage: $focusCommitMessage)
                 }
             } else {
                 Color.clear
@@ -212,7 +205,9 @@ private struct InspectorContent: View {
         }
         .onAppear {
             guard models == nil else { return }
-            models = Models(files: FileTreeModel(root: root), changes: ChangesModel(root: root, searchPATH: searchPATH))
+            // The Changes model of an earlier visit, if it still has a commit, push or pull running
+            // or an error from one to show.
+            models = Models(files: FileTreeModel(root: git.root), changes: ChangesModelStore.shared.model(for: git))
         }
     }
 }
@@ -274,7 +269,7 @@ extension InspectorHeader where Accessory == EmptyView {
 
 #if DEBUG
 #Preview("No Worktree") {
-    InspectorView(root: nil, searchPATH: { "" }, onOpenFile: { _, _ in }, onOpenDiff: { _, _, _ in })
+    InspectorView(git: nil, onOpenFile: { _, _ in }, onOpenDiff: { _, _, _ in })
         .frame(width: 300, height: 560)
 }
 
@@ -299,7 +294,7 @@ extension InspectorHeader where Accessory == EmptyView {
 }
 
 #Preview("No Worktree, Dark") {
-    InspectorView(root: nil, searchPATH: { "" }, onOpenFile: { _, _ in }, onOpenDiff: { _, _, _ in })
+    InspectorView(git: nil, onOpenFile: { _, _ in }, onOpenDiff: { _, _, _ in })
         .frame(width: 300, height: 560)
         .preferredColorScheme(.dark)
 }

@@ -40,7 +40,8 @@ extension AppModel {
         inPATH path: String
     ) -> ExecutableLocation {
         if let override {
-            return FileManager.default.isExecutableFile(atPath: override) ? .chosen(override) : .chosenMissing(override)
+            if FileManager.default.isExecutableFile(atPath: override) { return .chosen(override) }
+            return FileManager.default.fileExists(atPath: override) ? .chosenNotExecutable(override) : .chosenMissing(override)
         }
         return LoginEnvironment.locate(agent.executableToLocate, inPATH: path).map(ExecutableLocation.onPATH) ?? .notOnPATH
     }
@@ -49,21 +50,31 @@ extension AppModel {
 nonisolated enum ExecutableLocation: Equatable, Sendable {
     case onPATH(String)
     case chosen(String)
-    /// Chosen in Settings, but no longer there or no longer executable.
+    /// Chosen in Settings, but no longer there.
     case chosenMissing(String)
+    /// Chosen in Settings and there, but not something that can be run.
+    case chosenNotExecutable(String)
     case notOnPATH
 
     /// The executable to launch, nil when there is none to run.
     var path: String? {
         switch self {
         case .onPATH(let path), .chosen(let path): path
-        case .chosenMissing, .notOnPATH: nil
+        case .chosenMissing, .chosenNotExecutable, .notOnPATH: nil
+        }
+    }
+
+    /// The file chosen in Settings when it cannot be run.
+    var unusableChosenPath: String? {
+        switch self {
+        case .chosenMissing(let path), .chosenNotExecutable(let path): path
+        case .onPATH, .chosen, .notOnPATH: nil
         }
     }
 
     var isChosen: Bool {
         switch self {
-        case .chosen, .chosenMissing: true
+        case .chosen, .chosenMissing, .chosenNotExecutable: true
         case .onPATH, .notOnPATH: false
         }
     }

@@ -77,6 +77,19 @@ struct RootView: View {
         .sheet(isPresented: $model.isCreatingIsland) {
             IslandEditor(mode: .create)
         }
+        .sheet(item: $model.islandBeingEdited) { island in
+            IslandEditor(mode: .edit(island))
+        }
+        .confirmationDialog("Delete the island \(model.islandAwaitingDeletion?.name ?? "")?", item: $model.islandAwaitingDeletion) { island in
+            Button("Delete Island", role: .destructive) { model.removeIsland(island.id) }
+        } message: { island in
+            Text(model.deletionMessage(for: island))
+        }
+        .confirmationDialog("Remove the project \(model.projectAwaitingRemoval?.name ?? "")?", item: $model.projectAwaitingRemoval) { project in
+            Button("Remove Project", role: .destructive) { model.removeProject(project) }
+        } message: { project in
+            Text(model.removalMessage(for: project))
+        }
         .renameAlert($model.renameRequest)
         // A sidebar tip with a hidden sidebar has nowhere to show, and would keep every tip
         // after it in the group waiting. The sidebar's own appearing and disappearing cannot say
@@ -171,9 +184,7 @@ struct RootView: View {
         @Bindable var model = model
         if model.isGitAvailable {
             InspectorView(
-                root: model.selectedWorktree?.path,
-                searchPATH: { await model.toolSearchPATH() },
-                knownPullRequest: { model.selectedWorktreePullRequest },
+                git: model.selectedWorktree.flatMap { model.gitState(for: $0.id) },
                 focusCommitMessage: $model.focusCommitMessageRequest,
                 onOpenFile: { url, preview in model.openFile(url, preview: preview) },
                 onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) },

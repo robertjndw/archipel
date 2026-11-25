@@ -17,9 +17,10 @@ struct CodexAdapterTests {
         #expect(!fresh.arguments.contains { $0.contains("hook-trust") })
         LaunchFixture.expectHookEnvironment(fresh)
 
-        let resumed = try #require(codex.resumeCommand(for: LaunchFixture.context(agentSessionID: "thread-1")))
+        let thread = "0199a213-81c0-7800-8aa1-bbab2a035a53"
+        let resumed = try #require(codex.resumeCommand(for: LaunchFixture.context(agentSessionID: thread)))
         #expect(resumed.arguments.first == "resume")
-        #expect(resumed.arguments.last == "thread-1")
+        #expect(resumed.arguments.last == thread)
         #expect(Array(resumed.arguments.dropFirst().dropLast()) == fresh.arguments)
     }
 

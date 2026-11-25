@@ -10,19 +10,23 @@ public struct DecodedHook: Equatable, Sendable {
     public var usage: ProviderUsage?
     /// Context window fill. Never set together with an event.
     public var context: SessionContext?
+    /// The file the agent writes the conversation to, when the payload names it.
+    public var transcriptPath: String?
 
     public init(
         event: AgentEvent?,
         agentSessionID: String?,
         lifecycle: HookLifecycle? = nil,
         usage: ProviderUsage? = nil,
-        context: SessionContext? = nil
+        context: SessionContext? = nil,
+        transcriptPath: String? = nil
     ) {
         self.event = event
         self.agentSessionID = agentSessionID
         self.lifecycle = lifecycle
         self.usage = usage
         self.context = context
+        self.transcriptPath = transcriptPath
     }
 }
 

@@ -134,6 +134,56 @@ final class SyncTests: ArchipelUITestCase {
         XCTAssertEqual(try repository.worktreePaths.count, 2)
     }
 
+    func testABranchWhoseUpstreamWasDeletedIsOnlyPublishedAgainFromTheSyncMenu() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let remote = try sandbox.makeRemote(for: repository)
+        let feature = try repository.addWorktree(branch: "feature", in: sandbox.worktreesRoot)
+        try repository.git("push", "--quiet", "--set-upstream", "origin", "feature")
+        // What merging a pull request and deleting its branch leaves behind. main stays on the
+        // remote, which is how the app tells a deleted branch from one that was never pushed.
+        try remote.git("branch", "-D", "feature")
+        try launch(with: repository.workspace(linkedWorktrees: [feature]))
+
+        sidebarWorktree("feature").click()
+        assertExists(mainWindow(titled: "fixture - feature"), "The feature worktree should be selected.")
+        waitForProjectMenuItem("Fetch")
+        chooseMenu("Project", "Fetch")
+        waitUntil("the fetch has pruned the deleted branch") { (try? repository.sha(of: "refs/remotes/origin/feature")) == nil }
+
+        showChanges()
+        let sync = mainWindow.buttons.matching(NSPredicate(format: "label == %@", "Sync")).element(boundBy: 0)
+        assertExists(sync, "The Changes header should have the sync menu.")
+        waitUntil("the panel says the upstream is gone") { self.summary(of: sync) == "origin/feature no longer exists" }
+        // One click on the main button would otherwise put a merged branch back on the remote.
+        XCTAssertFalse(commitButton.label.contains("Publish") && commitButton.isEnabled, "The main button must not offer to publish the branch again.")
+        XCTAssertFalse(commitButton.isEnabled, "With nothing to commit the main button has nothing to do.")
+        // Nor does the Project menu, which can act on several worktrees at once.
+        waitUntil("Project > Push is disabled") {
+            self.app.menuBars.menuBarItems["Project"].click()
+            defer { self.app.typeKey(.escape, modifierFlags: []) }
+            let push = self.menuItem("Project", "Push")
+            return push.exists && !push.isEnabled
+        }
+
+        sync.click()
+        let publish = shownMenuItem("Publish Branch")
+        XCTAssertEqual(publish?.isEnabled, true, "The sync menu should still offer to publish the branch again.")
+        // By keyboard: clicks on the items of a menu AppKit pops up do not reach their action.
+        // Pull is disabled without an upstream, so the first item Down lands on is Publish Branch.
+        app.typeKey(.downArrow, modifierFlags: [])
+        app.typeKey(.return, modifierFlags: [])
+
+        let local = try repository.sha(of: "feature")
+        waitUntil("the remote has the branch again") { try remote.sha(of: "refs/heads/feature") == local }
+        XCTAssertEqual(try repository.upstream(of: "feature"), "origin/feature", "Publishing should set the upstream again.")
+        waitUntil("the panel says the branch is up to date") { self.summary(of: sync) == "Up to date with origin/feature" }
+    }
+
+    /// What the sync menu's button reads out: its summary of the branch.
+    private func summary(of button: XCUIElement) -> String? {
+        button.value as? String
+    }
+
     func testProjectSyncItemsAreDisabledWithoutARemote() throws {
         // No makeRemote: the fixture has a branch and commits but no remote and no upstream.
         let repository = try sandbox.makeRepository(named: "fixture")

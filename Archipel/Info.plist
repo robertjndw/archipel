@@ -11,9 +11,19 @@
 	<string>M+kcDmMiIktS7NiEG47oMngB50kLDYfxa87DQDu7yB4=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
-	<!-- A tab being dragged between panes. See TabDragItem. -->
+	<!-- A tab being dragged between panes and a project being reordered in the sidebar. See TabDragItem. -->
 	<key>UTExportedTypeDeclarations</key>
 	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>de.jandow.archipel.project</string>
+			<key>UTTypeDescription</key>
+			<string>Archipel Project</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
 		<dict>
 			<key>UTTypeIdentifier</key>
 			<string>de.jandow.archipel.tab</string>

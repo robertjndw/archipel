@@ -47,6 +47,57 @@ final class ProjectTests: ArchipelUITestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: repository.url.path))
     }
 
+    func testRenameIsDisabledWhileTheNameIsBlank() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try launch(with: repository.workspace())
+
+        assertExists(sidebarProject("fixture"), "The seeded project should be in the sidebar.")
+        sidebarProject("fixture").rightClick()
+        chooseContextMenu("Rename…")
+        let alert = mainWindow.sheets.element(boundBy: 0)
+        assertExists(alert.textFields.element(boundBy: 0), "The rename alert did not come up.")
+        let rename = alert.buttons["Rename"]
+        waitUntil("Rename is enabled for the current name") { rename.isEnabled }
+
+        // Spaces only: trimmed, that is no name at all.
+        replaceText(with: "   ")
+        waitUntil("Rename is disabled for a blank name") { !rename.isEnabled }
+        replaceText(with: "Renamed")
+        waitUntil("Rename is enabled again for a real name") { rename.isEnabled }
+        alert.buttons["Cancel"].click()
+
+        assertGone(alert, "Cancel should close the alert.")
+        assertExists(sidebarProject("fixture"), "Cancel should keep the old name.")
+        XCTAssertEqual(try sandbox.savedWorkspace().islands[0].projects.map(\.name), ["fixture"])
+    }
+
+    func testRemovingTheSelectedProjectSelectsTheNextOne() throws {
+        let alpha = try sandbox.makeRepository(named: "alpha")
+        let beta = try sandbox.makeRepository(named: "beta")
+        var workspace = Workspace()
+        let alphaMain = Worktree(path: alpha.url, branch: "main", isMain: true)
+        let betaMain = Worktree(path: beta.url, branch: "main", isMain: true)
+        workspace.addProject(Project(name: "alpha", folderURL: alpha.url, worktrees: [alphaMain]), to: workspace.islands[0].id)
+        workspace.addProject(Project(name: "beta", folderURL: beta.url, worktrees: [betaMain]), to: workspace.islands[0].id)
+        workspace.selectWorktree(alphaMain.id)
+        try launch(with: workspace)
+        assertExists(mainWindow(titled: "alpha - main"), "The first project's checkout should be selected at launch.")
+
+        sidebarProject("alpha").rightClick()
+        chooseContextMenu("Remove Project…")
+        let confirm = app.buttons.matching(identifier: "Remove Project").element(boundBy: 0)
+        assertExists(confirm, "Removing a project should ask first.")
+        confirm.click()
+
+        assertGone(sidebarProject("alpha"), "The removed project should leave the sidebar.")
+        assertExists(mainWindow(titled: "beta - main"), "The project that took its place should be selected.")
+        XCTAssertFalse(mainWindow.staticTexts["No Projects"].exists, "An island with a project left is not empty.")
+        waitUntil("the removal and the new selection are saved") {
+            let saved = try sandbox.savedWorkspace()
+            return saved.islands[0].projects.map(\.name) == ["beta"] && saved.selectedWorktreeID == betaMain.id
+        }
+    }
+
     func testRemovingAProjectLeavesItsFolderAlone() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         try launch(with: repository.workspace(sessions: [.shell()]))

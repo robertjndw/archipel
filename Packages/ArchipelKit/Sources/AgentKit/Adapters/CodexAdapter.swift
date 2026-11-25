@@ -45,13 +45,19 @@ public struct CodexAdapter: AgentAdapter {
         )
     }
 
+    /// The thread id has to be a word of its own here: `--` in front of it would also turn the
+    /// preset's arguments, which follow, into positionals. A UUID cannot be taken for an option.
     public func resumeCommand(for context: LaunchContext, agentSessionID: String) -> LaunchCommand? {
-        LaunchCommand(
+        guard acceptsSessionID(agentSessionID) else { return nil }
+        return LaunchCommand(
             executable: executableName,
             arguments: ["resume"] + Self.overrides(context) + [agentSessionID],
             environment: hookEnvironment(context)
         )
     }
+
+    /// Codex names its threads with UUIDs.
+    public func acceptsSessionID(_ id: String) -> Bool { AgentSessionID.isUUID(id) }
 
     public func attentionReason(forTerminalNotification body: String) -> AttentionReason? {
         // The launch overrides restrict Codex to approval notifications.
@@ -62,7 +68,7 @@ public struct CodexAdapter: AgentAdapter {
         if source == Self.hooksSource {
             return DecodedHook(
                 event: Self.hookEvent(payload),
-                agentSessionID: HookDecoder.nonEmptyString(payload["session_id"])
+                agentSessionID: sessionID(payload["session_id"])
             )
         }
         // Field names follow the Codex `notify` documentation.
@@ -72,7 +78,7 @@ public struct CodexAdapter: AgentAdapter {
         default:
             nil
         }
-        return DecodedHook(event: event, agentSessionID: HookDecoder.nonEmptyString(payload["thread-id"]))
+        return DecodedHook(event: event, agentSessionID: sessionID(payload["thread-id"]))
     }
 
     static func hookEvent(_ payload: [String: Any]) -> AgentEvent? {
@@ -85,7 +91,13 @@ public struct CodexAdapter: AgentAdapter {
         case "PreToolUse", "PostToolUse":
             return agentID.map { .subagentActivity(id: $0) } ?? .activity
         case "PermissionRequest":
-            return .attentionRequested(.permission, message: HookDecoder.nonEmptyString(payload["tool_name"]))
+            let summary = ToolRequestSummary(toolName: payload["tool_name"], toolInput: payload["tool_input"])
+            return .attentionRequested(
+                .permission,
+                message: summary?.text,
+                subagent: agentID,
+                isPartial: summary?.isComplete != true
+            )
         case "Stop":
             return .turnFinished(message: HookDecoder.nonEmptyString(payload["last_assistant_message"]))
         case "SubagentStart":

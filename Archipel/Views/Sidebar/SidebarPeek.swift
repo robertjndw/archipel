@@ -50,15 +50,11 @@ final class SidebarPeekModel {
     @ObservationIgnored private let zoom = PeekZoom()
 
     /// The popover disappears without calling its binding setter when its anchor row goes away
-    /// (island switch, removed worktree), so the target is checked against the live rows instead.
+    /// (island switch, removed worktree, a row leaving the "Needs Me" list), so the target is
+    /// checked against the rows the list shows instead.
     func closeIfStale(in model: AppModel) {
         guard let target else { return }
-        guard let island = model.selectedIsland,
-              SessionPeek.targets(in: island, relevantSession: { model.peekSession(in: $0) }).contains(where: { $0.worktreeID == target.worktreeID })
-        else {
-            close()
-            return
-        }
+        if !model.isListedInSidebar(target.worktreeID) { close() }
     }
 
     func hover(worktree id: Worktree.ID, _ inside: Bool) {
@@ -80,20 +76,24 @@ final class SidebarPeekModel {
 
     /// False when the pointer is not over a row, so the key goes on to the list.
     func openHovered(in model: AppModel) -> Bool {
+        let hovered: SessionPeek.Target
         if let id = hoveredSession, let worktree = model.workspace.worktree(containing: id) {
-            target = SessionPeek.Target(worktreeID: worktree.id, sessionID: id)
+            hovered = SessionPeek.Target(worktreeID: worktree.id, sessionID: id)
         } else if let id = hoveredWorktree, let worktree = model.workspace.worktree(id: id) {
-            target = SessionPeek.Target(worktreeID: id, sessionID: model.peekSession(in: worktree))
+            hovered = SessionPeek.Target(worktreeID: id, sessionID: model.peekSession(in: worktree))
         } else {
             return false
         }
+        // A row of a page the sidebar is only passing through (mid-swipe) has no popover to show.
+        guard model.isListedInSidebar(hovered.worktreeID) else { return false }
+        target = hovered
         SidebarTips.peeked()
         return true
     }
 
     func step(by offset: Int, in model: AppModel) {
-        guard let target, let island = model.selectedIsland else { return }
-        let targets = SessionPeek.targets(in: island) { model.peekSession(in: $0) }
+        guard let target else { return }
+        let targets = SessionPeek.targets(in: model.sidebarRows) { model.peekSession(in: $0) }
         let next = SessionPeek.step(from: target, by: offset, in: targets) ?? target
         if next.worktreeID != target.worktreeID { presentation.moving(to: next.worktreeID) }
         self.target = next
@@ -418,10 +418,12 @@ struct SidebarPeekKeyMonitor: NSViewRepresentable {
         override func handle(_ event: NSEvent) -> Bool {
             guard let peek, let model else { return false }
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // A stale peek is dropped before anything else, so the Space that finds it is free to
+            // open a new one instead of being swallowed by a peek nobody can see.
+            if peek.isOpen { peek.closeIfStale(in: model) }
             if peek.isOpen {
-                peek.closeIfStale(in: model)
                 // A peek whose popover is gone, or while another window is key, must not eat keys.
-                guard peek.isOpen, peek.isPresented, keyWindowBelongsToUs else { return false }
+                guard peek.isPresented, keyWindowBelongsToUs else { return false }
                 guard modifiers.isEmpty else {
                     peek.close()
                     return false

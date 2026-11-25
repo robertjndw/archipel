@@ -5,6 +5,11 @@ import Foundation
 /// hooks, and what that does to the fallback messages for them.
 public struct HookedSessions: Equatable, Sendable {
     public enum Admission: Equatable, Sendable {
+        /// The message is from another agent's hooks than the one the session runs. Anything
+        /// started in the tab can send one, and acting on it would store that agent's
+        /// conversation id on this session, which the next resume would then pass to the wrong
+        /// agent.
+        case foreign
         /// The message is a fallback for a session that has hooks now.
         case dropped
         case accepted
@@ -23,9 +28,9 @@ public struct HookedSessions: Equatable, Sendable {
 
     public mutating func admit(_ message: HookMessage, agent: AgentKind, registry: AgentRegistry = .builtIn) -> Admission {
         guard let adapter = registry.adapter(id: agent.rawValue),
-              adapter.capabilities.lifecycle == .hooksOnceSeen,
               let source = message.source, adapter.hookSources.contains(source)
-        else { return .accepted }
+        else { return .foreign }
+        guard adapter.capabilities.lifecycle == .hooksOnceSeen else { return .accepted }
         if adapter.fallbackHookSources.contains(source) {
             return hooked.contains(message.sessionID) ? .dropped : .accepted
         }

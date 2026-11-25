@@ -56,9 +56,9 @@ public enum SessionPeek {
         }
     }
 
-    /// The session that best stands for a worktree: one that needs the user,
-    /// then a busy one, then the one its content area shows, then whatever
-    /// has a live terminal.
+    /// The session that best stands for a worktree: the one its row shows the
+    /// state of, then the one its content area shows, then whatever has a
+    /// live terminal.
     public static func mostRelevantSession(
         in worktree: Worktree,
         activities: [Session.ID: SessionActivity],
@@ -66,8 +66,7 @@ public enum SessionPeek {
         isLive: (Session.ID) -> Bool
     ) -> Session.ID? {
         let sessions = worktree.sessions
-        if let id = sessions.first(where: { activities[$0.id]?.needsUser == true })?.id { return id }
-        if let id = sessions.first(where: { activities[$0.id]?.showsProgress == true })?.id { return id }
+        if let id = mostPressingSession(of: sessions, activities: activities) { return id }
         if let focusedSessionID, sessions.contains(where: { $0.id == focusedSessionID }) { return focusedSessionID }
         return sessions.first(where: { isLive($0.id) })?.id ?? sessions.first?.id
     }
@@ -78,7 +77,16 @@ public enum SessionPeek {
         in island: Island,
         relevantSession: (Worktree) -> Session.ID?
     ) -> [Target] {
-        island.projects.filter(\.isExpanded).flatMap(\.worktrees).flatMap { worktree -> [Target] in
+        targets(in: island.projects.filter(\.isExpanded).flatMap(\.worktrees), relevantSession: relevantSession)
+    }
+
+    /// The stops of whatever rows the sidebar lists, in its order. The "Needs Me" list has rows
+    /// from every island and ignores collapsed projects, so the caller says which rows are shown.
+    public static func targets(
+        in worktrees: [Worktree],
+        relevantSession: (Worktree) -> Session.ID?
+    ) -> [Target] {
+        worktrees.flatMap { worktree -> [Target] in
             if worktree.sessions.count > 1 {
                 return worktree.sessions.map { Target(worktreeID: worktree.id, sessionID: $0.id) }
             }

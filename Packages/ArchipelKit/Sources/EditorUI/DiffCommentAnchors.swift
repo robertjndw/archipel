@@ -60,4 +60,26 @@ enum DiffCommentAnchoring {
         }
         return marked
     }
+
+    /// Display items whose comment was made on a line that read differently. The comment stays on
+    /// its line number, so this is the only hint that the agent has moved the code under it.
+    static func staleItems(
+        _ items: [DiffDisplayItem],
+        rows: [DiffRow],
+        role: DiffPaneRole,
+        document: DiffDocument,
+        comments: [ReviewComment]
+    ) -> Set<Int> {
+        guard !comments.isEmpty else { return [] }
+        var snapshots: [DiffLineAnchor: [String]] = [:]
+        for comment in comments { snapshots[comment.anchor, default: []].append(comment.lineText) }
+        var stale: Set<Int> = []
+        for (index, item) in items.enumerated() {
+            guard case .row(let rowIndex) = item,
+                  let (anchor, text) = anchor(for: rows[rowIndex], role: role, in: document),
+                  let texts = snapshots[anchor], texts.contains(where: { $0 != text }) else { continue }
+            stale.insert(index)
+        }
+        return stale
+    }
 }

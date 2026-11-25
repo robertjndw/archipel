@@ -2,7 +2,36 @@ import Foundation
 import Synchronization
 
 public struct GitClient: Sendable {
-    public init() {}
+    /// Where a discarded file goes that no commit holds. The system Trash unless a caller says
+    /// otherwise, which is what lets tests discard without filling the Trash of whoever runs them.
+    private let moveToTrash: @Sendable (URL) throws -> Void
+
+    public init() {
+        moveToTrash = { try GitProcess.moveToTrash($0) }
+    }
+
+    public init(moveToTrash: @escaping @Sendable (URL) throws -> Void) {
+        self.moveToTrash = moveToTrash
+    }
+
+    /// Makes every client of this process that was not given a trash of its own put discarded
+    /// files into `folder`. The system Trash belongs to the user account, whatever HOME says, so
+    /// the UI test build, which really discards files, would otherwise leave them in the Trash of
+    /// whoever runs the tests.
+    public static func discardInto(_ folder: URL) {
+        GitProcess.trashFolder.withLock { $0 = folder }
+    }
+
+    /// Gives every git this process starts the user's own PATH, once `resolve` has it. An app
+    /// started from the Dock has launchd's bare PATH, where the tools git itself runs are missing
+    /// when they come from Homebrew: hook managers (husky, lefthook), git-lfs, gpg, credential helpers.
+    ///
+    /// Asking a login shell takes a while. Commands that only read never wait for the answer and
+    /// run with the inherited PATH until it is there, so status polling starts at once. Commands
+    /// that write wait, because those are the ones that run hooks and filters.
+    public static func resolveSearchPATH(_ resolve: @escaping @Sendable () async -> String) {
+        GitProcess.searchPATH.resolve(resolve)
+    }
 
     public func isRepository(_ folder: URL) async -> Bool {
         let output = try? await run(["rev-parse", "--is-inside-work-tree"], in: folder)
@@ -31,6 +60,15 @@ public struct GitClient: Sendable {
         guard let output = try? await run(["rev-parse", first + "^{commit}", second + "^{commit}", "--"], in: folder) else { return false }
         let lines = output.split(whereSeparator: \.isNewline)
         return lines.count >= 2 && lines[0] == lines[1]
+    }
+
+    /// The commits without parents that HEAD's history starts from, sorted. Every clone of a
+    /// repository has the same ones, and an unrelated repository has none of them, so they identify
+    /// a repository after its folder is gone. Nil outside a repository or before its first commit.
+    public func rootCommits(in folder: URL) async -> [String]? {
+        guard let output = try? await run(["rev-list", "--max-parents=0", "HEAD", "--"], in: folder) else { return nil }
+        let roots = output.split(whereSeparator: \.isNewline).map(String.init).sorted()
+        return roots.isEmpty ? nil : roots
     }
 
     public func worktrees(of repository: URL) async throws -> [GitWorktreeEntry] {
@@ -126,6 +164,34 @@ public struct GitClient: Sendable {
 
     /// Updates a single remote-tracking branch, e.g. right before branching off it. The sheet waits
     /// on this, so a dead connection should fail fast.
+    ///
+    /// The stall limits below only cover a transfer that has started. `timeout` bounds the whole
+    /// call, including a connection that never answers and the wait for a slot behind other
+    /// fetches that hang on the same dead network.
+    public func fetch(branch: String, from remote: String, in repository: URL, timeout: Duration) async throws {
+        let (outcomes, outcome) = AsyncStream.makeStream(of: Result<Void, any Error>.self)
+        let work = Task {
+            do {
+                try await fetch(branch: branch, from: remote, in: repository)
+                outcome.yield(.success(()))
+            } catch {
+                outcome.yield(.failure(error))
+            }
+        }
+        let timer = Task {
+            try await Task.sleep(for: timeout)
+            outcome.yield(.failure(GitError(message: "Fetching \(branch) from \(remote) took too long.")))
+        }
+        // Cancelling stops the git process, or keeps it from starting once its slot comes up.
+        defer {
+            work.cancel()
+            timer.cancel()
+        }
+        // Ends without an outcome when the caller is cancelled.
+        for await first in outcomes { return try first.get() }
+        throw CancellationError()
+    }
+
     public func fetch(branch: String, from remote: String, in repository: URL) async throws {
         let args = [
             "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=15",
@@ -155,6 +221,13 @@ public struct GitClient: Sendable {
         try await run(args, in: repository, readOnly: false)
     }
 
+    /// Reconnects worktrees that were moved by hand. Run in a moved linked worktree, it updates the
+    /// repository's record of where it is; run in a moved main checkout with the linked worktrees'
+    /// folders, it points those back at the repository.
+    public func repairWorktrees(in folder: URL, paths: [URL] = []) async throws {
+        try await run(["worktree", "repair", "--"] + paths.map(\.path), in: folder, readOnly: false)
+    }
+
     /// Safe delete with `-d`: a branch not merged into HEAD (or its upstream) is kept, not thrown away.
     public func deleteBranch(_ branch: String, in repository: URL) async throws -> GitBranchDeletion {
         // C locale so the message below is not translated.
@@ -166,14 +239,46 @@ public struct GitClient: Sendable {
         throw GitError(command: "git branch", output: result)
     }
 
+    /// Lists untracked files one by one (`--untracked-files=all`), which is what the Changes tab
+    /// needs to stage or discard them and what `GitStatus.changedFiles` counts. The poll pays for
+    /// that too: a huge untracked folder is nearly always ignored, and an ignored folder costs
+    /// nothing either way.
     public func status(in folder: URL) async throws -> GitStatus {
-        GitParser.status(try await run(["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"], in: folder))
+        try await status(in: folder, untracked: "all")
     }
 
-    /// Skips `--untracked-files=all` so a huge untracked directory counts once and the call stays fast
-    /// enough to poll for every worktree.
+    /// The status of `status(in:)` boiled down, with the same count.
     public func summary(in folder: URL) async throws -> GitSummary {
-        GitParser.summary(try await run(["status", "--porcelain=v2", "-z", "--branch"], in: folder))
+        GitSummary(try await status(in: folder))
+    }
+
+    /// Branch and upstream for push and pull, which have no use for the files.
+    private func tracking(in folder: URL) async throws -> GitStatus {
+        try await status(in: folder, untracked: "no")
+    }
+
+    private func status(in folder: URL, untracked: String) async throws -> GitStatus {
+        var status = GitParser.status(try await run(["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=\(untracked)"], in: folder))
+        if let missing = status.goneUpstream, await upstreamRemoteHasNoBranches(of: status.branch, in: folder) {
+            status.goneUpstream = nil
+            status.pendingUpstream = missing
+        }
+        return status
+    }
+
+    /// Status reports a missing upstream the same way whether the branch was deleted on the remote
+    /// or was never there. What tells them apart: a remote that had a branch deleted after a merge
+    /// still has the one it was merged into, while the clone of an empty repository knows no
+    /// branch of its remote at all until the first push.
+    ///
+    /// Only asked for a branch whose upstream is missing, so the usual poll stays one git call.
+    private func upstreamRemoteHasNoBranches(of branch: String?, in folder: URL) async -> Bool {
+        guard let branch, let configured = try? await run(["config", "--get", "branch.\(branch).remote"], in: folder) else { return false }
+        let remote = configured.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "." is a local branch as upstream, which has no remote to be empty.
+        guard !remote.isEmpty, remote != "." else { return false }
+        guard let known = try? await run(["for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes/\(remote)/"], in: folder) else { return false }
+        return known.isEmpty
     }
 
     /// Commits what is staged. The message travels as its own argv element, so newlines and a leading
@@ -195,14 +300,32 @@ public struct GitClient: Sendable {
         return output?.contains(where: { !$0.isWhitespace }) == true
     }
 
-    /// Plain `git push` when the branch tracks something, otherwise publishes it to `origin` and sets the
-    /// upstream. Nothing here can prompt: stdin is /dev/null, `GIT_TERMINAL_PROMPT=0` is set, and the
+    /// The configured remotes; empty without any, or when git cannot be asked.
+    public func remoteNames(in folder: URL) async -> [String] {
+        guard let output = try? await run(["remote"], in: folder) else { return [] }
+        return output.split(whereSeparator: \.isNewline).map(String.init)
+    }
+
+    /// The remote `push` publishes a branch without a usable upstream to, or nil when that would
+    /// be a guess. A branch whose upstream is gone goes back to the remote it was on. Otherwise
+    /// `origin`, or the only remote there is, whatever it is called.
+    public static func publishRemote(among remotes: [String], goneUpstream: String? = nil) -> String? {
+        // Remote names may contain slashes themselves, so the longest one that fits wins.
+        if let goneUpstream, let remote = remotes.filter({ goneUpstream.hasPrefix($0 + "/") }).max(by: { $0.count < $1.count }) {
+            return remote
+        }
+        if remotes.contains("origin") { return "origin" }
+        return remotes.count == 1 ? remotes[0] : nil
+    }
+
+    /// Plain `git push` when the branch tracks something, otherwise publishes it to the remote
+    /// `publishRemote` picks and sets the upstream. Nothing here can prompt: stdin is /dev/null, `GIT_TERMINAL_PROMPT=0` is set, and the
     /// app has no controlling terminal for ssh or credential helpers to open.
     ///
     /// No BatchMode, unlike the unattended fetches: a push is something the user asked for, so an askpass
     /// helper they set up for their key may still show its window.
     public func push(in folder: URL) async throws {
-        let summary = try await summary(in: folder)
+        let summary = try await tracking(in: folder)
         guard summary.branch != nil else {
             throw GitError(message: "HEAD is detached. Check out a branch before pushing.")
         }
@@ -210,11 +333,15 @@ public struct GitClient: Sendable {
             try await runPush(["push"], in: folder)
             return
         }
-        let remotes = try await run(["remote"], in: folder).split(whereSeparator: \.isNewline)
-        guard remotes.contains("origin") else {
-            throw GitError(message: "This branch has no upstream and the repository has no remote named origin.")
+        let remotes = try await run(["remote"], in: folder).split(whereSeparator: \.isNewline).map(String.init)
+        guard let remote = Self.publishRemote(among: remotes, goneUpstream: summary.goneUpstream ?? summary.pendingUpstream) else {
+            throw GitError(message: remotes.isEmpty
+                ? "This branch has no upstream and the repository has no remote."
+                : "This branch has no upstream, and none of the repository's remotes is named origin. Push from a terminal to choose one.")
         }
-        try await runPush(["push", "-u", "origin", "HEAD"], in: folder)
+        // Also for a gone upstream: a plain push is refused under `push.default=simple` when the
+        // old upstream had another name, and naming the remote and HEAD works either way.
+        try await runPush(["push", "-u", remote, "HEAD"], in: folder)
     }
 
     private func runPush(_ arguments: [String], in folder: URL) async throws {
@@ -271,21 +398,31 @@ public struct GitClient: Sendable {
     /// Fetches, then fast-forwards the branch to its upstream. Never merges or rebases. A diverged
     /// branch is refused with an explanation, since sorting that out needs someone in a terminal.
     public func pull(in folder: URL) async throws {
-        let before = try await summary(in: folder)
+        let before = try await tracking(in: folder)
         guard before.branch != nil else {
             throw GitError(message: "HEAD is detached. Check out a branch before pulling.")
         }
         guard let upstream = before.upstream else {
-            throw GitError(message: "This branch has no upstream to pull from.")
+            if let pending = before.pendingUpstream {
+                throw GitError(message: "\(pending) does not exist yet, so there is nothing to pull. Publish the branch first.")
+            }
+            throw GitError(message: before.goneUpstream.map(Self.goneUpstreamMessage) ?? "This branch has no upstream to pull from.")
         }
         // Only ever asked for by the user.
         try await fetch(in: folder, userInitiated: true)
-        let after = try await summary(in: folder)
+        let after = try await tracking(in: folder)
+        // The fetch prunes, so it can be the one that finds the branch deleted on the remote.
+        // Without this the pull would end as if there had simply been nothing new.
+        if let gone = after.goneUpstream { throw GitError(message: Self.goneUpstreamMessage(gone)) }
         guard after.behind > 0 else { return }
         guard after.ahead == 0 else {
             throw GitError(message: "This branch and \(upstream) have diverged (\(after.ahead) ahead, \(after.behind) behind), so it cannot be fast-forwarded. Rebase or merge in a terminal.")
         }
         try await run(["merge", "--ff-only", "@{upstream}"], in: folder, readOnly: false)
+    }
+
+    private static func goneUpstreamMessage(_ upstream: String) -> String {
+        "\(upstream) no longer exists, so there is nothing to pull. Publish the branch to push it again."
     }
 
     /// Paths are relative to `folder`, not the repository root, and limited to it. Callers pass the
@@ -302,14 +439,16 @@ public struct GitClient: Sendable {
     }
 
     public func stage(_ paths: [String], in folder: URL) async throws {
-        guard !paths.isEmpty else { return }
-        try await run(["add", "-A", "--"] + pathspecs(paths), in: folder, readOnly: false)
+        for batch in Self.batches(paths) {
+            try await run(["add", "-A", "--"] + pathspecs(batch), in: folder, readOnly: false)
+        }
     }
 
     /// `git reset` rather than `git restore --staged` because reset also works on an unborn branch.
     public func unstage(_ paths: [String], in folder: URL) async throws {
-        guard !paths.isEmpty else { return }
-        try await run(["reset", "-q", "--"] + pathspecs(paths), in: folder, readOnly: false)
+        for batch in Self.batches(paths) {
+            try await run(["reset", "-q", "--"] + pathspecs(batch), in: folder, readOnly: false)
+        }
     }
 
     public func stageAll(in folder: URL) async throws {
@@ -322,9 +461,10 @@ public struct GitClient: Sendable {
 
     /// Throws away the working tree edits of unstaged entries, leaving the index alone. Untracked
     /// files have no copy in git, so they go to the Trash where they can still be recovered.
-    /// Conflicted entries are skipped: picking a side is a merge decision, not a discard.
+    /// Conflicted entries are skipped: picking a side is a merge decision, not a discard. So is a
+    /// folder, which is a nested repository or linked worktree and not one change to throw away.
     public func discardUnstaged(_ changes: [GitFileChange], in folder: URL) async throws {
-        let changes = changes.filter { $0.kind != .conflicted }
+        let changes = changes.filter { $0.kind != .conflicted && !$0.isDirectory }
         let top = try await topLevel(of: folder)
         // An unstaged addition is an intent-to-add entry (`git add -N`). Its index entry is empty, so
         // `restore --worktree` would "restore" the file to zero bytes and report success. The only
@@ -344,9 +484,7 @@ public struct GitClient: Sendable {
         if !intended.isEmpty {
             try await unstage(intended, in: folder)
         }
-        for change in unversioned {
-            try trash(top.appending(path: change.path))
-        }
+        let leftovers = trash(unversioned.map(\.path), top: top)
         // A rename also took the old name away, which is tracked and comes back like any deletion.
         let tracked: [String] = changes.compactMap { change in
             switch change.kind {
@@ -355,25 +493,30 @@ public struct GitClient: Sendable {
             default: return abandoned.contains(change.path) ? nil : change.path
             }
         }
-        guard !tracked.isEmpty else { return }
-        try await run(["restore", "--worktree", "--"] + pathspecs(tracked), in: folder, readOnly: false)
+        for batch in Self.batches(tracked) {
+            try await run(["restore", "--worktree", "--"] + pathspecs(batch), in: folder, readOnly: false)
+        }
+        if let error = leftovers.error(unstaged: false) { throw error }
     }
 
     /// Which of these paths the index holds only as an intent to add (`git add -N`). Status does
     /// not say: it reports such an entry with the mode and the empty blob of a real one. What gives
     /// it away is that HEAD has no such file and the index has no addition staged for it.
     private func intentToAddEntries(among paths: [String], top: URL) async throws -> Set<String> {
-        guard !paths.isEmpty else { return [] }
-        // Fails on a branch without commits, where nothing is in HEAD.
-        let committed = (try? await run(["ls-tree", "-r", "-z", "--name-only", "HEAD", "--"] + paths, in: top)) ?? ""
-        let staged = try await run(["diff", "--cached", "--name-only", "-z", "--diff-filter=A", "--"] + pathspecs(paths), in: top)
-        let known = Set((committed + staged).split(separator: "\0").map(String.init))
+        var known = Set<String>()
+        for batch in Self.batches(paths) {
+            // Fails on a branch without commits, where nothing is in HEAD.
+            let committed = (try? await run(["ls-tree", "-r", "-z", "--name-only", "HEAD", "--"] + batch, in: top)) ?? ""
+            let staged = try await run(["diff", "--cached", "--name-only", "-z", "--diff-filter=A", "--"] + pathspecs(batch), in: top)
+            known.formUnion((committed + staged).split(separator: "\0").map(String.init))
+        }
         return Set(paths).subtracting(known)
     }
 
     /// Resets staged entries to HEAD in both index and working tree. Files HEAD has never seen
-    /// (added, or the new name of a rename) cannot be restored, so they are removed instead. That
-    /// also covers an unborn branch, where every staged entry is an addition.
+    /// (added, or the new name of a rename or copy) have nothing to be reset to. They leave the
+    /// index and go to the Trash, as in `discardUnstaged`: no commit holds them, so deleting them
+    /// would be final. That also covers an unborn branch, where every staged entry is an addition.
     public func discardStaged(_ changes: [GitFileChange], in folder: URL) async throws {
         let changes = changes.filter { $0.kind != .conflicted }
         var removed: [String] = []
@@ -390,12 +533,41 @@ public struct GitClient: Sendable {
                 restored.append(change.path)
             }
         }
+        var leftovers = Leftovers()
         if !removed.isEmpty {
-            try await run(["rm", "-f", "-q", "--"] + pathspecs(removed), in: folder, readOnly: false)
+            let top = try await topLevel(of: folder)
+            // Index first, so a failure leaves the files where they are.
+            for batch in Self.batches(removed) {
+                try await run(["rm", "--cached", "-f", "-q", "--"] + pathspecs(batch), in: folder, readOnly: false)
+            }
+            leftovers = trash(removed, top: top)
         }
-        if !restored.isEmpty {
-            try await run(["restore", "--source=HEAD", "--staged", "--worktree", "--"] + pathspecs(restored), in: folder, readOnly: false)
+        for batch in Self.batches(restored) {
+            try await run(["restore", "--source=HEAD", "--staged", "--worktree", "--"] + pathspecs(batch), in: folder, readOnly: false)
         }
+        if let error = leftovers.error(unstaged: true) { throw error }
+    }
+
+    /// Splits paths over as many commands as it takes to keep each one well under the kernel's
+    /// limit on arguments plus environment (1 MB). A few thousand changed files in deep folders
+    /// reach it, and the command then fails before git even starts.
+    ///
+    /// The count is limited too: Process refuses more than 4096 arguments however short they are,
+    /// and very short paths would get close to that within the byte limit.
+    static func batches(_ paths: [String], byteLimit: Int = 128 * 1024, countLimit: Int = 2000) -> [[String]] {
+        var batches: [[String]] = []
+        var size = 0
+        for path in paths {
+            // The pathspec magic in front, the terminator and the pointer to it.
+            let cost = path.utf8.count + 32
+            if batches.isEmpty || size + cost > byteLimit || batches[batches.count - 1].count >= countLimit {
+                batches.append([])
+                size = 0
+            }
+            batches[batches.count - 1].append(path)
+            size += cost
+        }
+        return batches
     }
 
     private func topLevel(of folder: URL) async throws -> URL {
@@ -403,9 +575,49 @@ public struct GitClient: Sendable {
         return URL(filePath: top, directoryHint: .isDirectory)
     }
 
-    private func trash(_ url: URL) throws {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+    /// Files and links only. A folder that gets here is a repository of its own (a staged
+    /// gitlink, say), possibly with agents at work in it, and stays where it is.
+    ///
+    /// A file that cannot be trashed does not stop the rest. By now its index entry is gone and
+    /// nothing is lost, so the discard carries on and the caller reports what stayed behind.
+    private func trash(_ paths: [String], top: URL) -> Leftovers {
+        var leftovers = Leftovers()
+        for path in paths {
+            let url = top.appending(path: path)
+            // Asked about the item itself, so a link is trashed whether or not it leads anywhere.
+            guard let type = try? FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType,
+                  type != .typeDirectory else { continue }
+            do {
+                try moveToTrash(url)
+            } catch {
+                leftovers.paths.append(path)
+                // Network shares and some external volumes have no Trash at all.
+                let cocoa = error as NSError
+                let hasNoTrash = cocoa.domain == NSCocoaErrorDomain && cocoa.code == NSFeatureUnsupportedError
+                if !hasNoTrash, leftovers.otherReason == nil { leftovers.otherReason = error.localizedDescription }
+            }
+        }
+        return leftovers
+    }
+
+    /// The files a discard meant for the Trash that are still in their folder.
+    private struct Leftovers {
+        var paths: [String] = []
+        /// Why, in the system's words, unless the volume simply has no Trash.
+        var otherReason: String?
+
+        /// `unstaged` when the files also left the index on the way, which the user should know:
+        /// they now show up as untracked.
+        func error(unstaged: Bool) -> GitError? {
+            guard let first = paths.first else { return nil }
+            let single = paths.count == 1
+            let subject = single ? (first as NSString).lastPathComponent : "\(paths.count) files"
+            let outcome = (single ? "was " : "were ") + (unstaged ? "unstaged and left in place" : "left in place")
+            guard let otherReason else {
+                return GitError(message: "\(subject) \(outcome) because this volume has no Trash.")
+            }
+            return GitError(message: "\(subject) \(outcome) because \(single ? "it" : "they") could not be moved to the Trash: \(otherReason)")
+        }
     }
 
     public func diff(path: String, staged: Bool, in folder: URL) async throws -> String {
@@ -543,6 +755,26 @@ public struct GitClient: Sendable {
     /// Large enough that any text file fits in a single hunk.
     private static let wholeFileContext = 100_000_000
 
+    /// The size in bytes of the larger of the two versions `fileDiff` would compare, found without
+    /// reading either. A whole-file diff holds both in full, so a viewer asks this first and turns
+    /// down a file it could not show anyway, such as a log an agent keeps writing to.
+    public func fileDiffSize(path: String, staged: Bool, in folder: URL) async throws -> Int64 {
+        let top = try await topLevel(of: folder)
+        // `:0:path` and `HEAD:path` name paths from the top of the repository. The stage is spelled
+        // out because a bare `:2:notes.txt` is not a file of that name but stage 2 of `notes.txt`.
+        func blobSize(_ object: String) async throws -> Int64 {
+            // A path missing from the index or from HEAD is a new file there, not an error.
+            let size = try await run(["cat-file", "-s", object], in: top, acceptedExitCodes: [0, 128])
+            return Int64(size.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        }
+        let index = try await blobSize(":0:" + path)
+        if staged { return max(index, try await blobSize("HEAD:" + path)) }
+        // The working tree file itself, not what a symlink points to: a link diffs as its target path.
+        let attributes = try? FileManager.default.attributesOfItem(atPath: top.appending(path: path).path)
+        let working = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+        return max(index, working)
+    }
+
     /// Status paths are relative to the repository root, so pin them there with `top`, and use `literal`
     /// so names containing `*`, `?` or `[` are not treated as globs.
     private func pathspecs(_ paths: [String]) -> [String] {
@@ -639,18 +871,50 @@ enum GitProcess {
     private static let networkLimiter = ProcessLimiter(limit: 4)
     private static let lookupLimiter = ProcessLimiter(limit: 4)
 
+    /// See `GitClient.resolveSearchPATH`.
+    static let searchPATH = SearchPATH()
+
+    /// See `GitClient.discardInto`. Nil means the system Trash.
+    static let trashFolder = Mutex<URL?>(nil)
+
+    static func moveToTrash(_ url: URL) throws {
+        guard let folder = trashFolder.withLock({ $0 }) else {
+            return try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
+        try move(url, into: folder)
+    }
+
+    static func move(_ url: URL, into folder: URL) throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var destination = folder.appending(path: url.lastPathComponent)
+        // The Trash keeps both when a name is taken, and so must this: a second discard of a
+        // file with the same name is not a reason to fail.
+        if FileManager.default.fileExists(atPath: destination.path) {
+            destination = folder.appending(path: "\(UUID().uuidString) \(url.lastPathComponent)")
+        }
+        try FileManager.default.moveItem(at: url, to: destination)
+    }
+
     /// `environment` is layered over the defaults below.
     static func run(
         _ arguments: [String],
         in folder: URL,
         readOnly: Bool,
         environment extra: [String: String] = [:],
-        lane: Lane = .local
+        lane: Lane = .local,
+        searchPATH: SearchPATH = GitProcess.searchPATH
     ) async throws -> Output {
         var environment = ["GIT_TERMINAL_PROMPT": "0"].merging(extra) { _, new in new }
         if readOnly {
             // Keeps status from taking index.lock to refresh the index, which would race an agent's own git commands.
             environment["GIT_OPTIONAL_LOCKS"] = "0"
+        }
+        if environment["PATH"] == nil {
+            // A command that writes can run hooks and filters, which is what the PATH is for, so
+            // it waits for a resolution that is under way. A read takes what is known and goes.
+            let path: String?
+            if readOnly { path = searchPATH.known } else { path = await searchPATH.value() }
+            if let path { environment["PATH"] = path }
         }
         // Without core.quotepath=false, diff headers escape non-ASCII file names as octal.
         return try await run(gitExecutable, ["-c", "core.quotepath=false"] + arguments, in: folder, environment: environment, lane: lane)
@@ -813,6 +1077,46 @@ enum GitProcess {
                 return terminated
             }
         }
+    }
+}
+
+/// The PATH for git and what it starts, which arrives some time after launch.
+final class SearchPATH: Sendable {
+    private enum State {
+        case inherited
+        case resolving(Task<String, Never>)
+        case known(String)
+    }
+
+    private let state = Mutex(State.inherited)
+
+    func resolve(_ resolve: @escaping @Sendable () async -> String) {
+        let task = Task.detached { await resolve() }
+        state.withLock { $0 = .resolving(task) }
+        Task.detached { [self] in
+            let path = await task.value
+            state.withLock { state in
+                // Unless a later call has replaced this resolution in the meantime.
+                if case .resolving(let current) = state, current == task { state = .known(path) }
+            }
+        }
+    }
+
+    /// Nil until the resolution has finished, and when it came back empty.
+    var known: String? {
+        guard case .known(let path) = state.withLock({ $0 }), !path.isEmpty else { return nil }
+        return path
+    }
+
+    /// Like `known`, but waits for a resolution that is still running.
+    func value() async -> String? {
+        let path: String
+        switch state.withLock({ $0 }) {
+        case .inherited: return nil
+        case .known(let known): path = known
+        case .resolving(let task): path = await task.value
+        }
+        return path.isEmpty ? nil : path
     }
 }
 

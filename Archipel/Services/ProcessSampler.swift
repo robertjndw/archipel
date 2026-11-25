@@ -65,6 +65,29 @@ nonisolated enum ProcessSampler {
         kill(identity.pid, signal)
     }
 
+    /// Ports a process has a TCP listening socket on, whatever address it is bound to.
+    static func listeningPorts(of pid: Int32) -> Set<Int> {
+        let bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard bytes > 0 else { return [] }
+        // Headroom, since descriptors are opened between the two calls.
+        var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(bytes) / MemoryLayout<proc_fdinfo>.size + 16)
+        let filled = descriptors.withUnsafeMutableBytes { proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count)) }
+        guard filled > 0 else { return [] }
+        var ports: Set<Int> = []
+        for descriptor in descriptors.prefix(Int(filled) / MemoryLayout<proc_fdinfo>.size)
+        where descriptor.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET) {
+            var info = socket_fdinfo()
+            let size = Int32(MemoryLayout<socket_fdinfo>.size)
+            guard proc_pidfdinfo(pid, descriptor.proc_fd, PROC_PIDFDSOCKETINFO, &info, size) == size,
+                  info.psi.soi_kind == Int32(SOCKINFO_TCP),
+                  info.psi.soi_proto.pri_tcp.tcpsi_state == TSI_S_LISTEN
+            else { continue }
+            // The port is stored in network byte order.
+            ports.insert(Int(UInt16(truncatingIfNeeded: info.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport).bigEndian))
+        }
+        return ports
+    }
+
     // MARK: libproc
 
     private static let timebase: mach_timebase_info_data_t = {

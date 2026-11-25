@@ -20,6 +20,7 @@ struct AppCommands: Commands {
         // for as long as the app runs. A view of the main window could not do it: the app keeps
         // running after that window is closed, and may be launched without it.
         let _ = model.openMainWindow = { [openWindow] in openWindow(id: AppModel.mainWindowID) }
+        let _ = model.isOverlayPresented = { [palette, switcher] in palette.isPresented || switcher.isActive }
         let actions = AppActions(
             model: model,
             palette: palette,
@@ -32,7 +33,7 @@ struct AppCommands: Commands {
         CommandGroup(after: .appInfo) { UpdateMenuItem(updater: updater) }
         CommandGroup(replacing: .newItem) { FileMenuItems(model: model, actions: actions) }
         CommandGroup(replacing: .saveItem) { SaveMenuItems(model: model, actions: actions) }
-        CommandGroup(after: .pasteboard) { FindMenuItems(actions: actions) }
+        CommandGroup(after: .pasteboard) { FindMenu(model: model, actions: actions) }
         CommandGroup(after: .sidebar) { InspectorMenuItems(actions: actions) }
         CommandMenu("Go") { GoMenuItems(model: model, actions: actions) }
         CommandMenu("Project") { ProjectMenuItems(model: model, actions: actions) }
@@ -57,7 +58,17 @@ struct AppActions {
     static let helpURL = URL(string: "https://github.com/robertjndw/archipel#readme")!
 
     func addProject() {
-        isAddingProject.wrappedValue = true
+        // The folder picker is presented by the main window. Asked for with that closed, it would
+        // spring up whenever the window is next opened.
+        if model.readyForSheet() { isAddingProject.wrappedValue = true }
+    }
+
+    /// Tabs and sessions live in the main window. A command that changes them with that window
+    /// closed, or behind Settings, would act where nobody sees it, so the window comes forward first.
+    func inMainWindow(_ action: () -> Void) {
+        let key = NSApp.keyWindow
+        if !AppModel.isMainWindow(key), !AppModel.isMainWindow(key?.sheetParent) { model.showMainWindow() }
+        action()
     }
 
     // MARK: Palette
@@ -66,7 +77,9 @@ struct AppActions {
         // The palette is drawn over the main window. With that closed, or behind Settings, it
         // would come up where nobody sees it and take the keyboard along.
         let key = NSApp.keyWindow
-        if !AppModel.isMainWindow(key), !AppModel.isMainWindow(key?.sheetParent) { model.showMainWindow() }
+        // A sheet covers the main window's content, so the palette would open behind it.
+        if AppModel.isMainWindow(key?.sheetParent) || (AppModel.isMainWindow(key) && key?.attachedSheet != nil) { return }
+        if !AppModel.isMainWindow(key) { model.showMainWindow() }
         palette.present(mode, app: model, commands: PaletteCommand.standard(model: model, actions: self))
     }
 
@@ -75,9 +88,15 @@ struct AppActions {
     /// ⌘W belongs to whatever is in front. Tabs live in the main window, so only with that as the
     /// key window does it close one; with Settings, the menu bar panel or a sheet in front it must
     /// not end a session in the window behind.
+    ///
+    /// The palette and the tab switcher are in front of the tabs, so with one of them up ⌘W
+    /// dismisses it and leaves the tab behind it alone.
     func closeTabOrWindow() {
         let key = NSApp.keyWindow
-        if AppModel.isMainWindow(key), key?.attachedSheet == nil, let tab = model.focusedTab {
+        if AppModel.isMainWindow(key), palette.isPresented || switcher.isActive {
+            palette.dismiss()
+            if switcher.isActive { switcher.cancel() }
+        } else if AppModel.isMainWindow(key), key?.attachedSheet == nil, let tab = model.focusedTab {
             model.close(tab: tab.id)
         } else {
             key?.performClose(nil)
@@ -126,8 +145,8 @@ struct AppActions {
 
     // MARK: Find
 
-    /// The chat in the focused tab. Find in the menu bar is for it alone: a file's editor and the
-    /// terminal each answer ⌘F in their own view.
+    /// The chat in the focused tab, which Find in the menu bar searches instead of sending the
+    /// text finder actions up the responder chain.
     var focusedChat: ChatSession? {
         model.focusedSessionID.flatMap { model.chats[$0] }
     }
@@ -184,17 +203,20 @@ struct AppActions {
     }
 
     var selectedWorktreeHasUnread: Bool {
-        worktreesToMarkRead.contains { $0.sessions.contains { model.activities[$0.id]?.unread == true } }
+        worktreesToMarkRead.contains(where: model.hasUnread(in:))
     }
 
     func markSelectedWorktreeRead() {
         for worktree in worktreesToMarkRead { model.markRead(worktree: worktree.id) }
     }
 
-    /// The project the Add Worktree sheet would open for. Nil without git, which the sheet needs
-    /// for everything it shows.
+    /// The project the Add Worktree sheet would open for. Nil without git or the repository's
+    /// folder, which the sheet needs for everything it shows.
     var projectForNewWorktree: Project? {
-        model.isGitAvailable ? model.project(ofWorktree: model.selectedWorktree?.id) : nil
+        guard model.isGitAvailable, let project = model.project(ofWorktree: model.selectedWorktree?.id),
+              !model.isPrimaryCheckoutMissing(of: project)
+        else { return nil }
+        return project
     }
 
     func addWorktree() {
@@ -277,12 +299,12 @@ private struct FileMenuItems: View {
     private static let newSessionModifiers: [EventModifiers] = [.command, [.command, .option], [.command, .shift]]
 
     var body: some View {
-        let worktree = model.selectedWorktree
+        let worktree = model.worktreeForNewSession(model.selectedWorktree?.id)
         // Every enabled agent gets an item, but only the first three get a shortcut: zipping with
         // the modifiers would drop the agents past the third from the menu altogether.
         ForEach(Array(model.agentsInMenuOrder.enumerated()), id: \.element.id) { index, agent in
             Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
-                if let worktree { model.newSession(in: worktree.id, agent: agent) }
+                if let worktree { actions.inMainWindow { model.newSession(in: worktree.id, agent: agent) } }
             }
             .keyboardShortcut(index < Self.newSessionModifiers.count ? KeyboardShortcut("t", modifiers: Self.newSessionModifiers[index]) : nil)
             .disabled(worktree == nil || !model.canStartSession(with: agent))
@@ -332,7 +354,7 @@ private struct PresetMenu: View {
         Menu("New Session with Preset", systemImage: "rectangle.stack") {
             ForEach(Array(entries.enumerated()), id: \.element.preset.id) { index, entry in
                 let button = Button("\(entry.agent.displayName): \(entry.preset.title)", symbol: entry.agent.symbolName) {
-                    if let worktree { model.newSession(in: worktree, agent: entry.agent, preset: entry.preset) }
+                    if let worktree { actions.inMainWindow { model.newSession(in: worktree, agent: entry.agent, preset: entry.preset) } }
                 }
                 .disabled(worktree == nil || !model.canStartSession(with: entry.agent))
                 // Only nine digit keys exist; the rest are reachable from the menu and the palette.
@@ -366,28 +388,56 @@ private struct SaveMenuItems: View {
     }
 }
 
-/// Edit > Find, for the conversation of the chat in the focused tab.
-///
-/// The shortcuts exist only while a chat has the focus. A file's editor handles ⌘F and ⌘G in
-/// its own view, and the terminal offers keys to the menu bar first, so a disabled item that
-/// kept its shortcut would swallow the key.
-private struct FindMenuItems: View {
+/// Edit > Find. A focused chat searches its conversation. Everything else gets the standard text
+/// finder actions up the responder chain: the file editor's text view answers them with its find
+/// bar, a terminal with Ghostty's scrollback search. The editor takes the shortcuts itself before
+/// the menu sees them; a terminal hands them to the menu first.
+private struct FindMenu: View {
+    let model: AppModel
     let actions: AppActions
 
     var body: some View {
-        // Only whether there is a chat is read here, never its transcript: a menu that followed
-        // the conversation would be rebuilt with every chunk of a reply.
-        let hasChat = actions.focusedChat != nil
+        // Whether a chat has the focus is looked up on click, not read here: a menu that followed
+        // the chat would be rebuilt with every chunk of a reply.
         Divider()
         Menu("Find") {
-            Button("Find in Conversation…", systemImage: "magnifyingglass") { actions.findInChat() }
-                .keyboardShortcut(hasChat ? KeyboardShortcut("f") : nil)
-            Button("Find Next", systemImage: "chevron.down") { actions.stepFindInChat(forward: true) }
-                .keyboardShortcut(hasChat ? KeyboardShortcut("g") : nil)
-            Button("Find Previous", systemImage: "chevron.up") { actions.stepFindInChat(forward: false) }
-                .keyboardShortcut(hasChat ? KeyboardShortcut("g", modifiers: [.command, .shift]) : nil)
+            Button("Find…", systemImage: "magnifyingglass") { find() }
+                .keyboardShortcut("f")
+            Button("Find Next", systemImage: "chevron.down") { step(.nextMatch) }
+                .keyboardShortcut("g")
+            Button("Find Previous", systemImage: "chevron.up") { step(.previousMatch) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+            Button("Use Selection for Find") { Self.send(.setSearchString) }
+                .keyboardShortcut("e")
         }
-        .disabled(!hasChat)
+    }
+
+    /// With Settings or a sheet in front, the chat behind it is not what the key is about.
+    private var chatHasFocus: Bool {
+        AppModel.isMainWindow(NSApp.keyWindow) && actions.focusedChat != nil
+    }
+
+    private func find() {
+        if chatHasFocus { actions.findInChat() } else { Self.send(.showFindInterface) }
+    }
+
+    /// While a terminal's search is open, the keyboard is usually in its field, and the field's
+    /// editor answers the finder action itself without the terminal ever hearing of it. So the
+    /// search is stepped directly, which also sends off a needle that is still waiting.
+    private func step(_ action: NSTextFinder.Action) {
+        let forward = action == .nextMatch
+        if chatHasFocus {
+            actions.stepFindInChat(forward: forward)
+        } else if !model.stepTerminalSearch(forward: forward) {
+            Self.send(action)
+        }
+    }
+
+    private static func send(_ action: NSTextFinder.Action) {
+        // The tag is how performTextFinderAction(_:) tells the actions apart.
+        let sender = NSMenuItem()
+        sender.tag = action.rawValue
+        NSApp.sendAction(#selector(NSResponder.performTextFinderAction(_:)), to: nil, from: sender)
     }
 }
 
@@ -434,7 +484,7 @@ private struct ProjectMenuItems: View {
         let worktree = model.selectedWorktree
         let project = model.project(ofWorktree: worktree?.id)
         Button("Run", systemImage: "play") {
-            if let worktree { model.runProject(in: worktree.id) }
+            if let worktree { actions.inMainWindow { model.runProject(in: worktree.id) } }
         }
         .keyboardShortcut("r")
         .disabled(worktree == nil)
@@ -506,7 +556,9 @@ private struct IslandMenuItems: View {
         Divider()
         ForEach(Array(islands.prefix(9).enumerated()), id: \.element.id) { index, island in
             Button(island.name, systemImage: island.symbol) { model.selectIsland(at: index) }
-                .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .control)
+                // A key equivalent swallows the key even when its item does nothing. With a single
+                // island there is nowhere to switch to, and Ctrl-1 belongs to the terminal.
+                .keyboardShortcut(islands.count > 1 ? KeyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .control) : nil)
         }
     }
 }
@@ -517,16 +569,24 @@ private struct TabMenuItems: View {
 
     var body: some View {
         let session = actions.focusedSession
-        Button("Next Tab", systemImage: "chevron.right") { model.selectAdjacentTab(offset: 1) }
+        let hasOtherPane = (model.selectedWorktree?.panes.count ?? 0) > 1
+        Button("Next Tab", systemImage: "chevron.right") { actions.inMainWindow { model.selectAdjacentTab(offset: 1) } }
             .keyboardShortcut("]", modifiers: [.command, .shift])
-        Button("Previous Tab", systemImage: "chevron.left") { model.selectAdjacentTab(offset: -1) }
+        Button("Previous Tab", systemImage: "chevron.left") { actions.inMainWindow { model.selectAdjacentTab(offset: -1) } }
             .keyboardShortcut("[", modifiers: [.command, .shift])
         Divider()
         Button("Split Right", systemImage: "rectangle.split.2x1") {
-            if let tab = model.focusedTab { model.split(tab: tab.id) }
+            if let tab = model.focusedTab { actions.inMainWindow { model.split(tab: tab.id) } }
         }
         .keyboardShortcut("\\")
         .disabled((model.selectedWorktree?.focusedPane?.tabs.count ?? 0) < 2)
+        // The keys Ghostty and Terminal use for moving between splits.
+        Button("Focus Next Pane", systemImage: "arrow.right.square") { actions.inMainWindow { model.focusAdjacentPane(offset: 1) } }
+            .keyboardShortcut("]", modifiers: .command)
+            .disabled(!hasOtherPane)
+        Button("Focus Previous Pane", systemImage: "arrow.left.square") { actions.inMainWindow { model.focusAdjacentPane(offset: -1) } }
+            .keyboardShortcut("[", modifiers: .command)
+            .disabled(!hasOtherPane)
         Button("Reload Page", systemImage: "arrow.clockwise") { actions.reloadFocusedPage() }
             .disabled(actions.focusedWebTab == nil)
         Divider()

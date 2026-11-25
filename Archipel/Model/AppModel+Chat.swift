@@ -60,7 +60,7 @@ extension AppModel {
             let chosen = settings.executablePath(for: adapter.id).map { Self.locateExecutable(adapter, override: $0, inPATH: path) }
             // A chosen CLI that is gone is only a problem when the chat runs it. Codex's adapter
             // brings its own, and an agent missing from the PATH is for the launcher to explain.
-            if case .chosenMissing(let file)? = chosen, Self.runsOwnCLI(support) {
+            if let file = chosen?.unusableChosenPath, Self.runsOwnCLI(support) {
                 launchFailures[id] = "The \(adapter.displayName) executable chosen in Settings, \(file), is missing or can't be run."
                 apply(.processExited(code: 127), to: id)
                 return
@@ -241,7 +241,7 @@ extension AppModel {
         switch ChatLinkPolicy.destination(for: url) {
         case .web(let url): openSessionLink(.web(url), alternate: alternate, from: sessionID)
         case .mail(let url): openSessionLink(.mail(url), alternate: alternate, from: sessionID)
-        case .file(let url): openSessionLink(.file(url), alternate: alternate, from: sessionID)
+        case .file(let url): openSessionLink(.file(url, position: nil), alternate: alternate, from: sessionID)
         case .reveal(let url): NSWorkspace.shared.activateFileViewerSelecting([url])
         case nil: break
         }

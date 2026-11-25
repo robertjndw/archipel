@@ -91,6 +91,22 @@ struct WorkspaceTests {
         #expect(s.displayTitle == "Mine")
     }
 
+    @Test func newSessionTitlesTakeTheFirstFreeNumber() {
+        func session(_ title: String, custom: Bool = false) -> Session {
+            Session(title: title, hasCustomTitle: custom, agent: .claude)
+        }
+        #expect(Session.numberedTitle("Claude Code", among: []) == "Claude Code")
+        #expect(Session.numberedTitle("Claude Code", among: [session("Claude Code")]) == "Claude Code 2")
+        // The second tab was closed: its number is free again, and the third keeps its own.
+        #expect(Session.numberedTitle("Claude Code", among: [session("Claude Code"), session("Claude Code 3")]) == "Claude Code 2")
+        // The first was closed.
+        #expect(Session.numberedTitle("Claude Code", among: [session("Claude Code 2")]) == "Claude Code")
+        // Numbered per agent: a preset's tab holds its number too.
+        #expect(Session.numberedTitle("Claude Code (Opus)", among: [session("Claude Code"), session("Claude Code (Plan) 2")]) == "Claude Code (Opus) 3")
+        #expect(Session.numberedTitle("Claude Code", among: [session("Fix login 2", custom: true)]) == "Claude Code")
+        #expect(Session.numberedTitle("Claude Code", among: [session("Release", custom: true)]) == "Claude Code")
+    }
+
     @Test func worktreeDisplayName() {
         #expect(makeWorktree("folder", branch: "main").displayName == "main")
         #expect(makeWorktree("folder").displayName == "folder")
@@ -200,6 +216,142 @@ struct WorkspaceTests {
         ws.removeProject(id: p.id)
         #expect(ws.selectedWorktreeIDByIsland.isEmpty)
         #expect(ws.session(id: s.id) == nil)
+    }
+
+    @Test func removingTheSelectedProjectSelectsItsNeighbour() {
+        var (ws, p, main, _) = fixture()
+        let home = ws.islands[0].id
+        let q = makeProject("q"), r = makeProject("r")
+        ws.addProject(q, to: home)
+        ws.addProject(r, to: home)
+
+        ws.selectWorktree(main.id)
+        ws.removeProject(id: p.id)
+        // q took p's place.
+        #expect(ws.selectedWorktreeIDByIsland[home] == q.worktrees[0].id)
+
+        ws.selectWorktree(r.worktrees[0].id)
+        ws.removeProject(id: r.id)
+        // r was last, so the one before it is shown.
+        #expect(ws.selectedWorktreeIDByIsland[home] == q.worktrees[0].id)
+
+        ws.removeProject(id: q.id)
+        #expect(ws.selectedWorktreeIDByIsland[home] == nil)
+    }
+
+    @Test func removingAProjectInTheMiddleSelectsTheOneAfterIt() {
+        var (ws, p, main, _) = fixture()
+        let home = ws.islands[0].id
+        let q = makeProject("q"), r = makeProject("r")
+        ws.addProject(q, to: home)
+        ws.addProject(r, to: home)
+
+        ws.selectWorktree(q.worktrees[0].id)
+        ws.removeProject(id: q.id)
+        #expect(ws.selectedWorktreeIDByIsland[home] == r.worktrees[0].id)
+
+        // p lists a linked worktree after its main checkout; the main checkout is what is shown.
+        ws.selectWorktree(r.worktrees[0].id)
+        ws.removeProject(id: r.id)
+        #expect(ws.selectedWorktreeIDByIsland[home] == main.id)
+        #expect(ws.project(id: p.id)?.worktrees.last?.id != main.id)
+    }
+
+    @Test func removingAProjectBeforeTheSelectedOneKeepsTheSelection() {
+        var (ws, p, _, _) = fixture()
+        let home = ws.islands[0].id
+        let q = makeProject("q"), r = makeProject("r")
+        ws.addProject(q, to: home)
+        ws.addProject(r, to: home)
+        ws.selectWorktree(r.worktrees[0].id)
+        ws.removeProject(id: p.id)
+        #expect(ws.selectedWorktreeIDByIsland[home] == r.worktrees[0].id)
+    }
+
+    @Test func removingAnotherProjectKeepsTheSelection() {
+        var (ws, _, main, _) = fixture()
+        let home = ws.islands[0].id
+        let q = makeProject("q")
+        ws.addProject(q, to: home)
+        ws.selectWorktree(main.id)
+        ws.removeProject(id: q.id)
+        #expect(ws.selectedWorktreeIDByIsland[home] == main.id)
+    }
+
+    @Test func islandsAndProjectsMoveByOneStoppingAtTheEnds() {
+        var ws = Workspace()
+        let home = ws.islands[0].id
+        let b = ws.addIsland(name: "B")
+        ws.moveIsland(id: b, by: -1)
+        #expect(ws.islands.map(\.name) == ["B", "Personal"])
+        ws.moveIsland(id: b, by: -1)
+        #expect(ws.islands.map(\.name) == ["B", "Personal"])
+        ws.moveIsland(id: b, by: 1)
+        #expect(ws.islands.map(\.name) == ["Personal", "B"])
+        ws.moveIsland(id: b, by: 1)
+        #expect(ws.islands.map(\.name) == ["Personal", "B"])
+
+        let c = ws.addIsland(name: "C")
+        ws.moveIsland(id: c, before: home)
+        #expect(ws.islands.map(\.name) == ["C", "Personal", "B"])
+        ws.moveIsland(id: c, before: nil)
+        #expect(ws.islands.map(\.name) == ["Personal", "B", "C"])
+        ws.moveIsland(id: home, before: c)
+        #expect(ws.islands.map(\.name) == ["B", "Personal", "C"])
+        ws.moveIsland(id: c, before: c)
+        #expect(ws.islands.map(\.name) == ["B", "Personal", "C"])
+        ws.moveIsland(id: home, before: home)
+        #expect(ws.islands.map(\.name) == ["B", "Personal", "C"])
+        ws.moveIsland(id: home, before: nil)
+        ws.moveIsland(id: b, before: nil)
+        ws.moveIsland(id: c, before: nil)
+        #expect(ws.islands.map(\.name) == ["Personal", "B", "C"])
+
+        let p1 = makeProject("p1"), p2 = makeProject("p2"), p3 = makeProject("p3")
+        for p in [p1, p2, p3] { ws.addProject(p, to: home) }
+        ws.moveProject(id: p3.id, by: -1)
+        #expect(ws.islands[0].projects.map(\.name) == ["p1", "p3", "p2"])
+        ws.moveProject(id: p1.id, by: 1)
+        #expect(ws.islands[0].projects.map(\.name) == ["p3", "p1", "p2"])
+        ws.moveProject(id: p2.id, by: 1)
+        #expect(ws.islands[0].projects.map(\.name) == ["p3", "p1", "p2"])
+        // Never into another island.
+        #expect(ws.islands[1].projects.isEmpty)
+    }
+
+    @Test func relocatingALinkedWorktreeOnlyMovesIt() {
+        var (ws, p, main, other) = fixture()
+        let moved = URL(fileURLWithPath: "/tmp/elsewhere/p-feat")
+        let changes = ws.relocateWorktree(id: other.id, to: moved)
+        #expect(changes.map(\.new) == [moved])
+        #expect(ws.worktree(id: other.id)?.path == moved)
+        #expect(ws.worktree(id: main.id)?.path == main.path)
+        #expect(ws.project(id: p.id)?.folderURL == p.folderURL)
+    }
+
+    @Test func relocatingThePrimaryCheckoutMovesTheRepository() {
+        var (ws, p, main, outside) = fixture()
+        let inside = makeWorktree("p/.worktrees/fix", branch: "fix")
+        ws.addWorktree(inside, to: p.id)
+        ws.updateProject(id: p.id) {
+            $0.worktreesDirectory = URL(fileURLWithPath: "/tmp/p/.worktrees")
+            $0.dismissedWorktreePaths = ["/tmp/p/.worktrees/old", "/tmp/unrelated"]
+        }
+        let root = URL(fileURLWithPath: "/Users/me/code/p", isDirectory: true)
+
+        let changes = ws.relocateWorktree(id: main.id, to: root)
+
+        let project = try! #require(ws.project(id: p.id))
+        #expect(Project.worktreeKey(project.folderURL) == "/Users/me/code/p")
+        #expect(ws.worktree(id: main.id)?.path == root)
+        #expect(ws.worktree(id: inside.id).map { Project.worktreeKey($0.path) } == "/Users/me/code/p/.worktrees/fix")
+        // A worktree outside the repository folder did not move with it.
+        #expect(ws.worktree(id: outside.id)?.path == outside.path)
+        #expect(project.worktreesDirectory.map(Project.worktreeKey) == "/Users/me/code/p/.worktrees")
+        #expect(project.dismissedWorktreePaths == ["/Users/me/code/p/.worktrees/old", "/tmp/unrelated"])
+        #expect(Set(changes.map(\.old)) == [main.path, inside.path])
+        // A sibling that only shares the name's prefix is not inside the repository.
+        #expect(Workspace.rebase(URL(fileURLWithPath: "/tmp/p-feat"), from: URL(fileURLWithPath: "/tmp/p"), to: root) == nil)
     }
 
     @Test func removingIslandClearsItsSelections() {

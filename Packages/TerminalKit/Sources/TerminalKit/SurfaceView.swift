@@ -35,12 +35,25 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
     var acceptsDroppedText: (String) -> Bool = { _ in true }
     /// Drawn over the terminal while a drop is hovering; created on first use.
     var dropHighlightLayer: CALayer?
+    /// Asked before Return reaches Ghostty; true means the key was handled.
+    /// See `TerminalSession.onReturnAfterExit`.
+    var returnAfterExit: () -> Bool = { false }
+    /// The screen text handed to accessibility, kept until the current event
+    /// is done because VoiceOver asks for it many times per announcement.
+    var accessibilityTextCache: String?
+
+    /// Ghostty saw a password prompt, or the user toggled secure input.
+    private var wantsSecureInput = false
+    /// Whether this view holds one EnableSecureEventInput. The system counts
+    /// enables per process, so each view only ever balances its own.
+    private var holdsSecureInput = false
 
     override var acceptsFirstResponder: Bool { true }
 
     isolated deinit {
         // A window torn down with us still inside never sends viewWillMove.
         if let keyUpMonitor { NSEvent.removeMonitor(keyUpMonitor) }
+        if holdsSecureInput { DisableSecureEventInput() }
     }
 
     func attach(_ surface: ghostty_surface_t) {
@@ -54,11 +67,16 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
         syncOcclusion()
         syncFocus()
         registerForDraggedTypes(Self.droppedTypes)
+        let center = NotificationCenter.default
+        for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            center.addObserver(self, selector: #selector(appActivationChanged), name: name, object: nil)
+        }
     }
 
     func detach() {
         surface = nil
         unregisterDraggedTypes()
+        syncSecureInput()
     }
 
     func setHostOccluded(_ occluded: Bool) {
@@ -100,6 +118,9 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
                 }
                 return consumed ? nil : event
             }
+            // A view first mounted, or remounted, after a display change
+            // gets no backing-properties callback for the scale it now has.
+            viewDidChangeBackingProperties()
         }
         updateDisplayID()
         syncFocus()
@@ -136,6 +157,43 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
         guard let surface, focused != self.focused else { return }
         self.focused = focused
         ghostty_surface_set_focus(surface, focused)
+        syncSecureInput()
+    }
+
+    // MARK: Secure input
+
+    func setSecureInput(_ mode: ghostty_action_secure_input_e) {
+        switch mode {
+        case GHOSTTY_SECURE_INPUT_ON: wantsSecureInput = true
+        case GHOSTTY_SECURE_INPUT_OFF: wantsSecureInput = false
+        case GHOSTTY_SECURE_INPUT_TOGGLE: wantsSecureInput.toggle()
+        default: return
+        }
+        syncSecureInput()
+    }
+
+    @objc private func appActivationChanged() {
+        syncSecureInput()
+    }
+
+    /// Secure input blocks keyboard monitoring system-wide, so it is only held
+    /// while this terminal actually takes the keys.
+    private func syncSecureInput() {
+        let desired = wantsSecureInput && surface != nil && focused && NSApp.isActive
+        guard desired != holdsSecureInput else { return }
+        if desired {
+            let status = EnableSecureEventInput()
+            if status == noErr {
+                holdsSecureInput = true
+            } else {
+                logger.warning("EnableSecureEventInput failed: \(status, privacy: .public)")
+            }
+        } else {
+            let status = DisableSecureEventInput()
+            if status != noErr { logger.warning("DisableSecureEventInput failed: \(status, privacy: .public)") }
+            // Trying again later could only disable an enable we do not hold.
+            holdsSecureInput = false
+        }
     }
 
     /// Ghostty stops rendering, but keeps the pty and parser running, while
@@ -262,6 +320,25 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
         }
     }
 
+    /// Only reached when Ghostty left the right click to us: its default
+    /// `right-click-action` is the host's context menu.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard event.type == .rightMouseDown, let surface else { return nil }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func add(_ title: String, _ action: Selector, enabled: Bool = true) {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.isEnabled = enabled
+        }
+        add("Copy", #selector(copy(_:)), enabled: ghostty_surface_has_selection(surface))
+        add("Paste", #selector(paste(_:) as (Any?) -> Void))
+        add("Select All", #selector(selectAll(_:)))
+        menu.addItem(.separator())
+        add("Clear", #selector(clearScreen(_:)))
+        return menu
+    }
+
     override func rightMouseUp(with event: NSEvent) {
         if !sendMouseButton(GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, event) {
             super.rightMouseUp(with: event)
@@ -355,6 +432,8 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
             interpretKeyEvents([event])
             return
         }
+
+        if Self.isPlainReturn(event), !event.isARepeat, !hasMarkedText(), returnAfterExit() { return }
 
         // Options like macos-option-as-alt remove modifiers from translation
         // only. Rebuild the event with those flags, but keep every other bit:
@@ -613,8 +692,23 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
     @objc func copy(_ sender: Any?) { performBinding("copy_to_clipboard") }
     @objc func paste(_ sender: Any?) { performBinding("paste_from_clipboard") }
     @objc override func selectAll(_ sender: Any?) { performBinding("select_all") }
+    @objc func clearScreen(_ sender: Any?) { performBinding("clear_screen") }
 
-    private func performBinding(_ action: String) {
+    /// What the Edit menu's Find items send, here and in the file editor.
+    override func performTextFinderAction(_ sender: Any?) {
+        guard let tag = (sender as? NSValidatedUserInterfaceItem)?.tag,
+              let action = NSTextFinder.Action(rawValue: tag) else { return }
+        switch action {
+        case .showFindInterface: performBinding("start_search")
+        case .nextMatch: performBinding("navigate_search:next")
+        case .previousMatch: performBinding("navigate_search:previous")
+        case .setSearchString: performBinding("search_selection")
+        case .hideFindInterface: performBinding("end_search")
+        default: break
+        }
+    }
+
+    func performBinding(_ action: String) {
         guard let surface else { return }
         if !ghostty_surface_binding_action(surface, action, UInt(action.utf8.count)) {
             logger.warning("binding action failed: \(action, privacy: .public)")
@@ -802,6 +896,12 @@ final class SurfaceView: NSView, @MainActor NSTextInputClient {
     private static func isComposingControlInput(_ text: String?, composing: Bool) -> Bool {
         guard composing, let scalars = text?.unicodeScalars, scalars.count == 1, let scalar = scalars.first else { return false }
         return scalar.value < 0x20
+    }
+
+    private static func isPlainReturn(_ event: NSEvent) -> Bool {
+        // Return and the keypad's Enter.
+        (event.keyCode == 0x24 || event.keyCode == 0x4C)
+            && event.modifierFlags.isDisjoint(with: [.shift, .control, .option, .command])
     }
 
     private static func shouldReplayAfterCommit(_ event: NSEvent) -> Bool {

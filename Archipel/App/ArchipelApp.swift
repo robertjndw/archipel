@@ -28,6 +28,9 @@ struct ArchipelApp: App {
     }
 
     var body: some Scene {
+        // Here and not when the main window appears: the app can be launched without that window,
+        // and quitting must still ask about unsaved work and save the workspace.
+        let _ = delegate.model = model
         Window("Archipel", id: AppModel.mainWindowID) {
             RootView(isAddingProject: $isAddingProject)
                 .environment(model)
@@ -35,7 +38,6 @@ struct ArchipelApp: App {
                 .environment(switcher)
                 .frame(minWidth: RootView.minimumWindowWidth, minHeight: 420)
                 .onAppear {
-                    delegate.model = model
                     model.applyAppearance()
                     // Reading the system's symbol list takes a few dozen milliseconds, which would
                     // otherwise land on the main thread the first time an island editor opens.
@@ -80,10 +82,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model else { return .terminateNow }
         if !model.documents.dirtyURLs.isEmpty {
-            let count = model.documents.dirtyURLs.count
+            // Named, because a file with edits can outlive its tab and would otherwise be a count
+            // with nothing in the window to match it to.
+            let names = model.documents.dirtyURLs.map(\.lastPathComponent).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             let alert = NSAlert()
-            alert.messageText = count == 1 ? "You have a file with unsaved changes." : "You have \(count) files with unsaved changes."
-            alert.informativeText = "Your changes will be lost if you don't save them."
+            if names.count == 1 {
+                alert.messageText = "Do you want to save the changes you made to \(names[0])?"
+                alert.informativeText = "Your changes will be lost if you don't save them."
+            } else {
+                alert.messageText = "You have \(names.count) files with unsaved changes."
+                alert.informativeText = "\(Self.listing(names)). Your changes will be lost if you don't save them."
+            }
             alert.addButton(withTitle: "Save All")
             alert.addButton(withTitle: "Cancel")
             alert.addButton(withTitle: "Discard Changes").hasDestructiveAction = true
@@ -96,13 +105,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 break
             }
         }
-        guard model.hasWorkingSessions, model.settings.confirmsQuitWhileWorking else { return .terminateNow }
+        // The same sessions closing a tab asks about: an agent waiting for an answer or a dev server
+        // in a shell is lost to a quit just like an agent in the middle of a turn.
+        let busy = model.settings.confirmsQuitWhileWorking ? model.sessionsWithWorkInFlight : 0
+        guard busy > 0 else { return .terminateNow }
         let alert = NSAlert()
-        alert.messageText = "Quit Archipel while agents are working?"
-        alert.informativeText = "Running agents will be stopped. Their conversations are kept and resume the next time you open the session."
+        alert.messageText = busy == 1 ? "Quit Archipel while a session is busy?" : "Quit Archipel while \(busy) sessions are busy?"
+        alert.informativeText = "Agents that are working or waiting for you will be stopped, and so will commands running in a terminal. Agent conversations are kept and resume the next time you open the session."
         alert.addButton(withTitle: "Quit")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
+
+    /// The first few names, then how many more there are, so the alert stays a readable size.
+    static func listing(_ names: [String], limit: Int = 3) -> String {
+        let shown = names.prefix(limit)
+        let rest = names.count - shown.count
+        if rest > 0 { return shown.joined(separator: ", ") + " and \(rest) more" }
+        guard let last = shown.last, shown.count > 1 else { return shown.first ?? "" }
+        return shown.dropLast().joined(separator: ", ") + " and " + last
     }
 
     func applicationWillTerminate(_ notification: Notification) {

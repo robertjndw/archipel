@@ -289,7 +289,8 @@ private struct ExecutableRow: View {
                 }
             }
         }
-        .task(id: chosenPath) {
+        // The list dot flips when an app activation finds the agent, so the row looks again then too.
+        .task(id: "\(chosenPath ?? "")|\(model.isInstalled(agent))") {
             location = await model.locate(agent)
         }
     }
@@ -306,6 +307,10 @@ private struct ExecutableRow: View {
                 .help(path)
         case .chosenMissing(let path):
             Text("Chosen file is missing")
+                .foregroundStyle(.orange)
+                .help(path)
+        case .chosenNotExecutable(let path):
+            Text("Chosen file is not executable")
                 .foregroundStyle(.orange)
                 .help(path)
         case .notOnPATH:
@@ -494,6 +499,11 @@ private struct PresetsEditor: View {
             .clipShape(.rect(cornerRadius: 6))
             .overlay {
                 RoundedRectangle(cornerRadius: 6).strokeBorder(.separator)
+            }
+            if let unbalanced = presets.first(where: { !ArgumentSplitter.isWellFormed($0.arguments) }) {
+                Text("\"\(unbalanced.name)\" has an unclosed quote or a trailing backslash. It is passed as typed.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
         }
     }

@@ -5,6 +5,7 @@ import SwiftUI
 /// Looks like `SubagentBadge` with a symbol in front, so the two read as a pair when both show.
 struct BackgroundTaskBadge: View {
     let count: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if count > 0 {
@@ -21,7 +22,7 @@ struct BackgroundTaskBadge: View {
             .padding(.vertical, 1)
             .background(.quaternary, in: .capsule)
             .fixedSize()
-            .transition(.scale(scale: 0.6).combined(with: .opacity))
+            .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
             .help(Self.description(count))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Self.description(count))

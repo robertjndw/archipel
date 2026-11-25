@@ -178,7 +178,8 @@ struct ContextDetails: View {
         if let context = model.sessionContexts[sessionID] {
             let cache = model.promptCaches[sessionID]
             let isWorking = model.activity(for: sessionID).isBusy
-            let fill = model.settings.usageBarFill
+            // Only bars have a fill setting, see ContextLabel.
+            let fill = model.settings.usageDisplay == .bars ? model.settings.usageBarFill : .used
             let percent = Int(context.usedPercent.rounded())
             TimelineView(.explicit(cache.map { [$0.expiresAt] } ?? [])) { timeline in
                 VStack(alignment: .leading, spacing: 14) {

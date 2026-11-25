@@ -67,6 +67,10 @@ final class DiffContainerView: NSView {
     func configure(document: DiffDocument, version: Int, presentation: DiffPresentation, showsAllLines: Bool, highlights: DiffHighlights?) {
         let rebuildPanes = presentation != self.presentation
         let rebuildLayout = rebuildPanes || version != self.version || showsAllLines != self.showsAllLines
+        // A new version of the same diff, from the poll while an agent works: the reader keeps their
+        // place and the folds they opened.
+        let previous = rebuildLayout && !rebuildPanes && showsAllLines == self.showsAllLines ? layoutState : nil
+        let place = previous.flatMap(scrollPlace(in:))
         if rebuildPanes {
             self.presentation = presentation
             makePanes(presentation)
@@ -74,7 +78,8 @@ final class DiffContainerView: NSView {
         if rebuildLayout {
             self.version = version
             self.showsAllLines = showsAllLines
-            layoutState = DiffLayout(document: document, unified: presentation == .inline, showsAllLines: showsAllLines)
+            let unfolded = previous.map { showsAllLines ? [] : DiffFolding.unfoldedLines($0.items, rows: $0.rows, document: $0.document) } ?? []
+            layoutState = DiffLayout(document: document, unified: presentation == .inline, showsAllLines: showsAllLines, unfolded: unfolded)
             highlightVersion = nil
         }
         if let highlights, highlights.documentVersion == version, highlightVersion != version || rebuildLayout {
@@ -89,7 +94,33 @@ final class DiffContainerView: NSView {
             }
             refreshPanes()
         }
+        if let place { restore(place) }
         if rebuildLayout { updateCommentMarkers() }
+    }
+
+    /// The line at the top of the viewport and how far into it the view is scrolled. The clip view
+    /// keeps its raw offset on its own, which lands on another line as soon as lines are added or
+    /// folds change above it.
+    private func scrollPlace(in layout: DiffLayout) -> (anchor: DiffLineAnchor, offset: CGFloat)? {
+        guard let clip = panes.last?.scrollView.contentView else { return nil }
+        let height = EditorTheme.lineHeight
+        let item = Int(max(0, clip.bounds.minY) / height)
+        guard let anchor = DiffFolding.anchor(at: item, in: layout.items, rows: layout.rows, document: layout.document) else { return nil }
+        return (anchor, clip.bounds.minY - CGFloat(item) * height)
+    }
+
+    private func restore(_ place: (anchor: DiffLineAnchor, offset: CGFloat)) {
+        guard let layoutState, let pane = panes.last,
+              let item = DiffFolding.item(showing: place.anchor, in: layoutState.items, rows: layoutState.rows, document: layoutState.document)
+        else { return }
+        let clip = pane.scrollView.contentView
+        var target = clip.bounds
+        target.origin.y = CGFloat(item) * EditorTheme.lineHeight + place.offset
+        let constrained = clip.constrainBoundsRect(target)
+        guard constrained.origin != clip.bounds.origin else { return }
+        // The other pane follows through `clipViewScrolled`.
+        clip.setBoundsOrigin(constrained.origin)
+        pane.scrollView.reflectScrolledClipView(clip)
     }
 
     /// Separate from `configure` so adding a comment only touches the gutters, never the layout.
@@ -123,10 +154,14 @@ final class DiffContainerView: NSView {
             pane.gutter.invalidateAccessibility()
             guard let layoutState else {
                 pane.gutter.markedItems = []
+                pane.gutter.staleItems = []
                 continue
             }
             pane.gutter.markedItems = DiffCommentAnchoring.markedItems(
                 layoutState.items, rows: layoutState.rows, role: pane.view.role, document: layoutState.document, anchors: anchors
+            )
+            pane.gutter.staleItems = DiffCommentAnchoring.staleItems(
+                layoutState.items, rows: layoutState.rows, role: pane.view.role, document: layoutState.document, comments: commenting?.comments ?? []
             )
         }
     }
@@ -191,6 +226,11 @@ final class DiffContainerView: NSView {
         layoutState.items = DiffFolding.expanding(layoutState.items, at: index)
         refreshPanes()
         updateCommentMarkers()
+        // The layout object stays the same, so the panes' own check for a new one does not fire,
+        // and both sides of side by side gained lines.
+        for pane in panes {
+            NSAccessibility.post(element: pane.view, notification: .valueChanged)
+        }
     }
 
     private func refreshPanes() {
@@ -272,13 +312,26 @@ final class DiffContainerView: NSView {
         gutter.hoveredItem = item
     }
 
+    /// Names the line by its text as well as its number: with only a number, a VoiceOver user has
+    /// to leave the gutter to find out which line a button is about.
     private func commentAccessibilityLabel(at item: Int, role: DiffPaneRole) -> String? {
-        guard let commenting, let (anchor, _) = commentAnchor(at: item, role: role) else { return nil }
+        guard let commenting, let (anchor, text) = commentAnchor(at: item, role: role) else { return nil }
         let line = Self.lineDescription(anchor)
+        let code = Self.spokenCode(text)
         if let comment = commenting.comments.first(where: { $0.anchor == anchor }) {
-            return String(localized: "Comment on \(line): \(comment.body)")
+            if comment.lineText != text {
+                return String(localized: "Comment on \(line), \(code): \(comment.body). Made when the line read \(Self.spokenCode(comment.lineText)).")
+            }
+            return String(localized: "Comment on \(line), \(code): \(comment.body)")
         }
-        return String(localized: "Add Comment to \(line)")
+        return String(localized: "Add Comment to \(line): \(code)")
+    }
+
+    /// Long lines are cut: the start is enough to recognise one, and the rest is a long wait.
+    private static func spokenCode(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return String(localized: "blank line") }
+        return trimmed.count > 80 ? String(trimmed.prefix(80)) + "..." : trimmed
     }
 
     private static func lineDescription(_ anchor: DiffLineAnchor) -> String {

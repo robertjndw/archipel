@@ -32,9 +32,25 @@ struct CommandPalette: View {
     }
 }
 
+/// Hover callbacks also fire when content moves under a resting pointer (a panel appearing, rows
+/// scrolling), so a hover only counts as a choice once the pointer itself has moved.
+///
+/// A class, so that noting a position does not count as a state change and redraw the panel on
+/// every pointer move.
+final class PointerMovement {
+    private var last = NSEvent.mouseLocation
+
+    func hasMoved() -> Bool {
+        let current = NSEvent.mouseLocation
+        defer { last = current }
+        return current != last
+    }
+}
+
 private struct PalettePanel: View {
     @Environment(CommandPaletteModel.self) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pointer = PointerMovement()
 
     private let rowHeight: CGFloat = 36
     private let maxVisibleRows = 10
@@ -109,7 +125,7 @@ private struct PalettePanel: View {
                                 .accessibilityAddTraits(index == palette.selection ? [.isButton, .isSelected] : .isButton)
                                 .accessibilityIdentifier("palette.row")
                                 .onContinuousHover { phase in
-                                    if case .active = phase, palette.selection != index { palette.selection = index }
+                                    if case .active = phase, pointer.hasMoved(), palette.selection != index { palette.selection = index }
                                 }
                         }
                     }
@@ -119,6 +135,11 @@ private struct PalettePanel: View {
                 .onChange(of: palette.selection) { _, selection in
                     guard palette.rows.indices.contains(selection) else { return }
                     proxy.scrollTo(palette.rows[selection].id)
+                    // Rows are not focusable, so VoiceOver would not hear the arrow keys otherwise.
+                    NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested, userInfo: [
+                        .announcement: palette.rows[selection].title,
+                        .priority: NSAccessibilityPriorityLevel.high.rawValue,
+                    ])
                 }
                 .onChange(of: palette.rows.first?.id) {
                     if let first = palette.rows.first { proxy.scrollTo(first.id, anchor: .top) }
@@ -248,6 +269,8 @@ private struct PaletteField: NSViewRepresentable {
             case #selector(NSResponder.moveDown(_:)): parent.onMove(1)
             case #selector(NSResponder.insertNewline(_:)): parent.onSubmit()
             case #selector(NSResponder.cancelOperation(_:)): parent.onCancel()
+            // Tab would move first responder out of the field, and Escape would stop reaching it.
+            case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)): break
             default: return false
             }
             return true

@@ -274,14 +274,14 @@ struct ProjectSettingsSheet: View {
     @ViewBuilder
     private var scriptSections: some View {
         Section {
-            ScriptEditor(text: $setup)
+            ScriptEditor(text: $setup, label: "Setup script")
         } header: {
             Text("Setup Script")
         } footer: {
             Text("Runs once in each new worktree, for example to install dependencies or copy .env from the main checkout.")
         }
         Section {
-            ScriptEditor(text: $run)
+            ScriptEditor(text: $run, label: "Run script")
         } header: {
             Text("Run Script")
         } footer: {
@@ -347,11 +347,12 @@ struct ProjectSettingsSheet: View {
 /// setting, which would silently turn `"$VAR"` and `--flag` into something no shell understands.
 private struct ScriptEditor: View {
     @Binding var text: String
+    let label: LocalizedStringKey
 
     var body: some View {
         ScriptTextView(text: $text)
             .frame(minHeight: 90, maxHeight: 180)
-            .accessibilityLabel("Script")
+            .accessibilityLabel(label)
     }
 }
 

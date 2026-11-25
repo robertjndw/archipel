@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import GitKit
 import Testing
 @testable import EditorUI
@@ -92,6 +93,88 @@ struct DiffViewerModelTests {
         await show(.success(edit()), in: model)
         #expect(model.phase == .ready)
         #expect(model.document != nil)
+    }
+
+    @Test func aFileOverTheLimitIsRefusedUntilItShrinks() async {
+        let tooLarge = Mutex<Int64?>(nil)
+        let source = source
+        let model = DiffViewerModel(root: URL(filePath: "/repo"), path: "agent.log", staged: false) { _, _, _ in
+            if let size = tooLarge.withLock({ $0 }) { throw DiffTooLargeError(size: size) }
+            return try await source.load()
+        }
+        await show(.success(edit()), in: model)
+        #expect(model.phase == .ready)
+
+        tooLarge.withLock { $0 = 60_000_000 }
+        await model.refresh()
+        #expect(model.phase == .tooLarge(60_000_000))
+        #expect(model.document == nil)
+
+        // The same diff as before it grew still has to come back.
+        tooLarge.withLock { $0 = nil }
+        await model.refresh()
+        #expect(model.phase == .ready)
+        #expect(model.document != nil)
+    }
+
+    @Test func aFileOverTheLimitThatGoesBackToNoDifferencesSaysSo() async {
+        let tooLarge = Mutex<Int64?>(nil)
+        let source = source
+        let model = DiffViewerModel(root: URL(filePath: "/repo"), path: "fixture.json", staged: false) { _, _, _ in
+            if let size = tooLarge.withLock({ $0 }) { throw DiffTooLargeError(size: size) }
+            return try await source.load()
+        }
+        await show(.success(nil), in: model)
+        #expect(model.phase == .noDifferences)
+
+        // An agent writes a huge fixture over a tracked file, then restores it.
+        tooLarge.withLock { $0 = 20_000_000 }
+        await model.refresh()
+        #expect(model.phase == .tooLarge(20_000_000))
+
+        tooLarge.withLock { $0 = nil }
+        await model.refresh()
+        #expect(model.phase == .noDifferences)
+    }
+
+    @Test func aRefreshCancelledWhileItHighlightsIsHighlightedAnyway() async {
+        let cancelNextLoad = Mutex(false)
+        let source = source
+        let model = DiffViewerModel(root: URL(filePath: "/repo"), path: "notes.swift", staged: false) { _, _, _ in
+            // What SwiftUI does to the refresh task when the app resigns active mid-refresh.
+            if cancelNextLoad.withLock({ $0 }) { withUnsafeCurrentTask { $0?.cancel() } }
+            return try await source.load()
+        }
+        await show(.success(edit("notes.swift", from: "let a = 1", to: "let a = 2")), in: model)
+        for _ in 0..<500 where model.highlights == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.highlights?.documentVersion == 1)
+
+        await source.set(.success(edit("notes.swift", from: "let a = 1", to: "let a = 3")))
+        cancelNextLoad.withLock { $0 = true }
+        await Task { await model.refresh() }.value
+        cancelNextLoad.withLock { $0 = false }
+        #expect(model.documentVersion == 2)
+        for _ in 0..<500 where model.highlights?.documentVersion != 2 { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.highlights?.documentVersion == 2)
+        #expect(model.highlights?.new.isEmpty == false)
+
+        // The next poll sees the same diff and leaves it as it is, coloured.
+        await model.refresh()
+        #expect(model.highlights?.new.isEmpty == false)
+    }
+
+    @Test func aRefreshArrivesWithItsHighlighting() async {
+        let model = model(path: "notes.swift")
+        await show(.success(edit("notes.swift", from: "let a = 1", to: "let a = 2")), in: model)
+        // The first version shows before its colours; wait for them.
+        for _ in 0..<500 where model.highlights == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.highlights?.documentVersion == 1)
+
+        await show(.success(edit("notes.swift", from: "let a = 1", to: "let a = 3")), in: model)
+        #expect(model.documentVersion == 2)
+        // Already there when the document changes, so the view never draws the new text uncoloured.
+        #expect(model.highlights?.documentVersion == 2)
+        #expect(model.highlights?.new.isEmpty == false)
     }
 
     @Test func renamedFromFollowsTheDiffIncludingPlaceholders() async {

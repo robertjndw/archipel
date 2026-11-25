@@ -8,13 +8,16 @@ import Testing
 final class GitClientEdgeCaseTests {
     let base: URL
     let repo: URL
-    let git = GitClient()
+    let trash: TestTrash
+    let git: GitClient
 
     init() throws {
         // git reports /private/var paths; realpath keeps the expectations in the same form.
         let temp = realpath(FileManager.default.temporaryDirectory.path, nil).map { String(cString: $0) } ?? NSTemporaryDirectory()
         base = URL(filePath: temp).appending(path: "GitKitEdgeTests-\(UUID().uuidString)")
         repo = base.appending(path: "repo")
+        trash = TestTrash(in: base)
+        git = trash.client()
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
         try sh("init", "-q", "-b", "main")
         try sh("config", "user.name", "GitKit Tests")
@@ -205,6 +208,8 @@ final class GitClientEdgeCaseTests {
 
         func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: repo.appending(path: name).path) }
         #expect(!exists("intended.txt"))
+        // Every file was already gone from disk, so there was nothing to trash.
+        #expect(trash.paths.isEmpty)
         #expect((try? String(contentsOf: repo.appending(path: "staged.txt"), encoding: .utf8)) == "staged\n")
         #expect((try? String(contentsOf: repo.appending(path: "tracked.txt"), encoding: .utf8)) == "kept\n")
         #expect(exists("empty.txt"))
@@ -244,6 +249,7 @@ final class GitClientEdgeCaseTests {
         // b.txt's index entry is empty, so restoring it from the index would wipe the only copy.
         // It goes to the Trash like an added file, and the old name comes back.
         #expect(!FileManager.default.fileExists(atPath: repo.appending(path: "b.txt").path))
+        #expect(trash.contents(of: repo.appending(path: "b.txt")) == "l1\nl2\nl3\nextra\n")
         #expect((try? String(contentsOf: repo.appending(path: "a.txt"), encoding: .utf8)) == "l1\nl2\nl3\n")
         #expect(try await git.status(in: repo).unstaged.isEmpty)
     }

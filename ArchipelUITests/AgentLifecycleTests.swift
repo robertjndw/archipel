@@ -43,22 +43,68 @@ final class AgentLifecycleTests: ArchipelUITestCase {
         // Codex has no hook for its start, so the app counts it as up once the terminal is.
         waitUntil("the window shows Codex idle") { self.agentsStatus == "None working" }
 
-        // Running the command exactly as configured proves the override reaches the app.
+        // Running the command exactly as configured proves the override reaches the app. Codex
+        // names its threads with UUIDs, and the app keeps nothing else as one.
+        let thread = "0199a213-81c0-7800-8aa1-bbab2a035a53"
         try sendCodexNotification(
-            ["type": "agent-turn-complete", "thread-id": "codex-thread", "last-assistant-message": "Done."],
+            ["type": "agent-turn-complete", "thread-id": thread, "last-assistant-message": "Done."],
             command: notify,
             launch: started
         )
         waitUntil("the thread id from the notification is saved") {
-            try sandbox.savedWorkspace().allSessions.first?.agentSessionID == "codex-thread"
+            try sandbox.savedWorkspace().allSessions.first?.agentSessionID == thread
         }
 
         chooseMenu("Tab", "Restart Session")
         let resumed = try waitForLaunch(2, recordedIn: stub.launches)
         XCTAssertEqual(resumed.arguments.first, "resume", "A restart should resume the Codex thread: \(resumed.arguments)")
-        XCTAssertEqual(resumed.arguments.last, "codex-thread", "Codex takes the thread to resume as its last argument.")
+        XCTAssertEqual(resumed.arguments.last, thread, "Codex takes the thread to resume as its last argument.")
         XCTAssertEqual(resumed.codexNotifyCommand, notify, "A resumed Codex must still report to the app.")
         XCTAssertTrue(resumed.ran(in: feature.path))
+    }
+
+    /// Codex without hooks never says a turn began, so the only sign of one is the user sending
+    /// something. Before that, and once notify reports the turn's end, there is nothing to lose.
+    func testClosingCodexAsksOnlyAfterAPromptWasSent() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let stub = try sandbox.installRecordingAgentStub(named: "codex")
+        try launch(with: repository.workspace(sessions: [Session(title: "Codex", agent: .codex)]))
+        _ = try waitForLaunch(1, recordedIn: stub.launches)
+        waitUntil("the window shows Codex idle") { self.agentsStatus == "None working" }
+
+        // Nothing was sent yet, so a restart has nothing to ask about.
+        chooseMenu("Tab", "Restart Session")
+        let restarted = try waitForLaunch(2, recordedIn: stub.launches)
+        XCTAssertFalse(sheet.exists, "Restarting an agent that was given nothing should not ask.")
+        waitUntil("the window shows Codex idle again") { self.agentsStatus == "None working" }
+
+        // The stub copies what reaches its terminal to a file, which says the typing got there.
+        let terminal = terminalSurfaces.element(boundBy: 0)
+        assertExists(terminal, "The agent's terminal should be on screen.")
+        terminal.click()
+        app.typeText("hello\n")
+        waitUntil("the prompt reached the agent") {
+            ((try? String(contentsOf: stub.input, encoding: .utf8)) ?? "").contains("hello")
+        }
+
+        chooseMenu("File", "Close Tab")
+        assertExists(interruptionQuestion(containing: "Codex is running"), "Closing Codex after sending it a prompt should ask first.")
+        sheet.buttons["Cancel"].click()
+        assertGone(sheet, "Cancel should dismiss the question.")
+        XCTAssertTrue(tab("Codex").exists, "Cancel should leave the session open.")
+
+        let notify = try XCTUnwrap(restarted.codexNotifyCommand, "Codex should be given a notify command: \(restarted.arguments)")
+        let thread = "0199a213-81c0-7800-8aa1-bbab2a035a54"
+        try sendCodexNotification(
+            ["type": "agent-turn-complete", "thread-id": thread, "last-assistant-message": "Done."],
+            command: notify,
+            launch: restarted
+        )
+        waitUntil("the end of the turn is saved") { try sandbox.savedWorkspace().allSessions.first?.agentSessionID == thread }
+
+        chooseMenu("File", "Close Tab")
+        assertGone(tab("Codex"), "Once the turn has ended, closing should not ask.")
+        XCTAssertFalse(sheet.exists)
     }
 
     func testAClaudeConversationIsResumedAfterARelaunch() throws {
@@ -225,11 +271,16 @@ final class AgentLifecycleTests: ArchipelUITestCase {
 
         // Codex asks for approval through a terminal notification and never says when it got one.
         try stub.ask()
-        waitUntil("the request is waiting and unread") { self.agentsStatus == "1 waiting for you, 1 unread" }
+        // A waiting session is counted once, so the summary says nothing of its unread mark: the
+        // enabled Mark as Read is what shows the request is unread too.
+        waitUntil("the request is waiting") { self.agentsStatus == "1 waiting for you" }
 
         // Marking as read answers nothing, so the request has to stay where the user can find it.
         chooseMenu("Project", "Mark as Read")
-        waitUntil("only the unread mark is gone") { self.agentsStatus == "1 waiting for you" }
+        app.menuBars.menuBarItems["Project"].click()
+        XCTAssertFalse(menuItem("Project", "Mark as Read").isEnabled, "The request should be marked as read.")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(agentsStatus, "1 waiting for you", "Marking as read must leave the request waiting.")
 
         // Clicking into the session is the only sign there will ever be that it was dealt with.
         mainWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
@@ -244,7 +295,7 @@ final class AgentLifecycleTests: ArchipelUITestCase {
 
         // A permission request arrives through the hook, not through a terminal notification.
         try stub.ask()
-        waitUntil("the request is waiting and unread") { self.agentsStatus == "1 waiting for you, 1 unread" }
+        waitUntil("the request is waiting") { self.agentsStatus == "1 waiting for you" }
 
         // Hooks say when the request was dealt with, so ending the turn clears it without the user
         // having to look at the session.
@@ -259,7 +310,7 @@ final class AgentLifecycleTests: ArchipelUITestCase {
         waitUntil("the window shows OpenCode working") { self.agentsStatus == "1 agent working" }
 
         try stub.ask()
-        waitUntil("the request is waiting and unread") { self.agentsStatus == "1 waiting for you, 1 unread" }
+        waitUntil("the request is waiting") { self.agentsStatus == "1 waiting for you" }
 
         // The plugin says when the request was dealt with, so ending the turn clears it.
         try stub.finishTurn()
@@ -284,7 +335,7 @@ final class AgentLifecycleTests: ArchipelUITestCase {
         assertExists(tab("notes.txt"), "Opening a change should give its diff a tab.")
 
         // The gutter is drawn, not made of views; it offers each visible line as a button of its own.
-        let addComment = gutterButton("Add Comment to line 2")
+        let addComment = gutterButton("Add Comment to line 2: second line")
         assertExists(addComment, "The added line should take a comment.")
         // The button is where VoiceOver puts its cursor, so it has to be where the row is drawn.
         let gutter = mainWindow.groups["Modified Line Comments"]
@@ -297,7 +348,7 @@ final class AgentLifecycleTests: ArchipelUITestCase {
         app.typeText("Say which line this is")
         app.popovers.buttons["Add Comment"].click()
         assertGone(commentField, "Adding the comment should close the editor.")
-        assertExists(gutterButton("Comment on line 2: Say which line this is"), "The line should show its comment.")
+        assertExists(gutterButton("Comment on line 2, second line: Say which line this is"), "The line should show its comment.")
 
         let comments = mainWindow.buttons["1 review comment"]
         assertExists(comments, "The diff header should count the comment.")
@@ -317,7 +368,14 @@ final class AgentLifecycleTests: ArchipelUITestCase {
 
         // Sent comments are done with; the line takes a new one again.
         tab("notes.txt").click()
-        assertExists(gutterButton("Add Comment to line 2"), "A sent comment should be cleared from its line.")
+        assertExists(gutterButton("Add Comment to line 2: second line"), "A sent comment should be cleared from its line.")
         XCTAssertFalse(mainWindow.buttons["1 review comment"].exists, "Nothing should be left to send.")
+
+        // The paste only sits in the agent's input, so the batch can be brought back if it got lost.
+        let restore = mainWindow.buttons["Restore Sent Comments"]
+        assertExists(restore, "The sent comments should be restorable.")
+        restore.click()
+        assertExists(comments, "Restoring should count the comment as pending again.")
+        assertExists(gutterButton("Comment on line 2, second line: Say which line this is"), "The line should show its comment again.")
     }
 }

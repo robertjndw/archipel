@@ -46,8 +46,13 @@ struct AgentLaunch {
         return launches
     }
 
-    /// The value that follows a flag such as `--session-id`, or nil when the flag was not passed.
+    /// The value of a flag such as `--model`, or nil when the flag was not passed. Conversation ids
+    /// are attached to their flag (`--session-id=<id>`), preset arguments follow theirs as a word
+    /// of their own.
     func argument(after flag: String) -> String? {
+        if let attached = arguments.first(where: { $0.hasPrefix(flag + "=") }) {
+            return String(attached.dropFirst(flag.count + 1))
+        }
         guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
         return arguments[index + 1]
     }

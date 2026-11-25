@@ -108,6 +108,77 @@ public enum WorktreeLocation {
         return nil
     }
 
+    /// The folder git has on record for the linked worktree at `folder`, which after a move by hand
+    /// is still where it used to be. Nil for a main checkout or anything that is not a worktree.
+    public static func recordedFolder(ofWorktreeAt folder: URL) -> URL? {
+        guard let registration = pointer(in: folder.appending(path: ".git"), prefix: "gitdir: "),
+              let recorded = pointer(in: registration.appending(path: "gitdir"), prefix: "")
+        else { return nil }
+        return recorded.deletingLastPathComponent().standardizedFileURL
+    }
+
+    /// The folders of the linked worktrees the main checkout at `folder` has registered. They do not
+    /// move with the main checkout, which makes them the thing that tells a moved repository apart
+    /// from another clone of it.
+    public static func registeredWorktreeFolders(ofRepositoryAt folder: URL) -> [URL] {
+        let registrations = folder.appending(path: ".git/worktrees", directoryHint: .isDirectory)
+        let entries = (try? FileManager.default.contentsOfDirectory(at: registrations, includingPropertiesForKeys: nil)) ?? []
+        return entries.prefix(500).compactMap { entry in
+            pointer(in: entry.appending(path: "gitdir"), prefix: "")?.deletingLastPathComponent().standardizedFileURL
+        }
+    }
+
+    /// How far a folder picked to replace a project's missing primary checkout checks out as the
+    /// same repository.
+    public enum PrimaryCheckoutMatch: Equatable, Sendable {
+        case same
+        /// The project's linked worktrees are not registered in the chosen repository.
+        case worktreesNotRegistered
+        /// Both histories are known and share no root commit.
+        case differentHistory
+        /// The chosen repository lacks the branch the checkout was on.
+        case missingBranch(String)
+        /// Nothing known about the old repository tells either way, so the user has to say.
+        case unverified
+    }
+
+    /// Weighs what is still known about a primary checkout whose folder is gone against a
+    /// repository picked in its place. Linked worktrees decide when there are any: they stay put
+    /// and are registered in exactly one repository. Root commits come next, since another clone
+    /// with a `main` branch is the usual wrong pick. A shared root is enough, because merging in an
+    /// unrelated history adds roots without the repository becoming another one.
+    ///
+    /// - Parameters:
+    ///   - linkedWorktreesRegistered: nil when the project has no linked worktrees.
+    ///   - recordedRoots: what the project noted while the folder existed, nil if never seen.
+    ///   - candidateRoots: the chosen repository's, nil if git could not say.
+    ///   - branch: the branch the checkout was on, nil for a detached HEAD.
+    ///   - candidateBranches: the chosen repository's local branches, nil if git could not say.
+    public static func primaryCheckoutMatch(
+        linkedWorktreesRegistered: Bool?,
+        recordedRoots: [String]?,
+        candidateRoots: [String]?,
+        branch: String?,
+        candidateBranches: [String]?
+    ) -> PrimaryCheckoutMatch {
+        if let linkedWorktreesRegistered {
+            return linkedWorktreesRegistered ? .same : .worktreesNotRegistered
+        }
+        if let recorded = recordedRoots, !recorded.isEmpty, let candidate = candidateRoots, !candidate.isEmpty {
+            return Set(recorded).isDisjoint(with: candidate) ? .differentHistory : .same
+        }
+        // A branch only rules out: plenty of unrelated repositories have a `main`.
+        if let branch, let candidateBranches, !candidateBranches.contains(branch) {
+            return .missingBranch(branch)
+        }
+        return .unverified
+    }
+
+    /// Whether two paths name the same folder, symlinks resolved as far as they exist.
+    public static func isSameFolder(_ first: URL, _ second: URL) -> Bool {
+        pathKey(first) == pathKey(second)
+    }
+
     /// The path a one-line git pointer file holds. git writes it absolute, or relative to the
     /// folder the file is in when `worktree.useRelativePaths` is set.
     private static func pointer(in file: URL, prefix: String) -> URL? {

@@ -287,6 +287,11 @@ enum RuntimeAction: Sendable {
     case openURL(String, kind: UInt32)
     case reloadConfig(soft: Bool)
     case configChanged(TerminalColors)
+    case startSearch(needle: String?)
+    case endSearch
+    case searchTotal(Int?)
+    case searchSelected(Int?)
+    case secureInput(UInt32)
 }
 
 extension TerminalApp {
@@ -369,6 +374,17 @@ extension TerminalApp {
             // Read now: the config only lives for the duration of the callback.
             guard let config = a.config_change.config else { return nil }
             return .configChanged(TerminalColors(config: config))
+        case GHOSTTY_ACTION_START_SEARCH:
+            return .startSearch(needle: a.start_search.needle.map { String(cString: $0) })
+        case GHOSTTY_ACTION_END_SEARCH:
+            return .endSearch
+        case GHOSTTY_ACTION_SEARCH_TOTAL:
+            // Negative while Ghostty has no count yet.
+            return .searchTotal(a.search_total.total < 0 ? nil : Int(a.search_total.total))
+        case GHOSTTY_ACTION_SEARCH_SELECTED:
+            return .searchSelected(a.search_selected.selected < 0 ? nil : Int(a.search_selected.selected))
+        case GHOSTTY_ACTION_SECURE_INPUT:
+            return .secureInput(a.secure_input.rawValue)
         default:
             return nil
         }
@@ -407,10 +423,31 @@ extension TerminalApp {
             session.surfaceView.setMouseShape(ghostty_action_mouse_shape_e(raw))
         case .mouseVisible(let visible):
             NSCursor.setHiddenUntilMouseMoves(!visible)
+        case .startSearch(let needle):
+            session.search.started(needle: needle)
+        case .endSearch:
+            session.search.ended()
+        case .searchTotal(let total):
+            session.search.update(total: total)
+        case .searchSelected(let selected):
+            session.search.update(selected: selected)
+        case .secureInput(let raw):
+            let mode = ghostty_action_secure_input_e(raw)
+            // Prompt detection follows the user's Ghostty setting; an explicit
+            // toggle_secure_input binding always applies.
+            if mode != GHOSTTY_SECURE_INPUT_TOGGLE, !autoSecureInput { return false }
+            session.surfaceView.setSecureInput(mode)
         case .openURL, .reloadConfig, .configChanged:
             break
         }
         return true
+    }
+
+    private var autoSecureInput: Bool {
+        var enabled = true
+        let key = "macos-auto-secure-input"
+        _ = ghostty_config_get(config, &enabled, key, UInt(key.utf8.count))
+        return enabled
     }
 
     private func openURL(_ string: String, kind: ghostty_action_open_url_kind_e, session: TerminalSession?) {
@@ -421,7 +458,7 @@ extension TerminalApp {
             if url.isFileURL { NSWorkspace.shared.open(url) }
             return
         }
-        guard let link = TerminalLink(string) else {
+        guard let link = TerminalLink(string, relativeTo: session?.linkBaseDirectory) else {
             logger.info("refusing to open untrusted link target")
             return
         }

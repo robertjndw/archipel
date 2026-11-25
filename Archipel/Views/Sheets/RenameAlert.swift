@@ -53,6 +53,7 @@ private struct RenameFields: View {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { commit(trimmed) }
         }
+        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         Button("Cancel", role: .cancel) {}
     }
 }

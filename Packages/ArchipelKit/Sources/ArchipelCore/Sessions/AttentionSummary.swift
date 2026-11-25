@@ -1,10 +1,39 @@
 import Foundation
 
+extension SessionActivity {
+    /// What a session has to say wherever sessions are summed up, ranked or filtered: counts,
+    /// badges, the "Needs Me" list, the jump to the next session, the menu bar. Each session is
+    /// exactly one of these or none, so no two of those places can disagree about it.
+    /// Declared most pressing first.
+    public enum Attention: Comparable, Sendable {
+        /// Blocked on an answer.
+        case needsUser
+        /// Starting up, in the middle of a turn, or waiting on background subagents.
+        case working
+        /// Something the user has not looked at: a finished turn, an exit, a bell. Only once the
+        /// session is no longer working, the way a result's glow waits for the worktree to settle.
+        case unread
+    }
+
+    public var attention: Attention? {
+        if needsUser { return .needsUser }
+        if showsProgress { return .working }
+        if unread { return .unread }
+        return nil
+    }
+
+    /// What the jump to the next session lands on and the "Needs Me" filter lists. Only the jump
+    /// ranks the two.
+    public var needsMe: Bool {
+        attention == .needsUser || attention == .unread
+    }
+}
+
+/// How many sessions are in each state of `SessionActivity.Attention`. A session is counted once.
 public struct AttentionSummary: Equatable, Sendable {
     public var needsAttention: Int
     public var unread: Int
-    /// Sessions starting up, in the middle of a turn, or waiting on background subagents. Not
-    /// attention as such, but what tells the user that something is still going on in a place
+    /// Not attention as such, but what tells the user that something is still going on in a place
     /// they are not looking at.
     public var working: Int
 
@@ -24,11 +53,12 @@ public struct AttentionSummary: Equatable, Sendable {
         )
     }
 
-    /// The single strongest signal, for places with room for one indicator.
+    /// The single strongest signal, for places with room for one indicator. Ranked like
+    /// `SessionActivity.Attention`, so a group shows what its most pressing session shows.
     public var dominant: Signal? {
         if needsAttention > 0 { return .needsAttention(needsAttention) }
-        if unread > 0 { return .unread }
         if working > 0 { return .working }
+        if unread > 0 { return .unread }
         return nil
     }
 
@@ -50,12 +80,12 @@ public struct AttentionSummary: Equatable, Sendable {
 
 public func attentionSummary(of sessions: [Session], activities: [Session.ID: SessionActivity]) -> AttentionSummary {
     sessions.reduce(.zero) { total, session in
-        guard let activity = activities[session.id] else { return total }
-        return total + AttentionSummary(
-            needsAttention: activity.needsUser ? 1 : 0,
-            unread: activity.unread ? 1 : 0,
-            working: activity.showsProgress ? 1 : 0
-        )
+        switch activities[session.id]?.attention {
+        case .needsUser: total + AttentionSummary(needsAttention: 1)
+        case .working: total + AttentionSummary(working: 1)
+        case .unread: total + AttentionSummary(unread: 1)
+        case nil: total
+        }
     }
 }
 
@@ -75,17 +105,19 @@ public func attentionSummary(of workspace: Workspace, activities: [Session.ID: S
     workspace.islands.reduce(.zero) { $0 + attentionSummary(of: $1, activities: activities) }
 }
 
-extension SessionActivity {
-    /// A turn that ran to its end and has not been looked at yet.
-    public var hasUnreadResult: Bool { status == .finished && unread }
-
-    /// What the jump to the next session lands on and the "Needs Me" filter lists: a request waiting
-    /// for an answer, or a finished turn nobody has read. Only the jump ranks the two.
-    public var needsMe: Bool { needsUser || hasUnreadResult }
+/// The session that stands for a group of them where there is room for one, such as a worktree's
+/// row: the most pressing one, the first of those in the order given.
+public func mostPressingSession(of sessions: [Session], activities: [Session.ID: SessionActivity]) -> Session.ID? {
+    var best: (id: Session.ID, attention: SessionActivity.Attention)?
+    for session in sessions {
+        guard let attention = activities[session.id]?.attention else { continue }
+        if best.map({ attention < $0.attention }) ?? true { best = (session.id, attention) }
+    }
+    return best?.id
 }
 
 /// Walks sessions in sidebar order starting after `current`, wrapping around (and ending on
-/// `current` itself). Sessions waiting on the user win over unread finished ones.
+/// `current` itself). Sessions waiting on the user win over unread ones.
 public func nextSessionNeedingAttention(
     after current: Session.ID?,
     in workspace: Workspace,
@@ -95,8 +127,8 @@ public func nextSessionNeedingAttention(
     let start = current.flatMap { ids.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
     let ordered = ids[start...] + ids[..<start]
 
-    if let hit = ordered.first(where: { activities[$0]?.needsUser == true }) { return hit }
-    return ordered.first { activities[$0]?.hasUnreadResult == true }
+    if let hit = ordered.first(where: { activities[$0]?.attention == .needsUser }) { return hit }
+    return ordered.first { activities[$0]?.attention == .unread }
 }
 
 /// The worktrees holding a session that the jump to the next session could land on, in any island.

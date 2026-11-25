@@ -48,4 +48,26 @@ struct HookedSessionsTests {
         let line = Data(#"{"session": "\#(id.uuidString)", "source": "codex-hooks", "payload": {"hook_event_name": "Stop", "session_id": "s"}}"#.utf8)
         #expect(HookServer.decodeEnvelope(line)?.source == "codex-hooks")
     }
+
+    /// Anything started in a tab inherits the session's id and socket, so another agent's hooks
+    /// can report as this session. Its conversation id would be saved and break the next resume.
+    @Test func hooksOfAnotherAgentAreForeign() {
+        var hooked = HookedSessions()
+        #expect(hooked.admit(message("claude"), agent: .codex) == .foreign)
+        #expect(hooked.admit(message("claude-statusline"), agent: .codex) == .foreign)
+        #expect(hooked.admit(message("codex-hooks"), agent: .claude) == .foreign)
+        #expect(hooked.admit(message("codex"), agent: .opencode) == .foreign)
+        #expect(hooked.admit(message("opencode"), agent: .claude) == .foreign)
+        #expect(hooked.admit(message("nobody"), agent: .claude) == .foreign)
+        #expect(hooked.admit(message(nil), agent: .claude) == .foreign)
+        // A foreign hook is no proof that the session's own hooks run.
+        #expect(!hooked.contains(id))
+    }
+
+    @Test func everySourceOfTheSessionsOwnAgentIsAdmitted() {
+        var hooked = HookedSessions()
+        #expect(hooked.admit(message("claude"), agent: .claude) == .accepted)
+        #expect(hooked.admit(message("claude-statusline"), agent: .claude) == .accepted)
+        #expect(hooked.admit(message("opencode"), agent: .opencode) == .firstHook)
+    }
 }

@@ -741,8 +741,6 @@ private struct IslandSwipeDriver: ViewModifier {
             rest(at: new)
             return
         }
-        // A click on the switcher is felt. A swipe never gets here: it has its tick at halfway.
-        Haptics.levelChange()
         if reduceMotion {
             crossfade(to: new)
             return

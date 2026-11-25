@@ -11,7 +11,7 @@ struct ClaudeAdapterTests {
         let agentID = "0F8E3C2A-5B6D-4E7F-8091-A2B3C4D5E6F7"
         let command = claude.launchCommand(for: LaunchFixture.context(agentSessionID: agentID))
         #expect(command.executable == "claude")
-        #expect(Array(command.arguments.prefix(2)) == ["--session-id", agentID])
+        #expect(command.arguments.first == "--session-id=\(agentID)")
         LaunchFixture.expectHookEnvironment(command)
 
         let hooks = try #require(try LaunchFixture.settings(after: "--settings", in: command.arguments)["hooks"] as? [String: Any])
@@ -33,22 +33,22 @@ struct ClaudeAdapterTests {
     @Test func onlyClaudeLaunchesCarryTheUserHooksFlag() throws {
         let variable = ClaudeUserHooks.launchedByArchipelVariable
         let fresh = claude.launchCommand(for: LaunchFixture.context(agentSessionID: nil))
-        let resumed = try #require(claude.resumeCommand(for: LaunchFixture.context(agentSessionID: "id")))
+        let resumed = try #require(claude.resumeCommand(for: LaunchFixture.context(agentSessionID: "0F8E3C2A-5B6D-4E7F-8091-A2B3C4D5E6F7")))
         #expect(fresh.environment[variable] == "settings")
         #expect(resumed.environment[variable] == "settings")
         LaunchFixture.expectHookEnvironment(fresh)
 
         #expect(ShellAdapter().launchCommand(for: LaunchFixture.context(agentSessionID: nil)).environment[variable] == nil)
         #expect(CodexAdapter().launchCommand(for: LaunchFixture.context(agentSessionID: nil)).environment[variable] == nil)
-        let codexResume = try #require(CodexAdapter().resumeCommand(for: LaunchFixture.context(agentSessionID: "t")))
+        let codexResume = try #require(CodexAdapter().resumeCommand(for: LaunchFixture.context(agentSessionID: "0199a213-81c0-7800-8aa1-bbab2a035a53")))
         #expect(codexResume.environment[variable] == nil)
     }
 
     @Test func resume() throws {
         let agentID = "0F8E3C2A-5B6D-4E7F-8091-A2B3C4D5E6F7"
         let command = try #require(claude.resumeCommand(for: LaunchFixture.context(agentSessionID: agentID)))
-        #expect(Array(command.arguments.prefix(2)) == ["--resume", agentID])
-        #expect(!command.arguments.contains("--session-id"))
+        #expect(command.arguments.first == "--resume=\(agentID)")
+        #expect(!command.arguments.contains { $0.hasPrefix("--session-id") })
         _ = try LaunchFixture.settings(after: "--settings", in: command.arguments)
         LaunchFixture.expectHookEnvironment(command)
 

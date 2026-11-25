@@ -1,59 +1,18 @@
 import AppKit
 import ArchipelCore
 import GitKit
+import InspectorUI
 
-/// The last pull request answer for a worktree, with the branch it was asked for: after a branch
-/// switch the old answer must not be shown, even before the next lookup.
-struct PullRequestLookup {
-    var branch: String
-    /// After a failed lookup this is still the answer from before it: a dropped connection or an
-    /// expired `gh` login says nothing about the pull request, and the badge should not blink away.
-    var pullRequest: GitPullRequest?
-    var checkedAt: ContinuousClock.Instant
-    /// Lookups in a row that failed, for this branch.
-    var failures = 0
-
-    var answer: PullRequestFreshness.Answer {
-        if failures > 0 { return .failed(repeatedly: failures > 1) }
-        return pullRequest == nil ? .none : .found
-    }
-}
-
-/// Bookkeeping that keeps refreshes of one worktree from overlapping. Not observed.
+/// Bookkeeping for the status poll and the background fetches. Not observed.
 struct GitRefreshState {
-    struct Request {
-        var lookingUpPullRequests: Bool
-        var minimumPullRequestAge: Duration
-
-        func merged(with other: Request) -> Request {
-            switch (lookingUpPullRequests, other.lookingUpPullRequests) {
-            case (true, true): Request(lookingUpPullRequests: true, minimumPullRequestAge: min(minimumPullRequestAge, other.minimumPullRequestAge))
-            case (true, false): self
-            case (false, _): other
-            }
-        }
-    }
-
-    var summariesInFlight: Set<Worktree.ID> = []
-    /// Asked for while a refresh of the same worktree was running; run once that one is done, since
-    /// its answer may predate whatever prompted the request.
-    var queued: [Worktree.ID: Request] = [:]
-    /// The branch each running lookup was started for.
-    var pullRequestsInFlight: [Worktree.ID: String] = [:]
-    /// Lookups asked for while another ran for a different branch of the same worktree, with the
-    /// age they asked for. Run when that one is done, like `queued`.
-    var pullRequestsQueued: [Worktree.ID: Duration] = [:]
-    var diffStatCheckedAt: [Worktree.ID: ContinuousClock.Instant] = [:]
     /// Keyed by project: worktrees share one repository, so one fetch serves them all.
     var fetchedAt: [Project.ID: ContinuousClock.Instant] = [:]
     var fetchesInFlight: Set<Project.ID> = []
-    var gitHub: Task<GitHubClient?, Never>?
     var timer: Task<Void, Never>?
 }
 
 extension AppModel {
     static let gitStatusInterval = Duration.seconds(10)
-    static let diffStatInterval = Duration.seconds(60)
     /// `gh` is a network call per worktree, so the timer's ticks are capped at one lookup per
     /// interval. "No PR yet" and failures are asked again sooner; see `PullRequestFreshness`.
     static let pullRequestInterval = PullRequestFreshness.foundLifetime
@@ -61,35 +20,55 @@ extension AppModel {
     /// fetching all the time.
     static let fetchInterval = Duration.seconds(300)
 
-    /// Refreshes the worktrees of the selected island whose rows are on screen. Pull requests are
-    /// only looked up when asked for, and then only when the last answer for that branch is older
-    /// than `minimumPullRequestAge`.
+    func makeGitStates() -> GitStateStore<Worktree.ID> {
+        let environment = GitStateEnvironment(
+            git: git,
+            countsLines: { [weak self] in self?.settings.showsGitStatusInSidebar ?? false },
+            looksUpPullRequests: { [weak self] in self?.settings.showsPullRequests ?? false },
+            searchPATH: { [weak self] in await self?.toolSearchPATH() ?? "" }
+        )
+        let store = GitStateStore<Worktree.ID>(environment: environment)
+        store.onStatusRead = { [weak self] id, status in self?.followBranch(of: id, to: status.branch) }
+        return store
+    }
+
+    /// The git state of a worktree, made on first use. For a worktree that is gone, only what the
+    /// store still holds until the next prune.
+    func gitState(for id: Worktree.ID) -> GitWorktreeState? {
+        guard let worktree = workspace.worktree(id: id) else { return gitStates.existingState(for: id) }
+        return gitStates.state(for: id, root: worktree.path)
+    }
+
+    /// Git keeps the branch, the workspace only remembers it. A read the store kept is never older
+    /// than a switch made in the app, see `switchBranch(of:to:releasingLeftover:)`.
+    private func followBranch(of id: Worktree.ID, to branch: String?) {
+        guard let current = workspace.worktree(id: id), current.branch != branch else { return }
+        mutate { $0.updateWorktree(id: id) { $0.branch = branch } }
+    }
+
+    /// The worktrees the status poll and the repository watchers keep current: every row the
+    /// sidebar lists, which in "Needs Me" includes rows from other islands and collapsed projects,
+    /// and the selected worktree, which the inspector and the tab bar draw from even when its
+    /// project is collapsed. Rows that are not listed cost no git call.
+    var gitStatusTargets: [Worktree.ID] {
+        var ids = sidebarRows.map(\.id)
+        if let selected = workspace.selectedWorktreeID, !ids.contains(selected) { ids.append(selected) }
+        return ids
+    }
+
+    /// Refreshes `gitStatusTargets`. Pull requests are only looked up when asked for, and then only
+    /// when the last answer for that branch is older than `minimumPullRequestAge`.
     func refreshGitStatus(lookingUpPullRequests: Bool, minimumPullRequestAge: Duration = pullRequestInterval) {
-        // Only written when something was removed: this runs on every timer tick, and any write to an
-        // observed property re-renders the whole sidebar.
         let existing = Set(workspace.allWorktrees.map(\.id))
-        if !gitSummaries.keys.allSatisfy(existing.contains) {
-            gitSummaries = gitSummaries.filter { existing.contains($0.key) }
-        }
-        if !pullRequests.keys.allSatisfy(existing.contains) {
-            pullRequests = pullRequests.filter { existing.contains($0.key) }
-        }
-        if !worktreesWithRemote.isSubset(of: existing) { worktreesWithRemote.formIntersection(existing) }
         pruneRemovedState(keeping: existing)
-        // A collapsed project shows none of its rows, so only the selected worktree, which the
-        // inspector and the tab bar still draw from, is worth a git call there. Expanding the
-        // project refreshes the rest; see `setProject(_:expanded:)`.
-        let selected = workspace.selectedWorktreeID
-        let ids = (selectedIsland?.projects ?? []).flatMap { project in
-            project.worktrees.lazy.map(\.id).filter { project.isExpanded || $0 == selected }
-        }
-        refreshGitStatus(of: ids, lookingUpPullRequests: lookingUpPullRequests, minimumPullRequestAge: minimumPullRequestAge)
+        InspectorView.forgetWorktrees(except: workspace.allWorktrees.lazy.map(\.path))
+        refreshGitStatus(of: gitStatusTargets, lookingUpPullRequests: lookingUpPullRequests, minimumPullRequestAge: minimumPullRequestAge)
     }
 
     func refreshGitStatus(of ids: [Worktree.ID], lookingUpPullRequests: Bool, minimumPullRequestAge: Duration = pullRequestInterval) {
         guard isGitAvailable else { return }
-        let request = GitRefreshState.Request(lookingUpPullRequests: lookingUpPullRequests, minimumPullRequestAge: minimumPullRequestAge)
-        for id in ids { refreshSummary(of: id, request) }
+        let request = GitRefreshRequest(pullRequestAge: lookingUpPullRequests ? minimumPullRequestAge : nil)
+        for id in ids { gitState(for: id)?.requestRefresh(request) }
     }
 
     func startGitStatusTimer() {
@@ -100,6 +79,7 @@ extension AppModel {
                 guard !Task.isCancelled, let self else { return }
                 if NSApp.isActive || self.isMainWindowVisible {
                     self.refreshGitStatus(lookingUpPullRequests: true)
+                    self.refreshMissingWorktrees()
                     self.fetchRemotesIfDue()
                     // An agent installed from one of the app's own terminals should not stay
                     // greyed out until the user happens to switch apps and back.
@@ -124,7 +104,11 @@ extension AppModel {
             guard !gitRefresh.fetchesInFlight.contains(project.id) else { continue }
             // Without an upstream anywhere there is nothing a fetch could make "behind".
             let ids = project.worktrees.map(\.id)
-            guard ids.contains(where: { gitSummaries[$0]?.upstream != nil }) else { continue }
+            // One that is gone or not there yet counts: the fetch is what notices the branch being pushed.
+            guard ids.contains(where: {
+                guard let status = gitStates.existingState(for: $0)?.status else { return false }
+                return status.upstream != nil || status.goneUpstream != nil || status.pendingUpstream != nil
+            }) else { continue }
             gitRefresh.fetchesInFlight.insert(project.id)
             gitRefresh.fetchedAt[project.id] = .now
             let git = git
@@ -139,15 +123,15 @@ extension AppModel {
     }
 
     func rowContent(for worktree: Worktree) -> WorktreeRowContent {
-        let summary = gitSummaries[worktree.id]
-        let git = summary.map {
+        let state = gitState(for: worktree.id)
+        let git = state?.summary.map {
             WorktreeGitState(
                 changedFiles: $0.changedFiles,
                 ahead: $0.ahead,
                 behind: $0.behind,
                 insertions: $0.diffStat?.insertions ?? 0,
                 deletions: $0.diffStat?.deletions ?? 0,
-                pullRequest: pullRequestBadge(for: worktree.id)
+                pullRequest: state?.pullRequest.map(Self.badge(for:))
             )
         }
         let options = WorktreeRowContent.Options(
@@ -164,20 +148,10 @@ extension AppModel {
         )
     }
 
-    /// The selected worktree's pull request, only while the answer is for the branch it is on.
-    var selectedWorktreePullRequest: GitPullRequest? {
-        guard let id = workspace.selectedWorktreeID, let lookup = pullRequests[id],
-              lookup.branch == gitSummaries[id]?.branch
-        else { return nil }
-        return lookup.pullRequest
-    }
-
-    /// The pull request of the branch the worktree has checked out. A lookup made for a branch it
-    /// has since switched away from does not count.
+    /// The pull request of the branch the worktree has checked out, while pull requests are shown
+    /// at all. A lookup made for a branch it has since switched away from does not count.
     func pullRequestBadge(for id: Worktree.ID) -> PullRequestBadge? {
-        let lookup = pullRequests[id]
-        guard lookup?.branch == gitSummaries[id]?.branch, let pullRequest = lookup?.pullRequest else { return nil }
-        return Self.badge(for: pullRequest)
+        gitState(for: id)?.pullRequest.map(Self.badge(for:))
     }
 
     private static func badge(for pullRequest: GitPullRequest) -> PullRequestBadge {
@@ -188,142 +162,31 @@ extension AppModel {
         }
         return PullRequestBadge(number: pullRequest.number, state: state)
     }
+}
 
-    private func refreshSummary(of id: Worktree.ID, _ request: GitRefreshState.Request) {
-        guard let worktree = workspace.worktree(id: id) else { return }
-        guard !gitRefresh.summariesInFlight.contains(id) else {
-            gitRefresh.queued[id] = gitRefresh.queued[id].map { $0.merged(with: request) } ?? request
-            return
-        }
-        gitRefresh.summariesInFlight.insert(id)
-        let git = git
-        let wantsDiffStat = settings.showsGitStatusInSidebar
-        let previous = gitSummaries[id]
-        let branchGeneration = branchGenerations[id]
-        let diffStatIsFresh = gitRefresh.diffStatCheckedAt[id].map { $0.duration(to: .now) < Self.diffStatInterval } ?? false
-        Task { [weak self] in
-            // A folder that is not a repository (or has vanished) throws; that only means "no summary".
-            var summary = try? await git.summary(in: worktree.path)
-            var countedLines = false
-            // A second git call, so only when there is something to count. An unborn branch throws,
-            // which leaves the line counts out and the file count in.
-            if wantsDiffStat, let changed = summary?.changedFiles, changed > 0 {
-                var previousStatus = previous
-                previousStatus?.diffStat = nil
-                // Unlike status, a diff reads every changed file. While the status is the same the
-                // last count is reused for a while, so a huge generated file is not diffed every poll.
-                if diffStatIsFresh, previousStatus == summary, let known = previous?.diffStat {
-                    summary?.diffStat = known
-                } else {
-                    summary?.diffStat = try? await git.diffStat(in: worktree.path)
-                    countedLines = true
-                }
-            }
-            // An upstream already says there is a remote, so only a branch without one costs the call.
-            var hasRemote = false
-            if let summary, summary.upstream == nil { hasRemote = await git.hasRemote(in: worktree.path) }
-            guard let self else { return }
-            if countedLines { self.gitRefresh.diffStatCheckedAt[id] = .now }
-            self.gitRefresh.summariesInFlight.remove(id)
-            guard let current = self.workspace.worktree(id: id) else {
-                self.gitRefresh.queued[id] = nil
-                self.gitSummaries[id] = nil
-                self.pullRequests[id] = nil
-                self.worktreesWithRemote.remove(id)
-                return
-            }
-            if self.gitSummaries[id] != summary { self.gitSummaries[id] = summary }
-            if hasRemote != self.worktreesWithRemote.contains(id) {
-                if hasRemote { self.worktreesWithRemote.insert(id) } else { self.worktreesWithRemote.remove(id) }
-            }
-            // Not when the branch was switched in the app since this status was read: the name
-            // written then is newer, and the refresh the switch queued brings the matching status.
-            if let summary, current.branch != summary.branch, branchGeneration == self.branchGenerations[id] {
-                self.mutate { $0.updateWorktree(id: id) { $0.branch = summary.branch } }
-            }
-            if request.lookingUpPullRequests, self.settings.showsPullRequests {
-                self.lookUpPullRequest(of: id, summary: summary, minimumAge: request.minimumPullRequestAge)
-            }
-            if let next = self.gitRefresh.queued.removeValue(forKey: id) {
-                self.refreshSummary(of: id, next)
-            }
-        }
+#if DEBUG
+extension AppModel {
+    /// Shows `summary` and `pullRequest` for the worktree as if git had reported them. A summary has
+    /// only a count of files, so the status is made up of as many placeholders.
+    func showGitForPreview(_ id: Worktree.ID, root: URL, summary: GitSummary, pullRequest: PullRequestLookup? = nil) {
+        let status = GitStatus(
+            branch: summary.branch,
+            staged: [],
+            unstaged: (0..<summary.changedFiles).map { GitFileChange(path: "File\($0).swift", kind: .modified) },
+            upstream: summary.upstream,
+            ahead: summary.ahead,
+            behind: summary.behind,
+            goneUpstream: summary.goneUpstream,
+            pendingUpstream: summary.pendingUpstream
+        )
+        gitStates.show(.preview(root: root, status: status, diffStat: summary.diffStat, pullRequest: pullRequest), for: id)
     }
 
-    /// A missing `gh` means no badge. Any other failure keeps the badge that was there.
-    private func lookUpPullRequest(of id: Worktree.ID, summary: GitSummary?, minimumAge: Duration) {
-        // No upstream is not enough to skip: `gh` matches the branch name, and a branch pushed
-        // without `-u` (`git push origin HEAD`) can have a pull request all the same.
-        guard let worktree = workspace.worktree(id: id), let summary, let branch = summary.branch,
-              summary.upstream != nil || worktreesWithRemote.contains(id)
-        else {
-            // Runs with every poll for each worktree without a remote, and writing nil over nil
-            // would still redraw the sidebar.
-            if pullRequests[id] != nil { pullRequests[id] = nil }
-            return
+    func showGitForPreview(_ summaries: [Worktree.ID: GitSummary], pullRequests: [Worktree.ID: PullRequestLookup] = [:]) {
+        for (id, summary) in summaries {
+            guard let worktree = workspace.worktree(id: id) else { continue }
+            showGitForPreview(id, root: worktree.path, summary: summary, pullRequest: pullRequests[id])
         }
-        if let last = pullRequests[id], last.branch == branch,
-           !PullRequestFreshness.isDue(
-               last.answer,
-               age: last.checkedAt.duration(to: .now),
-               hasUpstream: summary.upstream != nil,
-               requestedAge: minimumAge
-           ) {
-            return
-        }
-        if let asked = gitRefresh.pullRequestsInFlight[id] {
-            // The running lookup answers for the branch it was started on. After a switch that
-            // answer is filed under the old name, and without this nothing would ask again until
-            // the next refresh that looks up pull requests. A forced lookup is queued even for the
-            // same branch, since the running one may have asked just before the PR was opened.
-            if asked != branch || minimumAge == .zero {
-                gitRefresh.pullRequestsQueued[id] = min(gitRefresh.pullRequestsQueued[id] ?? minimumAge, minimumAge)
-            }
-            return
-        }
-        gitRefresh.pullRequestsInFlight[id] = branch
-        let gitHub = gitHubClient()
-        Task { [weak self] in
-            let client = await gitHub.value
-            var pullRequest: GitPullRequest?
-            // Counts as a failure so a missing `gh` backs off instead of being searched for every minute.
-            var failed = client == nil
-            if let client {
-                do {
-                    pullRequest = try await client.pullRequest(in: worktree.path)
-                } catch {
-                    failed = true
-                }
-            }
-            guard let self else { return }
-            // A missing gh is looked for again next time, since it may be installed while the app runs.
-            if client == nil, self.gitRefresh.gitHub == gitHub { self.gitRefresh.gitHub = nil }
-            self.gitRefresh.pullRequestsInFlight[id] = nil
-            let queued = self.gitRefresh.pullRequestsQueued.removeValue(forKey: id)
-            guard self.workspace.worktree(id: id) != nil else { return }
-            var failures = 0
-            if failed {
-                let previous = self.pullRequests[id].flatMap { $0.branch == branch ? $0 : nil }
-                // Without `gh` there is nothing left to vouch for the old badge.
-                if client != nil { pullRequest = previous?.pullRequest }
-                failures = (previous?.failures ?? 0) + 1
-            }
-            self.pullRequests[id] = PullRequestLookup(branch: branch, pullRequest: pullRequest, checkedAt: .now, failures: failures)
-            if let queued, self.settings.showsPullRequests {
-                self.lookUpPullRequest(of: id, summary: self.gitSummaries[id], minimumAge: queued)
-            }
-        }
-    }
-
-    /// Resolved once when found: whether `gh` is installed does not change often enough to justify
-    /// searching the PATH for every lookup.
-    private func gitHubClient() -> Task<GitHubClient?, Never> {
-        if let task = gitRefresh.gitHub { return task }
-        let task = Task { [weak self] () -> GitHubClient? in
-            guard let path = await self?.toolSearchPATH() else { return nil }
-            return GitHubClient(searchPATH: path)
-        }
-        gitRefresh.gitHub = task
-        return task
     }
 }
+#endif

@@ -15,7 +15,9 @@ extension ArchipelUITestCase {
     // MARK: Sidebar
 
     func sidebarProject(_ name: String) -> XCUIElement {
-        mainWindow.staticTexts.matching(identifier: "sidebar.project").matching(named(name)).element(boundBy: 0)
+        // Any type: a header that can be dragged is reported as a heading with the name as its
+        // label, not as the text inside it.
+        mainWindow.descendants(matching: .any).matching(identifier: "sidebar.project").matching(named(name)).element(boundBy: 0)
     }
 
     func sidebarWorktree(_ name: String) -> XCUIElement {
@@ -98,7 +100,8 @@ extension ArchipelUITestCase {
     }
 
     var commitButton: XCUIElement {
-        mainWindow.buttons.matching(identifier: "changes.primaryAction").element(boundBy: 0)
+        // Any type: while its action runs the button shows a spinner, and is then not reported as a button.
+        mainWindow.descendants(matching: .any).matching(identifier: "changes.primaryAction").element(boundBy: 0)
     }
 
     // MARK: Command palette

@@ -27,21 +27,33 @@ public enum TerminalLink: Sendable, Equatable {
     /// http or https with a host.
     case web(URL)
     case mail(URL)
-    /// An existing file or folder, as a standardized file URL.
-    case file(URL)
+    /// An existing file or folder, as a standardized file URL. `position` is
+    /// set when the text ended in `:line` or `:line:column`.
+    case file(URL, position: Position?)
 
-    public var url: URL {
-        switch self {
-        case .web(let url), .mail(let url), .file(let url): url
+    /// A 1-based line, and optionally column, to jump to inside a file.
+    public struct Position: Sendable, Equatable {
+        public var line: Int
+        public var column: Int?
+
+        public init(line: Int, column: Int? = nil) {
+            self.line = line
+            self.column = column
         }
     }
 
-    /// Opens the link with the system. Apps, packages and executables are
-    /// refused here, because `open` would launch them; viewing one inside the
-    /// host is harmless.
+    public var url: URL {
+        switch self {
+        case .web(let url), .mail(let url), .file(let url, _): url
+        }
+    }
+
+    /// Opens the link with the system, ignoring any position. Apps, packages
+    /// and executables are refused here, because `open` would launch them;
+    /// viewing one inside the host is harmless.
     @MainActor
     public func openExternally() {
-        if case .file(let url) = self {
+        if case .file(let url, _) = self {
             let path = url.path(percentEncoded: false)
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
@@ -56,27 +68,60 @@ public enum TerminalLink: Sendable, Equatable {
     }
 
     /// nil for anything that must not be opened: custom schemes, hostless web
-    /// URLs and files that don't exist.
-    init?(_ string: String) {
-        let url: URL
-        if let candidate = URL(string: string), candidate.scheme != nil {
-            url = candidate
-        } else {
-            url = URL(filePath: NSString(string: string).standardizingPath)
+    /// URLs and files that don't exist. Relative paths resolve against `base`,
+    /// the session's directory, because Ghostty only does that itself when the
+    /// program reported its pwd.
+    init?(_ string: String, relativeTo base: URL?) {
+        self.init(string, relativeTo: base) { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    init?(_ string: String, relativeTo base: URL?, fileExists: (String) -> Bool) {
+        // `foo.swift:12` parses as a URL with scheme "foo.swift", so only
+        // `scheme://`, mailto and file count as URLs. Anything else is a path,
+        // which the existence check below refuses if it isn't a real file.
+        if let candidate = URL(string: string), let scheme = candidate.scheme,
+           string.hasPrefix("\(scheme)://") || ["mailto", "file"].contains(scheme.lowercased()) {
+            switch candidate.scheme?.lowercased() {
+            case "http", "https":
+                guard candidate.host() != nil else { return nil }
+                self = .web(candidate)
+            case "mailto":
+                self = .mail(candidate)
+            case "file":
+                guard fileExists(candidate.path(percentEncoded: false)) else { return nil }
+                self = .file(candidate.standardizedFileURL, position: nil)
+            default:
+                return nil
+            }
+            return
         }
 
-        switch url.scheme?.lowercased() {
-        case "http", "https":
-            guard url.host() != nil else { return nil }
-            self = .web(url)
-        case "mailto":
-            self = .mail(url)
-        case "file":
-            guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return nil }
-            self = .file(url.standardizedFileURL)
-        default:
-            return nil
+        // Tried as written first so a file really named `foo.swift:12` wins.
+        if let url = Self.resolve(string, relativeTo: base), fileExists(url.path(percentEncoded: false)) {
+            self = .file(url, position: nil)
+            return
         }
+        guard let (path, position) = Self.splitPosition(string),
+              let url = Self.resolve(path, relativeTo: base),
+              fileExists(url.path(percentEncoded: false))
+        else { return nil }
+        self = .file(url, position: position)
+    }
+
+    private static func resolve(_ path: String, relativeTo base: URL?) -> URL? {
+        guard !path.isEmpty else { return nil }
+        let expanded = NSString(string: path).standardizingPath
+        if expanded.hasPrefix("/") || base == nil {
+            return URL(filePath: expanded)
+        }
+        return URL(filePath: expanded, relativeTo: base).standardizedFileURL
+    }
+
+    private static func splitPosition(_ string: String) -> (String, Position)? {
+        guard let match = string.wholeMatch(of: /(.+?):(\d+)(?::(\d+))?/),
+              let line = Int(match.2), line >= 1
+        else { return nil }
+        return (String(match.1), Position(line: line, column: match.3.flatMap { Int($0) }))
     }
 }
 

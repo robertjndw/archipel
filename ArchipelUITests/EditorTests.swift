@@ -22,7 +22,19 @@ final class EditorTests: ArchipelUITestCase {
         app.typeText(text)
     }
 
-    private var editor: XCUIElement { mainWindow.textViews.element(boundBy: 0) }
+    /// By identifier: a terminal is a text view to accessibility as well.
+    private var editor: XCUIElement { mainWindow.textViews.matching(identifier: "editor.text").element(boundBy: 0) }
+
+    /// Like `openQuickly`, for a file that may not open as text.
+    private func openQuicklyWithoutText(_ fileName: String) {
+        app.typeKey("p", modifierFlags: .command)
+        assertExists(paletteField, "Open Quickly did not come up.")
+        app.typeText(fileName)
+        let row = paletteRow(startingWith: fileName)
+        assertExists(row, "Open Quickly should list \(fileName).")
+        row.click()
+        assertExists(tab(fileName), "Opening a file should give it a tab.")
+    }
 
     private func contents(of file: String, in repository: FixtureRepository) -> String? {
         try? String(contentsOf: repository.url.appending(path: file), encoding: .utf8)
@@ -143,6 +155,89 @@ final class EditorTests: ArchipelUITestCase {
         presentation.radioButtons["Source"].click()
         assertExists(editor, "Source brings the text view back.")
         waitUntil("the source shows the file as it is now") { (self.editor.value as? String)?.contains("# Changed on Disk") == true }
+    }
+
+    func testAFileWithAVeryLongLineIsNotLoadedAsText() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        // One line over the editor's 50,000 characters, the shape of a minified bundle.
+        try repository.commit("bundle.min.txt", String(repeating: "x", count: 60_000) + "\n", message: "add a minified file")
+        try launch(with: repository.workspace())
+
+        openQuicklyWithoutText("bundle.min.txt")
+        assertExists(mainWindow.staticTexts["Lines Too Long"], "A file with a very long line should say why it is not shown.")
+        // Not clicked: it would open the file in whatever app this machine has for it.
+        XCTAssertTrue(mainWindow.buttons["Open in Default App"].exists, "The file should be offered to its default app instead.")
+        XCTAssertFalse(editor.exists, "The text should not be loaded into the editor.")
+    }
+
+    func testMarkdownPreviewIgnoresActiveContentAndAsksBeforeLeaving() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try repository.write("README.md", """
+            # Hardened Title
+
+            Plain paragraph text.
+
+            <script>document.body.innerHTML = "<h1>Scripted</h1>";</script>
+            <p onmouseover="document.body.innerHTML = 'Hovered'">Hover text</p>
+            <meta http-equiv="refresh" content="0; url=https://example.com/">
+            <form action="https://example.com/"><input name="q"><button>Send</button></form>
+
+            [custom link](x-archipel-test://go)
+
+            [outside link](../outside.txt)
+
+            """)
+        // Next to the repository, so the link leads out of the worktree to a file that exists.
+        try "outside\n".write(to: sandbox.root.appending(path: "outside.txt"), atomically: true, encoding: .utf8)
+        try launch(with: repository.workspace())
+
+        openQuickly("README.md")
+        mainWindow.radioGroups["editor.markdownPresentation"].radioButtons["Preview"].click()
+        let webView = mainWindow.webViews.element(boundBy: 0)
+        assertExists(webView.staticTexts["Hardened Title"], "The preview should render the heading.")
+        assertExists(webView.staticTexts["Hover text"], "Text around raw HTML should still render.")
+        XCTAssertFalse(webView.staticTexts["Scripted"].exists, "A script in the Markdown must not run.")
+        let tabCount = tabs.count
+
+        // No app is registered for this scheme, so the alert explains that instead of offering
+        // Open. Either way it has to name where the link goes.
+        webView.links["custom link"].click()
+        let destination = staticText(containing: "x-archipel-test://go")
+        assertExists(destination, "A link with another scheme should name its destination before anything opens.")
+        let cancel = dialogButton("Cancel")
+        if cancel.exists { cancel.click() } else { dialogButton("OK").click() }
+        assertGone(destination, "The alert should close.")
+
+        webView.links["outside link"].click()
+        let question = staticText(containing: "Open a file outside this worktree?")
+        assertExists(question, "A link out of the worktree should ask first.")
+        dialogButton("Cancel").click()
+        assertGone(question, "Cancel should close the question.")
+        XCTAssertFalse(tab("outside.txt").exists, "Cancel must not open the file.")
+        XCTAssertEqual(tabs.count, tabCount, "Neither link may open a tab without being agreed to.")
+
+        // The meta refresh and the form had all this time to take the preview somewhere else.
+        XCTAssertTrue(webView.staticTexts["Hardened Title"].exists, "The preview should still show the README.")
+        XCTAssertTrue(webView.staticTexts["Plain paragraph text."].exists, "The preview should still show the README.")
+    }
+
+    func testTabIndentsEverySelectedLineAsOneUndoStep() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        // No indented lines, so the editor indents with a tab.
+        try repository.commit("lines.txt", "alpha\nbeta\ngamma\n", message: "add lines")
+        try launch(with: repository.workspace())
+
+        openQuickly("lines.txt")
+        editor.click()
+        app.typeKey(.upArrow, modifierFlags: .command)
+        app.typeKey(.downArrow, modifierFlags: .shift)
+        app.typeKey(.downArrow, modifierFlags: .shift)
+        app.typeKey(.tab, modifierFlags: [])
+        waitUntil("the two selected lines are indented") { self.editor.value as? String == "\talpha\n\tbeta\ngamma\n" }
+
+        undo()
+        waitUntil("one undo takes the indent back") { self.editor.value as? String == "alpha\nbeta\ngamma\n" }
+        XCTAssertEqual(contents(of: "lines.txt", in: repository), "alpha\nbeta\ngamma\n", "Nothing was saved.")
     }
 
     func testCancelKeepsTheDirtyTabOpen() throws {

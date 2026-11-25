@@ -105,6 +105,28 @@ final class FileTreeModelTests {
         #expect(model.rootError == nil)
     }
 
+    @Test func aSubfolderThatCannotBeReadSaysSoUntilItCanAgain() async throws {
+        let readable = Mutex(false)
+        let root = URL(filePath: "/tree")
+        let secrets = root.appending(path: "secrets")
+        let model = FileTreeModel(root: root) { directory in
+            if directory.lastPathComponent == "secrets", !readable.withLock({ $0 }) { throw CocoaError(.fileReadNoPermission) }
+            return [FileNode(url: directory.appending(path: "file"), name: "file", isDirectory: false)]
+        }
+        await model.load(root)
+        await model.load(secrets)
+        // Nothing to list either way. The error is what tells this folder from an empty one.
+        #expect(model.nodes(in: secrets) == [])
+        #expect(model.listingError(in: secrets) != nil)
+        #expect(model.listingError(in: root) == nil)
+        #expect(model.rootError == nil)
+
+        readable.withLock { $0 = true }
+        await model.load(secrets)
+        #expect(model.listingError(in: secrets) == nil)
+        #expect(model.nodes(in: secrets)?.count == 1)
+    }
+
     @Test func refreshReloadsOnlyFoldersThatCanBeSeen() async throws {
         let version = Mutex(1)
         let root = URL(filePath: "/tree")
@@ -118,15 +140,10 @@ final class FileTreeModelTests {
             if directory.lastPathComponent == "Sources" { nodes.insert(FileNode(url: app, name: "App", isDirectory: true), at: 0) }
             return nodes
         }
-        // Spelled with trailing slashes, the way folder URLs come out of a real listing.
-        model.setExpanded(URL(filePath: "/tree/Sources/"), true)
-        model.setExpanded(URL(filePath: "/tree/Sources/App/"), true)
-        // Expanding loads the folder in a task of its own. Nothing else has listed these two yet,
-        // so once both show up those tasks are done and cannot land on top of a later refresh.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while model.nodes(in: sources) == nil || model.nodes(in: app) == nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        // Expanding reloads the folder in its own task. Await both so neither lands on top of the
+        // refresh below. Spelled with trailing slashes, the way folder URLs come out of a real listing.
+        await model.setExpanded(URL(filePath: "/tree/Sources/"), true)?.value
+        await model.setExpanded(URL(filePath: "/tree/Sources/App/"), true)?.value
         #expect(model.nodes(in: app)?.last?.name == "v1")
 
         version.withLock { $0 = 2 }

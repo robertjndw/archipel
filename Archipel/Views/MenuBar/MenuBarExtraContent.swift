@@ -4,7 +4,7 @@ import ArchipelCore
 import SwiftUI
 
 /// What the menu bar panel lists, in the order it lists it: sessions that need the user, then
-/// working ones, then finished ones nobody has looked at yet.
+/// working ones, then ones with a result or an exit nobody has looked at yet.
 struct MenuBarEntry: Identifiable, Equatable {
     enum Kind: Int { case needsYou, working, unread }
 
@@ -46,11 +46,13 @@ extension AppModel {
     }
 
     private static func menuBarKind(of activity: SessionActivity) -> MenuBarEntry.Kind? {
-        if activity.needsUser { return .needsYou }
-        switch activity.status {
-        case .working, .starting: return .working
-        case .finished where activity.unread: return .unread
-        default: return nil
+        // The classification the icon's counts are made of, so the panel never lists a session
+        // under a different heading than the one the icon colors it by.
+        switch activity.attention {
+        case .needsUser: .needsYou
+        case .working: .working
+        case .unread: .unread
+        case nil: nil
         }
     }
 
@@ -58,8 +60,8 @@ extension AppModel {
         switch activity.status {
         case .needsAttention(.permission): "Needs your approval"
         case .needsAttention(.question): "Asked you a question"
-        case .working, .starting: "Working"
-        default: "Finished"
+        // An unread session is not always a finished turn: it may have exited.
+        default: activity.showsProgress ? "Working" : activity.status.label
         }
     }
 }
@@ -90,10 +92,12 @@ struct MenuBarExtraLabel: View {
 
     /// Same colors as the sidebar's status glow.
     private static func color(for summary: AttentionSummary) -> NSColor? {
-        if summary.needsAttention > 0 { return .systemOrange }
-        if summary.working > 0 { return .systemBlue }
-        if summary.unread > 0 { return .systemGreen }
-        return nil
+        switch summary.dominant {
+        case .needsAttention: .systemOrange
+        case .working: .systemBlue
+        case .unread: .systemGreen
+        case nil: nil
+        }
     }
 
     private static var images: [NSColor?: NSImage] = [:]

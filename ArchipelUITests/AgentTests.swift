@@ -37,7 +37,7 @@ final class AgentTests: ArchipelUITestCase {
         // Quoted for the shell the agent runs it in; these paths need no quotes.
         let hook = try XCTUnwrap(stop["command"] as? String)
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: hook), "The agent was pointed at a hook helper that is not there: \(hook)")
-        let conversation = launch.arguments[try XCTUnwrap(launch.arguments.firstIndex(of: "--session-id")) + 1]
+        let conversation = try XCTUnwrap(launch.argument(after: "--session-id"))
 
         // Booting counts as working until the agent reports that it is up and waiting for a prompt.
         XCTAssertEqual(agentsStatus, "1 agent working")

@@ -65,6 +65,106 @@ public enum ClaudeTranscript {
         CodexSessionLogs.readTail(of: url, maxBytes: 1 << 20).flatMap { cacheState(inTail: $0) }
     }
 
+    /// Where the user stopped a turn. Claude runs no hook for that, but it does write a line of
+    /// its own to the transcript.
+    public struct Interruption: Equatable, Sendable {
+        /// The transcript entry's `uuid`, so the same interruption is not acted on twice.
+        public var id: String
+        public var date: Date
+
+        public init(id: String, date: Date) {
+            self.id = id
+            self.date = date
+        }
+    }
+
+    /// What Claude writes as the user's message when a turn is interrupted with Esc, and when a
+    /// permission prompt is dismissed. Matched whole: text that merely starts like one can come
+    /// from anywhere, such as a prompt quoting it.
+    static let interruptionMarkers: Set<String> = [
+        "[Request interrupted by user]",
+        "[Request interrupted by user for tool use]",
+    ]
+
+    /// The interruption the conversation ends on, or nil when its newest message is anything else:
+    /// then the turn was not interrupted, or the conversation has moved on since.
+    public static func interruption(inTail data: Data) -> Interruption? {
+        // Newest first. A read can start mid-line; that line fails to parse and is skipped.
+        for line in data.split(separator: UInt8(ascii: "\n")).reversed() {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                  let type = object["type"] as? String, type == "user" || type == "assistant",
+                  // Subagents write their own messages, and those say nothing about the main turn.
+                  object["isSidechain"] as? Bool != true,
+                  // Claude writes the body of a slash command or a skill as a user message of its
+                  // own, flagged as meta. That text comes from the repository, not from the user
+                  // stopping anything, and it is not where the conversation stands either.
+                  object["isMeta"] as? Bool != true
+            else { continue }
+            guard type == "user",
+                  let message = object["message"] as? [String: Any],
+                  isInterruption(message["content"]),
+                  let id = object["uuid"] as? String,
+                  let date = (object["timestamp"] as? String).flatMap({
+                      try? Date($0, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+                  })
+            else { return nil }
+            return Interruption(id: id, date: date)
+        }
+        return nil
+    }
+
+    /// Only the last few lines matter, and the interruption is a short one.
+    public static func interruption(at url: URL) -> Interruption? {
+        CodexSessionLogs.readTail(of: url, maxBytes: 256 << 10).flatMap { interruption(inTail: $0) }
+    }
+
+    /// What a transcript file looked like from outside at one look. Claude only ever appends, so
+    /// a file with the same stamp has the same end.
+    public struct Stamp: Equatable, Sendable {
+        public var size: UInt64
+        public var modified: Date
+
+        public init(size: UInt64, modified: Date) {
+            self.size = size
+            self.modified = modified
+        }
+
+        /// Nil when the file cannot be examined, as before Claude has written its first line.
+        public init?(of url: URL) {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let size = attributes[.size] as? UInt64,
+                  let modified = attributes[.modificationDate] as? Date
+            else { return nil }
+            self.init(size: size, modified: modified)
+        }
+    }
+
+    public enum Look: Equatable, Sendable {
+        /// Nothing was written since the look that gave the stamp, so what it found still holds.
+        case unchanged
+        /// The stamp is nil when the file could not be examined; the next look reads again then.
+        case read(Interruption?, stamp: Stamp?)
+    }
+
+    /// `interruption(at:)`, without reading a transcript that has not changed since `last`. A
+    /// working session is looked at every few seconds, and most looks find the file as it was.
+    public static func lookForInterruption(at url: URL, since last: Stamp?) -> Look {
+        // Taken before reading: a line written in between then shows as a change next time.
+        let stamp = Stamp(of: url)
+        if let stamp, stamp == last { return .unchanged }
+        return .read(interruption(at: url), stamp: stamp)
+    }
+
+    private static func isInterruption(_ content: Any?) -> Bool {
+        if let text = content as? String { return interruptionMarkers.contains(text) }
+        // The rejected tool's result can sit in the same message. Only the message's own text
+        // counts: what a tool printed is in a result block, whatever it says.
+        guard let blocks = content as? [[String: Any]] else { return false }
+        return blocks.contains { block in
+            block["type"] as? String == "text" && (block["text"] as? String).map(interruptionMarkers.contains) == true
+        }
+    }
+
     private struct Request {
         var id: String
         var date: Date?

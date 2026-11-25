@@ -104,6 +104,9 @@ let decodedKeys = [
     "event", "opencodeSessionID", "action",
 ]
 
+/// The parts of `tool_input` the app reads, as `ToolRequestSummary.detailKeys` in AgentKit lists them.
+let summarisedInputKeys = ["command", "file_path", "notebook_path", "path", "url", "query", "pattern"]
+
 /// The app drops anything over 4 MiB, and a permission request for a large Write carries the
 /// whole file in `tool_input`, so the one event the user has to answer would be the one that gets
 /// lost. A big payload is therefore cut down to what the app looks at. Small ones go through
@@ -125,6 +128,19 @@ func slimmed(_ payload: Any, rawSize: Int) -> Any {
     // Not a string, so the loop above skips it. Each entry is capped by Claude, and without the
     // list the app could not tell that the agent left something running.
     if let tasks = object["background_tasks"] as? [Any] { slim["background_tasks"] = tasks }
+    // What a permission request is for. Only the fields the app puts into its notification, cut
+    // short: a Write has the whole file next to its path.
+    if let input = object["tool_input"] as? [String: Any] {
+        var slimInput: [String: Any] = [:]
+        for key in summarisedInputKeys {
+            if let string = input[key] as? String {
+                slimInput[key] = String(string.prefix(2048))
+            } else if let words = input[key] as? [String] {
+                slimInput[key] = words.prefix(32).map { String($0.prefix(512)) }
+            }
+        }
+        if !slimInput.isEmpty { slim["tool_input"] = slimInput }
+    }
     if let running = object["running"] as? Bool { slim["running"] = running }
     // OpenCode's permission request lists what it wants to touch, which is what makes the
     // payload big here. A few entries are plenty for a notification.

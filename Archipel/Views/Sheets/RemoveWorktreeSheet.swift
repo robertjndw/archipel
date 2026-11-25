@@ -12,7 +12,8 @@ struct RemoveWorktreeSheet: View {
 
     @State private var deleteFolder = false
     @State private var deleteBranch = false
-    @State private var changeCount: Int?
+    /// Stands in for the count the store has, in previews of folders that do not exist.
+    @State private var previewChangeCount: Int?
     @State private var isWorking = false
     @State private var failure: String?
     @State private var outcome: AppModel.BranchRemoval?
@@ -23,6 +24,12 @@ struct RemoveWorktreeSheet: View {
     @State private var isUnavailable = false
     private var deletesFromDisk: Bool { deleteFolder && !isMissing }
     private var lostChanges: Int { deletesFromDisk ? changeCount ?? 0 : 0 }
+    /// The count the sidebar row shows, from the same state; `loadStatus()` brings it up to date.
+    private var changeCount: Int? {
+        if let previewChangeCount { return previewChangeCount }
+        guard !isMissing else { return nil }
+        return model.gitState(for: worktree.id)?.summary?.changedFiles
+    }
 
     /// Removing closes the worktree's sessions and tabs whether or not the folder is deleted.
     private var warnings: [String] {
@@ -32,6 +39,15 @@ struct RemoveWorktreeSheet: View {
             warnings.append(busy == 1
                 ? "An agent is working in this worktree. Removing it stops that agent."
                 : "\(busy) agents are working in this worktree. Removing it stops them.")
+        }
+        let idle = worktree.sessions.count - busy
+        if idle > 0 {
+            // "Other" only reads right after the line about the busy ones.
+            let other = busy > 0 ? "other " : ""
+            warnings.append(idle == 1 ? "Its \(other)session is closed too." : "Its \(idle) \(other)sessions are closed too.")
+        }
+        if deletesFromDisk, worktree.branch == nil {
+            warnings.append("This worktree is on a detached HEAD. Commits made here are not on any branch, and are only reachable through the reflog once the folder is deleted.")
         }
         let unsaved = model.unsavedDocuments(under: worktree.path).count
         if unsaved > 0 {
@@ -91,6 +107,7 @@ struct RemoveWorktreeSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .untinted()
+                        .disabled(isWorking)
                 }
                 ToolbarItem(placement: .confirmationAction) { confirmButton }
                 if isWorking {
@@ -98,6 +115,8 @@ struct RemoveWorktreeSheet: View {
                 }
             }
         }
+        // Closing mid-removal would lose the outcome, such as a branch that was kept.
+        .interactiveDismissDisabled(isWorking)
         .task { await loadStatus() }
     }
 
@@ -139,7 +158,7 @@ struct RemoveWorktreeSheet: View {
                 if !deleteFolder {
                     Text("The folder and branch stay on disk. You can add the worktree back from Add Worktree.")
                 } else if worktree.branch != nil {
-                    Text("A branch with commits that are not merged is kept.")
+                    Text("The branch is kept unless git finds it fully merged, which includes being pushed to its upstream.")
                 }
             }
         }
@@ -162,7 +181,7 @@ struct RemoveWorktreeSheet: View {
     private var note: String? {
         switch outcome {
         case .keptUnmerged(let branch):
-            "The worktree was removed. The branch \(branch) was kept because it has commits that are not merged."
+            "The worktree was removed. The branch \(branch) was kept because it has commits that are not merged or pushed."
         case .failed(let branch, let message):
             "The worktree was removed, but the branch \(branch) could not be deleted: \(message)"
         default:
@@ -173,8 +192,8 @@ struct RemoveWorktreeSheet: View {
     private func loadStatus() async {
         isUnavailable = isMissing && !AppModel.isDeletedWorktree(worktree.path)
         // Without git there is nothing to count, and asking would bring up the system's offer to install it.
-        guard !isMissing, model.isGitAvailable, let status = try? await model.git.status(in: worktree.path) else { return }
-        changeCount = Set((status.staged + status.unstaged).map(\.path)).count
+        guard !isMissing, model.isGitAvailable else { return }
+        await model.gitState(for: worktree.id)?.refresh()
     }
 
     private func remove() async {
@@ -211,7 +230,7 @@ extension RemoveWorktreeSheet {
         self.worktree = worktree
         _deleteFolder = State(initialValue: deleteFolder)
         _deleteBranch = State(initialValue: deleteBranch)
-        _changeCount = State(initialValue: changeCount)
+        _previewChangeCount = State(initialValue: changeCount)
         _outcome = State(initialValue: outcome)
     }
 }

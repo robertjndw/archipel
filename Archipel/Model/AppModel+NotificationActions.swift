@@ -26,9 +26,11 @@ extension AppModel {
             sessionID: session.id,
             title: title,
             subtitle: subtitle,
-            body: activity.lastMessage,
+            // A request without a summary must not borrow the text of whatever came before it.
+            body: activity.pendingRequest.map(\.summary) ?? activity.lastMessage,
             playsSound: settings.playsNotificationSound,
             status: activity.status,
+            request: activity.pendingRequest,
             category: notificationCategory(for: session, activity: activity)
         )
     }
@@ -38,6 +40,9 @@ extension AppModel {
     private func notificationCategory(for session: Session, activity: SessionActivity) -> AttentionNotifier.Category? {
         let agent = effectiveAgent(for: session)
         guard agent.acceptsPrompts else { return nil }
+        // A banner that does not show all of what is asked, or cannot say which of several
+        // prompts the terminal is on, only opens the session.
+        if activity.needsUser, !activity.canAnswerUnseen { return nil }
         switch activity.status {
         case .needsAttention(.permission):
             if let chat = chats[session.id] {
@@ -46,7 +51,7 @@ extension AppModel {
             // An agent whose prompt we cannot read gets a notification that only opens the session.
             guard agent.adapter.capabilities.answersApprovalsInTerminal else { return nil }
             // Claude asks its multiple choice questions through the permission hook; they have no Yes and No.
-            return activity.lastMessage == "AskUserQuestion" ? nil : .permission
+            return activity.lastMessage?.hasPrefix("AskUserQuestion") == true ? nil : .permission
         case .needsAttention(.question), .finished:
             return .reply
         default:
@@ -61,9 +66,14 @@ extension AppModel {
     /// sees what is really there rather than having a keypress land on a different prompt.
     func answer(_ response: AttentionNotifier.Response) {
         let id = response.sessionID
-        let status = activity(for: id).status
+        let current = activity(for: id)
+        let status = current.status
         guard let session = workspace.session(id: id), effectiveAgent(for: session).acceptsPrompts,
-              notifier.isCurrent(response), AttentionNotifier.statusKey(status) == response.status
+              notifier.isCurrent(response), AttentionNotifier.statusKey(status) == response.status,
+              // The banner named one request. Another may have taken its place without the status
+              // changing, and the key would then answer something the user never read.
+              notifier.request(answeredBy: response) == current.pendingRequest,
+              !current.needsUser || current.canAnswerUnseen
         else { return bringForward(id) }
         if let chat = chats[id] { return answer(response, in: chat, status: status) }
         guard let terminal = terminals[id],
@@ -170,6 +180,7 @@ extension AppModel {
             title: "While you were busy",
             body: summary.text,
             sessionID: target,
+            covering: summary.covered,
             playsSound: settings.playsNotificationSound
         )
     }

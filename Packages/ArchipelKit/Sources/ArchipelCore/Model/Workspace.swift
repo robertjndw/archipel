@@ -174,6 +174,21 @@ public struct Workspace: Codable, Equatable, Sendable {
         islands.insert(island, at: min(max(index, 0), islands.count))
     }
 
+    /// Moves the island `offset` places along the switcher, stopping at either end.
+    public mutating func moveIsland(id: Island.ID, by offset: Int) {
+        guard let i = islands.firstIndex(where: { $0.id == id }) else { return }
+        moveIsland(id: id, to: i + offset)
+    }
+
+    /// Puts the island right before `target`, or last when `target` is nil or unknown, which is how
+    /// a drag in the switcher says where it ended.
+    public mutating func moveIsland(id: Island.ID, before target: Island.ID?) {
+        guard id != target, let i = islands.firstIndex(where: { $0.id == id }) else { return }
+        let island = islands.remove(at: i)
+        let index = target.flatMap { target in islands.firstIndex { $0.id == target } } ?? islands.count
+        islands.insert(island, at: index)
+    }
+
     // MARK: Projects
 
     @discardableResult
@@ -192,9 +207,15 @@ public struct Workspace: Codable, Equatable, Sendable {
         updateProject(id: id) { $0.name = name }
     }
 
+    /// An island that remembered one of the project's worktrees moves on to the project that takes
+    /// its place, as `moveProject` does, instead of showing nothing while it still has projects.
     public mutating func removeProject(id: Project.ID) {
         guard let loc = locate(projectID: id) else { return }
-        islands[loc.island].projects.remove(at: loc.project)
+        let islandID = islands[loc.island].id
+        let removed = islands[loc.island].projects.remove(at: loc.project)
+        if let selected = selectedWorktreeIDByIsland[islandID], removed.worktrees.contains(where: { $0.id == selected }) {
+            selectedWorktreeIDByIsland[islandID] = Self.landing(in: islands[loc.island].projects, near: loc.project)
+        }
         pruneSelections()
     }
 
@@ -216,6 +237,62 @@ public struct Workspace: Codable, Equatable, Sendable {
         let count = islands[dest].projects.count
         islands[dest].projects.insert(project, at: min(max(index ?? count, 0), count))
         pruneSelections()
+    }
+
+    /// Moves the project `offset` places within its island, stopping at either end.
+    public mutating func moveProject(id: Project.ID, by offset: Int) {
+        guard let loc = locate(projectID: id) else { return }
+        moveProject(id: id, to: islands[loc.island].id, at: loc.project + offset)
+    }
+
+    /// Points a worktree at the folder it was moved to. Moving the primary checkout moves the
+    /// repository, so the project folder follows, and so does every path of the project that sat
+    /// inside it (worktrees kept in the repository, a worktrees folder in it, dismissed paths).
+    /// Returns the worktree paths that changed, old and new; empty when the worktree is unknown.
+    @discardableResult
+    public mutating func relocateWorktree(id: Worktree.ID, to folder: URL) -> [(old: URL, new: URL)] {
+        guard let loc = locate(worktreeID: id) else { return [] }
+        let worktree = islands[loc.island].projects[loc.project].worktrees[loc.worktree]
+        guard worktree.isMain else {
+            islands[loc.island].projects[loc.project].worktrees[loc.worktree].path = folder
+            return [(worktree.path, folder)]
+        }
+        let oldRoot = worktree.path
+        func moved(_ url: URL) -> URL? { Self.rebase(url, from: oldRoot, to: folder) }
+        var changes: [(old: URL, new: URL)] = []
+        updateProject(id: islands[loc.island].projects[loc.project].id) { project in
+            project.folderURL = moved(project.folderURL) ?? project.folderURL
+            for i in project.worktrees.indices {
+                // The primary checkout is moved by definition, even when the project folder was
+                // spelled differently from it.
+                let old = project.worktrees[i].path
+                guard let new = project.worktrees[i].isMain ? folder : moved(old) else { continue }
+                project.worktrees[i].path = new
+                changes.append((old, new))
+            }
+            if let directory = project.worktreesDirectory, let new = moved(directory) { project.worktreesDirectory = new }
+            project.dismissedWorktreePaths = Set(project.dismissedWorktreePaths.map { path in
+                moved(URL(filePath: path, directoryHint: .isDirectory)).map(Project.worktreeKey) ?? path
+            })
+        }
+        return changes
+    }
+
+    /// `url` moved from under `oldRoot` to the same place under `newRoot`; nil when it was not under it.
+    static func rebase(_ url: URL, from oldRoot: URL, to newRoot: URL) -> URL? {
+        let path = Project.worktreeKey(url), root = Project.worktreeKey(oldRoot)
+        if path == root { return newRoot }
+        guard path.hasPrefix(root == "/" ? root : root + "/") else { return nil }
+        let relative = path.dropFirst(root.count).drop { $0 == "/" }
+        return newRoot.appending(path: String(relative), directoryHint: .isDirectory)
+    }
+
+    /// What an island shows once the project at `index` is gone: the main checkout of the project
+    /// now at that place, or of the last one.
+    private static func landing(in projects: [Project], near index: Int) -> Worktree.ID? {
+        guard !projects.isEmpty else { return nil }
+        let neighbour = projects[min(index, projects.count - 1)]
+        return (neighbour.worktrees.first(where: \.isMain) ?? neighbour.worktrees.first)?.id
     }
 
     // MARK: Worktrees
@@ -325,6 +402,12 @@ public struct Workspace: Codable, Equatable, Sendable {
         edit(worktreeID) { $0.focusedPaneID = id }
     }
 
+    /// Remembers where the dividers were left: one share of the width per pane, in pane order.
+    /// They need not add up to 1. Ignored when the count does not match the worktree's panes.
+    public mutating func setPaneWidthShares(_ shares: [Double], in worktreeID: Worktree.ID) {
+        edit(worktreeID) { $0.setPaneWidthShares(shares) }
+    }
+
     /// Reorders within a pane or moves across panes of one worktree; `index` is the position in the
     /// destination after the tab has been taken out. Panes of different worktrees are a no-op.
     public mutating func moveTab(id: Tab.ID, toPane paneID: Pane.ID, at index: Int? = nil) {
@@ -385,8 +468,14 @@ public struct Workspace: Codable, Equatable, Sendable {
     @discardableResult
     mutating func edit<T>(_ id: Worktree.ID, _ body: (inout Worktree) -> T) -> T? {
         guard let loc = locate(worktreeID: id) else { return nil }
+        let panesBefore = islands[loc.island].projects[loc.project].worktrees[loc.worktree].panes.map(\.id)
         let result = body(&islands[loc.island].projects[loc.project].worktrees[loc.worktree])
         islands[loc.island].projects[loc.project].worktrees[loc.worktree].normalize()
+        // The widths were chosen for the panes there were. A split or a closed pane starts over
+        // with equal ones, as a new split always has.
+        if islands[loc.island].projects[loc.project].worktrees[loc.worktree].panes.map(\.id) != panesBefore {
+            islands[loc.island].projects[loc.project].worktrees[loc.worktree].resetPaneWidths()
+        }
         return result
     }
 

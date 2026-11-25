@@ -6,7 +6,9 @@ import SwiftUI
 /// Unmounted sessions stop rendering but their processes keep running.
 public struct TerminalView: NSViewRepresentable {
     public let session: TerminalSession
-    /// Make the terminal first responder once it lands in a window.
+    /// Make the terminal first responder once it lands in a window, and again whenever this turns
+    /// true while it is there, unless a text field is being edited in the window. A host showing
+    /// several terminals sets it for one of them.
     public var focusOnMount: Bool
 
     public init(session: TerminalSession, focusOnMount: Bool = true) {
@@ -36,13 +38,20 @@ private final class TerminalHostView: NSView {
     private var focusOnMount = true
 
     func mount(_ session: TerminalSession, focusOnMount: Bool) {
+        let gainedFocus = focusOnMount && !self.focusOnMount
         self.focusOnMount = focusOnMount
         if self.session !== session {
             unmount()
             self.session = session
         }
         let view = session.view
-        guard view.superview !== self else { return }
+        guard view.superview !== self else {
+            // The host's focus came to a terminal that is on screen already: its pane was closed
+            // from under the keyboard, or a split was undone. Nothing mounts then, and without
+            // this the keys would go nowhere until a click.
+            if gainedFocus, window != nil { focusSoon() }
+            return
+        }
         view.removeFromSuperview()
         view.frame = bounds
         view.autoresizingMask = [.width, .height]
@@ -69,9 +78,22 @@ private final class TerminalHostView: NSView {
         // responder setup; focusing synchronously can be overridden.
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, let session = self.session, session.view.superview === self else { return }
+                guard let self, let session = self.session, session.view.superview === self,
+                      let window = self.window, !Self.keyboardIsInUse(in: window)
+                else { return }
                 session.focus()
             }
         }
+    }
+
+    /// A session can land in the window long after the user asked for it (it had to launch first),
+    /// and by then they may be typing into a text field of the same window. Taking the keyboard
+    /// would send the rest of that typing into the terminal. The field editor is only first
+    /// responder while a field is being edited.
+    ///
+    /// A sheet needs no such care: it is a window of its own, and becoming first responder
+    /// underneath it is what gives the terminal the keys once the sheet is gone.
+    private static func keyboardIsInUse(in window: NSWindow) -> Bool {
+        (window.firstResponder as? NSText)?.isFieldEditor == true
     }
 }

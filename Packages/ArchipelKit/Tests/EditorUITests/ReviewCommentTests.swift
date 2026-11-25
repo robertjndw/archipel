@@ -61,6 +61,82 @@ struct ReviewCommentStoreTests {
         #expect(store.comments(in: URL(filePath: "/repo/worktree2")).isEmpty)
         #expect(ReviewCommentStore.key(URL(filePath: "/")) == "/")
     }
+
+    @Test func aSentBatchIsNoLongerPendingButCanBeRestored() {
+        let first = comment("a.swift", 1)
+        let second = comment("b.swift", 2)
+        store.add(first, in: root)
+        store.add(second, in: root)
+        store.markSent(in: root)
+        #expect(store.comments(in: root).isEmpty)
+        #expect(store.sentComments(in: root).map(\.id) == [first.id, second.id])
+
+        store.restoreSent(in: root)
+        #expect(store.comments(in: root).map(\.id) == [first.id, second.id])
+        #expect(store.sentComments(in: root).isEmpty)
+    }
+
+    @Test func aSentBatchLastsUntilTheNextSendOrANewComment() {
+        let other = URL(filePath: "/repo/other")
+        store.add(comment("a.swift", 1), in: root)
+        store.add(comment("a.swift", 1), in: other)
+        store.markSent(in: root)
+        store.markSent(in: other)
+
+        let next = comment("a.swift", 5)
+        store.add(next, in: root)
+        #expect(store.sentComments(in: root).isEmpty)
+        store.restoreSent(in: root)
+        #expect(store.comments(in: root).map(\.id) == [next.id])
+
+        // Sending again replaces the batch; nothing pending leaves it as it was.
+        store.markSent(in: root)
+        store.markSent(in: root)
+        #expect(store.sentComments(in: root).map(\.id) == [next.id])
+        #expect(store.sentComments(in: other).count == 1)
+
+        store.retain(only: [root])
+        #expect(store.sentComments(in: other).isEmpty)
+        #expect(store.sentComments(in: root).count == 1)
+    }
+
+    @Test func aRelocatedWorktreeTakesItsPendingAndSentCommentsAlong() {
+        let sibling = URL(filePath: "/repo/sibling")
+        let movedRoot = URL(filePath: "/elsewhere/worktree")
+        let movedSibling = URL(filePath: "/elsewhere/sibling")
+        let sent = comment("a.swift", 1)
+        store.add(sent, in: root)
+        store.markSent(in: root)
+        let pending = comment("b.swift", 2)
+        store.add(pending, in: sibling)
+
+        // A main worktree moving takes its linked ones along, so one relocation moves several roots.
+        store.move(from: root, to: movedRoot)
+        store.move(from: sibling, to: movedSibling)
+        // The app then drops every folder that no longer holds a worktree.
+        store.retain(only: [movedRoot, movedSibling])
+
+        #expect(store.sentComments(in: root).isEmpty)
+        #expect(store.comments(in: sibling).isEmpty)
+        #expect(store.comments(in: movedSibling).map(\.id) == [pending.id])
+        #expect(store.sentComments(in: movedRoot).map(\.id) == [sent.id])
+        // Still restorable, for when the paste never reached the agent.
+        store.restoreSent(in: movedRoot)
+        #expect(store.comments(in: movedRoot).map(\.id) == [sent.id])
+    }
+
+    @Test func movingCommentsOntoAFolderWithCommentsMergesThem() {
+        let target = URL(filePath: "/elsewhere/worktree")
+        let a = comment("a.swift", 1)
+        let c = comment("c.swift", 1)
+        let b = comment("b.swift", 1)
+        store.add(a, in: root)
+        store.add(c, in: root)
+        store.add(b, in: target)
+        store.move(from: root, to: target)
+        #expect(store.comments(in: target).map(\.id) == [a.id, b.id, c.id])
+        #expect(store.comments(in: root).isEmpty)
+    }
 }
 
 @MainActor

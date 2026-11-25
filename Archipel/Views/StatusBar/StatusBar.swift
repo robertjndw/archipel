@@ -224,7 +224,8 @@ private struct UsageDetails: View {
                         .buttonStyle(.link)
                 } else {
                     ForEach(readings, id: \.provider) { reading in
-                        ProviderDetails(reading: reading, now: context.date, fill: settings.usageBarFill)
+                        // Percentages have no fill setting, so the popover reads like the item that opened it.
+                        ProviderDetails(reading: reading, now: context.date, fill: settings.usageDisplay == .bars ? settings.usageBarFill : .used)
                         if reading.provider != readings.last?.provider { Divider() }
                     }
                 }
@@ -328,6 +329,8 @@ private struct WindowDetails: View {
     }
 
     private var pace: (text: String, runsOut: Bool)? {
+        // Projecting from a full window would say it ran out "0 seconds ago". The reset line above says when it is back.
+        if window.usedPercent(at: now) >= 100 { return ("The limit is reached until it resets", true) }
         if let exhaustion = window.projectedExhaustion(at: now) {
             let relative = exhaustion.formatted(.relative(presentation: .numeric, unitsStyle: .wide))
             return ("At this pace it runs out \(relative), before the reset", true)

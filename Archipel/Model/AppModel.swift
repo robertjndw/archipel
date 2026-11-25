@@ -96,6 +96,8 @@ final class AppModel {
     var tabAwaitingCloseDecision: Tab?
     /// A close or restart the user asked for while the session was working or waiting on them.
     var sessionAwaitingInterruptDecision: SessionInterruption?
+    /// See AppModel+TabClosing.
+    @ObservationIgnored var queuedTabCloses: QueuedTabCloses?
     /// Diff review comments of every worktree. Kept here for the same reason as `documents`.
     let reviewComments: ReviewCommentStore
     /// The project whose settings sheet is open. Lives here because both the sidebar and Run open it.
@@ -124,9 +126,11 @@ final class AppModel {
     /// when the selected island or worktree changes.
     var sidebarSelection: Set<Worktree.ID> = []
     var isCreatingIsland = false
-    /// The push, pull or fetch running per worktree for the Project menu and the palette, which
-    /// offer one at a time. See AppModel+Sync.
-    var syncsInFlight: [Worktree.ID: SyncAction] = [:]
+    /// What the palette asked to edit, delete or remove. The sidebar and the switcher keep the same
+    /// for their context menus in state of their own.
+    var islandBeingEdited: Island?
+    var islandAwaitingDeletion: Island?
+    var projectAwaitingRemoval: Project?
     let settings: AppSettings
     let devServers = DevServerMonitor()
     let resources = ResourceMonitor()
@@ -155,6 +159,10 @@ final class AppModel {
     /// Reopens the main window when none exists. Set by the app, which is the only place that can
     /// reach the scene's `openWindow`; see `showMainWindow()`.
     @ObservationIgnored var openMainWindow: (() -> Void)?
+    /// Whether the command palette or the tab switcher is up. They are drawn over the panes in the
+    /// main window, so a click on one lands inside a pane's frame without being meant for it. Set
+    /// by the app, which owns their models.
+    @ObservationIgnored var isOverlayPresented: (() -> Bool)?
 
     /// The script a session runs instead of its agent. Not persisted, unlike `Session.script`: after
     /// a relaunch a script tab is a plain shell until the user runs the script again, so a setup
@@ -167,14 +175,13 @@ final class AppModel {
     var runtimeAgents: [Session.ID: RuntimeAgentState] = [:]
     @ObservationIgnored var progressTurns: [Session.ID: ProgressTurn] = [:]
     @ObservationIgnored var progressChecks: [Session.ID: Task<Void, Never>] = [:]
+    /// See AppModel+Interruptions.
+    @ObservationIgnored var interruptionWatches: [Session.ID: InterruptionWatch] = [:]
     @ObservationIgnored var foregroundChecks: [Session.ID: Task<Void, Never>] = [:]
 
-    /// Transient repository state for the sidebar rows of the selected island.
-    var gitSummaries: [Worktree.ID: GitSummary] = [:]
-    /// Worktrees without an upstream whose repository has a remote all the same, which is what
-    /// tells a branch that can be published from one that has nowhere to go.
-    var worktreesWithRemote: Set<Worktree.ID> = []
-    var pullRequests: [Worktree.ID: PullRequestLookup] = [:]
+    /// What git says about each worktree, and the push, pull, fetch or commit running in it. The one
+    /// place the sidebar, the menus, the sheets and the Changes tab read it from; see AppModel+GitStatus.
+    @ObservationIgnored lazy var gitStates = makeGitStates()
     /// Everything `git worktree list` reported per project at the last refresh. Suggestions are
     /// derived from it on read, so adding or dismissing one updates the sidebar without a git call.
     var gitWorktrees: [Project.ID: [GitWorktreeEntry]] = [:]
@@ -182,6 +189,8 @@ final class AppModel {
     var missingWorktrees: Set<Worktree.ID> = []
     @ObservationIgnored var worktreeDiscoveryGeneration = 0
     @ObservationIgnored var worktreeDiscoveryInFlight = false
+    @ObservationIgnored var missingFolderCheckInFlight = false
+    @ObservationIgnored var missingFolderCheckRequested = false
     /// Counts the branch switches made in the app, per worktree. A branch name git reported before
     /// a switch must not be written after it; see `refreshBranches()`.
     @ObservationIgnored var branchGenerations: [Worktree.ID: Int] = [:]
@@ -197,6 +206,9 @@ final class AppModel {
     /// The Ghostty colors the panes draw around terminals; nil without a terminal engine.
     private(set) var terminalColors: TerminalColors?
     private let hookServer: HookServer
+    /// False when the hook server could not start. Another Archipel may be listening on the socket
+    /// then, and it would take this one's hooks for its own sessions.
+    private var ownsHookSocket = false
     /// Claude hooks in the user's own settings, for Claude started by hand in a shell tab.
     let claudeUserHooks: ClaudeUserHooksController
     let notifier = AttentionNotifier()
@@ -217,6 +229,7 @@ final class AppModel {
     @ObservationIgnored private var loginXDGConfigHome: String?
     /// Sessions whose agent has reported through its hooks since it last started.
     private(set) var hookedSessions = HookedSessions()
+    @ObservationIgnored private var codexHookTrust = CodexHookTrust()
     private(set) var loginPATH: Task<String, Never>
     private var eventTasks: [Session.ID: Task<Void, Never>] = [:]
     private var saveTask: Task<Void, Never>?
@@ -271,7 +284,15 @@ final class AppModel {
             socketURL: hookServer.socketURL,
             settings: settings
         )
-        loginPATH = Task.detached { await LoginEnvironment.resolvePATH() }
+        let loginPATH = Task.detached { await LoginEnvironment.resolvePATH() }
+        self.loginPATH = loginPATH
+        // git starts hooks, git-lfs and gpg, which a Dock launch does not find any more than `gh`.
+        GitClient.resolveSearchPATH { await loginPATH.value }
+        #if UITESTS
+        // The tests discard real files. Kept inside the throwaway support folder, they go away
+        // with it instead of piling up in the Trash of whoever runs the tests.
+        GitClient.discardInto(Self.supportDirectory.appending(path: "Trash", directoryHint: .isDirectory))
+        #endif
         chatAgents = ChatAgentSources(supportDirectory: support)
         // A chat agent is a child process on the other end of a pipe. One that dies while the app
         // writes to it would otherwise take the whole app down with SIGPIPE instead of failing the
@@ -312,6 +333,7 @@ final class AppModel {
         }
         do {
             try hookServer.start()
+            ownsHookSocket = true
         } catch {
             problems.append("Agent status reporting could not start (\(error)), so the sidebar cannot show whether agents are working, waiting or done.")
         }
@@ -351,7 +373,8 @@ final class AppModel {
         loadProjectIcons()
         refreshCodexUsage()
         watchSessionInteraction()
-        devServers.start { [weak self] in self?.terminals ?? [:] }
+        devServers.start(terminals: { [weak self] in self?.terminals ?? [:] },
+                           processIDs: { [weak self] in self?.resources.processIDs ?? [:] })
         resources.onScan = { [weak self] in self?.reconcileDetectedAgents() }
         resources.start { [weak self] in self?.resourceSources() ?? [:] }
         terminalApp?.acceptsDroppedText = { [weak self] in !(self?.isInternalDragPayload($0) ?? false) }
@@ -363,7 +386,7 @@ final class AppModel {
     #if DEBUG
     /// For SwiftUI previews. Starts no terminal engine, hook socket, notifier, monitors or git
     /// refreshes and never saves, so a preview can't touch the real workspace file or take the socket
-    /// from a running Archipel. Set `gitSummaries`, `usage` etc. on the result when a preview needs them.
+    /// from a running Archipel. Use `showGitForPreview`, set `usage` etc. on the result when a preview needs them.
     init(
         preview workspace: Workspace,
         activities: [Session.ID: SessionActivity] = [:],
@@ -603,8 +626,8 @@ final class AppModel {
         if !isMainWindowVisible { stopGitStatusTimer() }
     }
 
-    private func refreshInstalledEditors() {
-        let installed = ExternalEditor.installed()
+    func refreshInstalledEditors() {
+        let installed = ExternalEditor.installed(including: settings.externalEditorBundleID)
         if installed != installedEditors { installedEditors = installed }
     }
 
@@ -673,8 +696,12 @@ final class AppModel {
         if previousPlace != (selectedIsland?.id, selectedWorktree?.id) {
             sidebarSelection = []
             refreshGitStatus(lookingUpPullRequests: true)
+        } else {
+            pruneSidebarSelection()
         }
         let current = Set(visibleSessionIDs)
+        // Before the new terminal mounts and looks whether it may take the keyboard.
+        if !current.subtracting(previous).isEmpty { endTextFieldEditing() }
         for id in previous.subtracting(current) { terminals[id]?.setOccluded(true) }
         for id in current {
             ensureRunning(id)
@@ -714,7 +741,10 @@ final class AppModel {
         // Observers fire on every write, equal or not, and this runs on every selection change.
         if activities[id]?.unread == true { activities[id]?.markViewed() }
         notifier.clear(sessionID: id)
-        refreshDockBadge()
+    }
+
+    func hasUnread(in worktree: Worktree) -> Bool {
+        worktree.sessions.contains { activities[$0.id]?.unread == true }
     }
 
     /// Clears the unread state of a worktree's sessions without opening them. Pending requests
@@ -724,7 +754,8 @@ final class AppModel {
     }
 
     func isBeingViewed(_ id: Session.ID) -> Bool {
-        NSApp.isActive && visibleSessionIDs.contains(id)
+        // Archipel can be active with only Settings in front and the main window closed or in the Dock.
+        NSApp.isActive && isMainWindowVisible && visibleSessionIDs.contains(id)
     }
 
     // MARK: Islands
@@ -1082,11 +1113,13 @@ final class AppModel {
             for url in unsavedInside.union(unsavedDocuments(under: worktree.path)) { documents.forget(url) }
         }
         let removal = workspace.removal(ofWorktree: id)
+        // The status poll drops comments of worktrees that are gone; undo has to bring them back.
+        let comments = reviewComments.comments(in: worktree.path)
         // A folder that stays on disk would be suggested again right away.
         changingSelection { $0.removeWorktree(id: id, dismiss: !deleteFolder) }
         missingWorktrees.remove(id)
         refreshWorktreeDiscovery()
-        if !deleteFolder, !isGone, let removal { registerRestore(removal) }
+        if !deleteFolder, !isGone, let removal { registerRestore(removal, comments: comments) }
 
         guard deleteFolder, let branch = deleteBranch else { return .notRequested }
         // The user confirmed the name shown in the sheet. If the worktree switched branches since,
@@ -1164,7 +1197,7 @@ final class AppModel {
         }
         pulsesAwaitingActivation = pulsesAwaitingActivation.filter { worktrees.contains($0.key) }
         branchGenerations = branchGenerations.filter { worktrees.contains($0.key) }
-        gitRefresh.diffStatCheckedAt = gitRefresh.diffStatCheckedAt.filter { worktrees.contains($0.key) }
+        gitStates.forget(except: worktrees)
         let projects = Set(workspace.islands.lazy.flatMap(\.projects).map(\.id))
         if !projectPulses.keys.allSatisfy(projects.contains) {
             projectPulses = projectPulses.filter { projects.contains($0.key) }
@@ -1197,10 +1230,10 @@ final class AppModel {
     ) {
         guard let worktree = workspace.worktree(id: worktreeID) else { return }
         // Numbered per agent, not per preset, so "Claude Code (Opus) 2" means the second Claude tab.
-        let count = worktree.sessions.count { $0.agent.rawValue == agent.id }
+        let siblings = worktree.sessions.filter { $0.agent.rawValue == agent.id }
         let baseTitle = preset.map { "\(agent.displayName) (\($0.title))" } ?? agent.displayName
         let session = Session(
-            title: count == 0 ? baseTitle : "\(baseTitle) \(count + 1)",
+            title: Session.numberedTitle(baseTitle, among: siblings),
             agent: AgentKind(rawValue: agent.id),
             arguments: preset?.arguments,
             interface: .forNewSession(
@@ -1248,9 +1281,12 @@ final class AppModel {
         switch link {
         case .web(let url):
             openWebLink(url, alternate: alternate, in: worktreeID)
-        case .file(let url) where !isDirectory(url):
+        case .file(let url, let position) where !isDirectory(url):
             let destination = alternate ? settings.fileLinkDestination.other : settings.fileLinkDestination
             if destination == .archipel {
+                // Asked before opening: an editor already showing the file answers at once, a new
+                // one picks the request up when its text view is built.
+                if let position { EditorReveal.request(url, line: position.line, column: position.column) }
                 open(.file(url), in: worktreeID, preview: true)
             } else {
                 link.openExternally()
@@ -1299,6 +1335,8 @@ final class AppModel {
     /// Closing a session tab ends the session. A file with unsaved edits or a session in the
     /// middle of something is not closed here; the user is asked first.
     func close(tab id: Tab.ID) {
+        // Whatever was still to close after an earlier question went with that question.
+        queuedTabCloses = nil
         guard let tab = workspace.tab(id: id) else { return }
         // Only the last tab of a file takes its buffer along. While another tab still shows it the
         // edits are not going anywhere, so there is nothing to ask.
@@ -1319,6 +1357,8 @@ final class AppModel {
             do {
                 try documents.save(url)
             } catch {
+                // The tabs queued behind this one stay open with it.
+                queuedTabCloses = nil
                 problem = "The file could not be saved, so its tab was kept open. \(error.localizedDescription)"
                 return
             }
@@ -1328,6 +1368,7 @@ final class AppModel {
             documents.discardChanges(url)
         }
         closeNow(tab)
+        continueQueuedTabCloses(after: tab.id)
     }
 
     private func isLastTab(_ tab: Tab, showing url: URL) -> Bool {
@@ -1342,8 +1383,12 @@ final class AppModel {
     /// The file's buffer is released by `mutate` once no tab shows the file any more.
     private func closeNow(_ tab: Tab) {
         let closed = workspace.closedTab(id: tab.id)
+        let worktree = selectedWorktree?.id
+        let pane = selectedWorktree?.focusedPaneID
         changingSelection { $0.closeTab(id: tab.id) }
         if let closed { registerReopen(closed) }
+        // The last tab of the focused pane takes the pane along, and the keyboard was in it.
+        if worktree == selectedWorktree?.id, pane != selectedWorktree?.focusedPaneID { focusFocusedTabIfKeyboardIsLost() }
     }
 
     func split(tab id: Tab.ID) {
@@ -1386,16 +1431,24 @@ final class AppModel {
     /// Stopping a session that is working or waiting on an answer throws that turn away, and one
     /// with background tasks takes those down with it, so those ask first. Nil for idle, finished
     /// and exited sessions, which have nothing in flight.
+    ///
+    /// No hook reports what runs in a shell tab, or a turn of an agent whose hooks are not active,
+    /// so for those the terminal is asked; see `foregroundCommand(of:)`. A shell at its prompt
+    /// still closes without a question.
     func interruption(of id: Session.ID, by action: SessionInterruption.Action) -> SessionInterruption? {
-        guard let session = workspace.session(id: id), let activity = activities[id],
-              activity.hasWorkInFlight
-        else { return nil }
-        let state = if activity.needsUser {
-            "waiting for you"
+        guard let session = workspace.session(id: id) else { return nil }
+        let activity = activities[id] ?? SessionActivity()
+        let state: String
+        if activity.needsUser {
+            state = "it is waiting for you"
         } else if activity.isBusy {
-            "working"
+            state = "it is working"
+        } else if activity.backgroundTasks > 0 {
+            state = activity.backgroundTasks == 1 ? "it is running a background task" : "it is running background tasks"
+        } else if let command = foregroundCommand(of: id) {
+            state = "\(command) is running"
         } else {
-            activity.backgroundTasks == 1 ? "running a background task" : "running background tasks"
+            return nil
         }
         // A script or a shell has no conversation to lose or to come back to.
         let agent = effectiveAgent(for: session)
@@ -1404,7 +1457,7 @@ final class AppModel {
         let message: String
         switch action {
         case .close:
-            title = "Close \"\(session.displayTitle)\" while it is \(state)?"
+            title = "Close \"\(session.displayTitle)\" while \(state)?"
             message = if agent.isDetected {
                 // Archipel never resumes a hand-started Claude, so closing loses no conversation.
                 "\(agent.adapter.displayName) will be stopped."
@@ -1414,9 +1467,12 @@ final class AppModel {
                 "The running command will be stopped."
             }
         case .restart(let fresh):
-            title = "Restart \"\(session.displayTitle)\" while it is \(state)?"
+            title = "Restart \"\(session.displayTitle)\" while \(state)?"
             message = if agent.isDetected {
                 "\(agent.adapter.displayName) will be stopped and the shell starts again."
+            } else if isPlainShell(session) {
+                // Restarting a shell brings back its prompt, not what was typed at it.
+                "The running command will be stopped and the shell starts again."
             } else if !isAgent {
                 "The running command will be stopped and started again."
             } else if fresh || session.agentSessionID == nil {
@@ -1426,7 +1482,7 @@ final class AppModel {
             }
         case .switchInterface(let interface):
             let place = interface == .acp ? "Chat" : "Terminal"
-            title = "Switch \"\(session.displayTitle)\" to \(place) while it is \(state)?"
+            title = "Switch \"\(session.displayTitle)\" to \(place) while \(state)?"
             // Only agents that can carry the conversation over are offered the switch, unless there
             // is no conversation yet; see `canSwitchInterface`.
             message = session.agentSessionID == nil
@@ -1441,6 +1497,7 @@ final class AppModel {
         case .close(let tab):
             // The tab may have been closed some other way while the dialog was up.
             if workspace.tab(id: tab.id) != nil { closeNow(tab) }
+            continueQueuedTabCloses(after: tab.id)
         case .restart(let fresh):
             restartSessionNow(interruption.sessionID, fresh: fresh)
         case .switchInterface(let interface):
@@ -1476,14 +1533,10 @@ final class AppModel {
         activities[id] ?? SessionActivity()
     }
 
-    /// The one activity that best represents a worktree in the sidebar: a
-    /// session that needs the user wins over a working one, which wins over
-    /// an unread one.
+    /// The one activity that represents a worktree in the sidebar, ranked the way a collapsed
+    /// project and the menu bar rank theirs.
     func activity(for worktree: Worktree) -> SessionActivity? {
-        let all = worktree.sessions.compactMap { activities[$0.id] }
-        return all.first(where: \.needsUser)
-            ?? all.first(where: \.showsProgress)
-            ?? all.first(where: \.unread)
+        mostPressingSession(of: worktree.sessions, activities: activities).flatMap { activities[$0] }
     }
 
     var hasWorkingSessions: Bool {
@@ -1561,6 +1614,7 @@ final class AppModel {
             let path = await loginPATH.value
             // A switch from a chat resumes its conversation, which its agent may still be at.
             await waitForStoppingChat(of: id)
+            let exported = await LoginEnvironment.exported.value ?? [:]
             // The session may have been closed, started by another path or asked to start
             // something else while we waited.
             guard launch == launchGenerations[id], terminals[id] == nil, workspace.session(id: id) != nil else { return }
@@ -1574,7 +1628,7 @@ final class AppModel {
             } else {
                 nil
             }
-            if case .chosenMissing(let chosen)? = chosenLocation {
+            if let chosen = chosenLocation?.unusableChosenPath {
                 launchFailures[id] = "The \(adapter.displayName) executable chosen in Settings, \(chosen), is missing or can't be run."
                 apply(.processExited(code: 127), to: id)
                 return
@@ -1585,7 +1639,13 @@ final class AppModel {
                 return
             }
             command.executable = executable
+            // Agents take their configuration folder, keys and proxies from what the shell profile
+            // exports, none of which an app started from the Dock has.
+            command.environment = LoginShellEnvironment.sessionVariables(from: exported).merging(command.environment) { $1 }
             command.environment["PATH"] = path
+            // Emptied, not removed: an Archipel started from one of its own tabs has that tab's
+            // socket in its environment, and the session would inherit it.
+            if !ownsHookSocket { command.environment["ARCHIPEL_SOCKET"] = "" }
 
             do {
                 let terminal = try terminalApp.makeSession(.init(
@@ -1601,9 +1661,10 @@ final class AppModel {
                 if script?.kind == .setup {
                     // A setup script is a job with an end, so the sidebar shows it as busy until it exits.
                     apply(.activity, to: id)
-                } else if !adapter.capabilities.reportsLifecycleThroughHooks, !hookedSessions.contains(id) {
+                } else if !adapter.capabilities.reportsLifecycleThroughHooks || !ownsHookSocket, !hookedSessions.contains(id) {
                     // An agent without hooks never announces itself, so it would sit on
-                    // "starting" forever without this.
+                    // "starting" forever without this. The same goes for one whose hooks have
+                    // no socket to report to.
                     apply(.sessionStarted, to: id)
                 }
             } catch {
@@ -1618,9 +1679,13 @@ final class AppModel {
         // persisted once a hook confirms it, so a session that never really
         // started is not "resumed" into an error on the next launch.
         let presetID = adapter.capabilities.sessionID == .presetByApp ? adapter.makePresetSessionID() : nil
+        // The workspace file can hold an id saved before ids were checked, and it is about to
+        // become a word on the agent's command line. One that does not look like an id is not
+        // resumed.
+        let savedID = session.agentSessionID.flatMap { adapter.acceptsSessionID($0) ? $0 : nil }
         var context = LaunchContext(
             archipelSessionID: session.id,
-            agentSessionID: session.agentSessionID ?? presetID,
+            agentSessionID: savedID ?? presetID,
             hookExecutableURL: hookExecutableURL,
             stableHookURL: stableHookURL,
             socketURL: hookServer.socketURL
@@ -1635,7 +1700,7 @@ final class AppModel {
             )
         }
         var command = adapter.launchCommand(for: context)
-        if session.agentSessionID != nil, let resume = adapter.resumeCommand(for: context) {
+        if savedID != nil, let resume = adapter.resumeCommand(for: context) {
             command = resume
         }
         if adapter.capabilities.acceptsPrompts {
@@ -1659,11 +1724,13 @@ final class AppModel {
                     self.apply(.processExited(code: Int32(truncatingIfNeeded: exitCode)), to: id)
                 case .titleChanged(let title):
                     self.receiveTerminalTitle(title, for: id)
+                    self.checkForInterruptionSoon(id)
                     // Shells retitle the tab for each command, so a title change is the quickest sign
                     // that the user started or left an agent.
                     self.checkForegroundSoon(id)
                 case .progress(let progress):
                     self.receiveProgress(progress, for: id)
+                    self.checkForInterruptionSoon(id)
                 case .openLink(let link, let alternate):
                     self.openSessionLink(link, alternate: alternate, from: id)
                 case .workingDirectoryChanged, .closeRequested:
@@ -1712,6 +1779,7 @@ final class AppModel {
             }
         }
         terminalStartTimes[id] = nil
+        forgetInterruptions(of: id)
         activities[id] = nil
         launchFailures[id] = nil
         if !restarting {
@@ -1722,7 +1790,6 @@ final class AppModel {
             forgetContext(of: id)
         }
         notifier.clear(sessionID: id)
-        refreshDockBadge()
     }
 
     private func receive(_ message: HookMessage) {
@@ -1742,33 +1809,40 @@ final class AppModel {
         // older helper that sends no origin. Acting on it would save a Claude conversation id on
         // the shell session.
         if isPlainShell(session) { return }
-        switch hookedSessions.admit(message, agent: session.agent) {
-        case .dropped:
-            return
-        case .firstHook:
-            // Remembered so Settings can say the hooks were trusted, even before the next session.
-            // Other agents get here too, and their hooks say nothing about Codex's trust.
-            if message.source == CodexAdapter.hooksSource {
-                settings.codexHooksTrustedCommand = codexHookCommand
-            }
-        case .accepted:
+        let admission = hookedSessions.admit(message, agent: session.agent)
+        if admission == .dropped || admission == .foreign { return }
+        // Remembered so Settings can say whether the hooks are trusted, even before the next
+        // session. Compared first: this runs for every hook, and the setting writes to disk.
+        switch codexHookTrust.judge(message, admission: admission, launchedAt: terminalStartTimes[session.id]) {
+        case .trusted:
+            if settings.codexHooksTrustedCommand != codexHookCommand { settings.codexHooksTrustedCommand = codexHookCommand }
+        case .untrusted:
+            if settings.codexHooksTrustedCommand != nil { settings.codexHooksTrustedCommand = nil }
+        case nil:
             break
         }
         if let context = message.context {
             recordContext(context, for: session.id)
-        } else if message.usage != nil {
+        } else if message.source == ClaudeAdapter.statusLineSource {
             // A status line without a context is one drawn before the first reply, as after /clear.
             forgetContext(of: session.id)
         }
+        if let path = message.transcriptPath { interruptionWatches[session.id, default: InterruptionWatch()].transcriptPath = path }
+        // Claude redraws its status line when the conversation changes, an interruption included.
+        if message.source == ClaudeAdapter.statusLineSource { checkForInterruptionSoon(session.id) }
         // An agent that has only started has no conversation on disk yet, and
         // resuming that id would fail. Wait for proof of a first turn.
         let hasConversation = switch message.event {
-        case .promptSubmitted, .activity, .attentionRequested, .turnFinished: true
+        case .promptSubmitted, .activity, .attentionRequested, .attentionReminder, .turnFinished: true
         default: false
         }
-        if hasConversation, let agentSessionID = message.agentSessionID, session.agentSessionID != agentSessionID {
+        // The workspace file outlives this check, and the id becomes a word on the agent's
+        // command line at the next resume.
+        if hasConversation, let agentSessionID = message.agentSessionID, session.agentSessionID != agentSessionID,
+           session.agent.adapter.acceptsSessionID(agentSessionID) {
             mutate { $0.updateSession(id: session.id) { $0.agentSessionID = agentSessionID } }
         }
+        if hasConversation { interruptionWatches[session.id, default: InterruptionWatch()].lastEventAt = .now }
         if let event = message.event { apply(event, to: session.id) }
         // The agent has just written the turn's token counts, and its limits with them, to its log.
         if session.agent.adapter.capabilities.usage == .codexLogs, case .turnFinished? = message.event { refreshCodexUsage() }
@@ -1807,17 +1881,19 @@ final class AppModel {
                 pulsesAwaitingActivation[worktreeID] = max(pulsesAwaitingActivation[worktreeID] ?? pulse, pulse)
             }
         }
+        // A second request while the first still waits leaves the status as it is, and is news
+        // all the same.
+        let asksSomethingNew = activity.asksSomethingNew(since: before)
         // Before posting: buttons on an older notification of this session must not answer whatever comes next.
-        if statusChanged { notifier.invalidate(sessionID: id) }
+        if statusChanged || asksSomethingNew { notifier.invalidate(sessionID: id) }
 
         // Finished banners follow the glow, so they wait until the whole worktree is done.
-        let worthABanner = activity.status == .finished ? pulse == .finished : statusChanged
+        let worthABanner = activity.status == .finished ? pulse == .finished : statusChanged || asksSomethingNew
         // The session stays unread while on screen, but a banner about the thing you are looking at
         // is noise.
         if activity.unread, !viewed, worthABanner {
             notify(session: session, activity: activity)
         }
-        refreshDockBadge()
         if statusChanged {
             sessionStatusChanged(id, from: before.status, to: activity.status)
         }
@@ -1881,12 +1957,15 @@ final class AppModel {
     func resolveAttention(of id: Session.ID, to status: SessionStatus) {
         guard var activity = activities[id] else { return }
         let before = activity.status
-        activity.status = status
-        activity.markViewed()
+        activity.resolveRequest(to: status)
         activities[id] = activity
         notifier.clear(sessionID: id)
-        refreshDockBadge()
-        if status != before { sessionStatusChanged(id, from: before, to: status) }
+        // Another request was waiting behind the answered one. Its banner was replaced by the
+        // one just used, so without a new one nothing would say that the session still waits.
+        if activity.needsUser, let session = workspace.session(id: id), !isBeingViewed(id) {
+            notify(session: session, activity: activity)
+        }
+        if activity.status != before { sessionStatusChanged(id, from: before, to: activity.status) }
     }
 
     /// Independent of the banner settings: it is its own opt-in. Held back while sharing the screen
@@ -1897,6 +1976,8 @@ final class AppModel {
         dockAttentionRequest = NSApp.requestUserAttention(.informationalRequest)
     }
 
+    /// Follows `workspaceAttention`, which calls this when it changes. The one other caller is the
+    /// setting that turns the badge on and off.
     func refreshDockBadge() {
         notifier.setDockBadge(settings.showsDockBadge ? workspaceAttention.needsAttention : 0)
     }
@@ -1914,6 +1995,7 @@ final class AppModel {
         if total != workspaceAttention {
             if total.needsAttention > workspaceAttention.needsAttention { SidebarTips.agentWaited() }
             workspaceAttention = total
+            refreshDockBadge()
         }
     }
 
@@ -1965,8 +2047,10 @@ final class AppModel {
         NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             // The monitor sees clicks in every window of the app, and a point in Settings or the menu
             // bar panel would otherwise be hit-tested against pane frames of the main window.
+            // The palette and the tab switcher cover the panes: a click on one of their rows is not
+            // a click into the pane underneath, and the command it runs acts on the focused pane.
             if let self, let window = event.window, Self.isMainWindow(window), window.sheets.isEmpty,
-               let content = window.contentView {
+               self.isOverlayPresented?() != true, let content = window.contentView {
                 let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
                 let panes = self.selectedWorktree?.panes ?? []
                 if let pane = panes.first(where: { self.paneFrames[$0.id]?.contains(point) == true }) {
@@ -1977,11 +2061,14 @@ final class AppModel {
             return event
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Runs on every key press. Skip the view walk when nothing is unread or waiting.
-            if let self, self.activities.values.contains(where: { $0.unread || $0.needsUser }),
+            // Runs on every key press. Skip the view walk when nothing is unread or waiting, unless
+            // the key is the one that sends a prompt off.
+            let submits = Self.submitsInput(event)
+            if let self, submits || self.activities.values.contains(where: { $0.unread || $0.needsUser }),
                let responder = event.window?.firstResponder as? NSView,
                let id = self.terminals.first(where: { responder.isDescendant(of: $0.value.view) })?.key {
                 self.acknowledge(id)
+                if submits { self.noteSubmittedInput(to: id) }
             }
             return event
         }
@@ -1992,6 +2079,23 @@ final class AppModel {
     func acknowledge(_ id: Session.ID) {
         guard activities[id]?.unread == true || hasUnreportedRequest(id) else { return }
         markViewed(id)
+    }
+
+    /// Return or Enter, the keys an agent takes as "send this". Not with Command, which is a
+    /// shortcut of the app or of Ghostty.
+    private static func submitsInput(_ event: NSEvent) -> Bool {
+        (event.keyCode == 36 || event.keyCode == 76) && !event.modifierFlags.contains(.command)
+    }
+
+    /// An agent whose hooks do not report its turns never says that one began. What the user sends
+    /// it is the only sign of one, and what closing its tab goes by; see `UnreportedWork`.
+    private func noteSubmittedInput(to id: Session.ID) {
+        guard let session = workspace.session(id: id), session.agent != .shell, scriptSessions[id] == nil,
+              !effectiveAgent(for: session).reportsLifecycleThroughHooks,
+              // Written once per turn, since every write re-renders what reads `activities`.
+              activities[id]?.awaitsTurnEnd == false
+        else { return }
+        activities[id]?.inputSubmitted()
     }
 
     // MARK: Persistence

@@ -15,8 +15,6 @@ struct RemoveWorktreesSheet: View {
     @State private var included: Set<Worktree.ID>
     @State private var deleteFolders = false
     @State private var deleteBranches = false
-    /// Uncommitted changes per worktree, for the ones whose folder could be asked.
-    @State private var changeCounts: [Worktree.ID: Int] = [:]
     @State private var progress: Int?
     /// What is left to tell once the removals ran: branches git kept, worktrees it refused to remove.
     @State private var notes: [String]?
@@ -31,7 +29,13 @@ struct RemoveWorktreesSheet: View {
     private func isMissing(_ worktree: Worktree) -> Bool { model.missingWorktrees.contains(worktree.id) }
     private func deletesFromDisk(_ worktree: Worktree) -> Bool { deleteFolders && !isMissing(worktree) }
     private func lostChanges(in worktree: Worktree) -> Int {
-        deletesFromDisk(worktree) ? changeCounts[worktree.id] ?? 0 : 0
+        deletesFromDisk(worktree) ? changeCount(of: worktree) ?? 0 : 0
+    }
+
+    /// The count the sidebar row shows, from the same state; `loadStatus()` brings it up to date.
+    private func changeCount(of worktree: Worktree) -> Int? {
+        guard !isMissing(worktree) else { return nil }
+        return model.gitState(for: worktree.id)?.summary?.changedFiles
     }
 
     private var withLostChanges: Int { chosen.count { lostChanges(in: $0) > 0 } }
@@ -53,6 +57,23 @@ struct RemoveWorktreesSheet: View {
             warnings.append(busy == 1
                 ? "An agent is working in one of these worktrees. Removing it stops that agent."
                 : "\(busy) agents are working in these worktrees. Removing them stops the agents.")
+        }
+        let idle = chosen.reduce(0) { $0 + $1.sessions.count } - busy
+        if idle > 0 {
+            let other = busy > 0 ? "other " : ""
+            warnings.append(idle == 1 ? "One \(other)session is closed too." : "\(idle) \(other)sessions are closed too.")
+        }
+        let detached = chosen.filter { $0.branch == nil && deletesFromDisk($0) }
+        if !detached.isEmpty {
+            let which = switch (detached.count, chosen.count) {
+            case (1, 1): "This worktree is"
+            case (1, _): "One of these worktrees is"
+            case (let count, _) where count == chosen.count: "These worktrees are"
+            case (let count, _): "\(count) of these worktrees are"
+            }
+            let place = detached.count == 1 ? "there" : "in them"
+            let folders = detached.count == 1 ? "its folder is" : "their folders are"
+            warnings.append("\(which) on a detached HEAD. Commits made \(place) are not on any branch, and are only reachable through the reflog once \(folders) deleted.")
         }
         let unsaved = chosen.reduce(0) { $0 + model.unsavedDocuments(under: $1.path).count }
         if unsaved > 0 {
@@ -171,7 +192,7 @@ struct RemoveWorktreesSheet: View {
         if spansProjects, let project = model.project(ofWorktree: worktree.id) { details.append(project.name) }
         if isMissing(worktree) {
             details.append("Folder missing")
-        } else if let count = changeCounts[worktree.id], count > 0 {
+        } else if let count = changeCount(of: worktree), count > 0 {
             let changes = count == 1 ? "1 uncommitted change" : "\(count) uncommitted changes"
             details.append(lostChanges(in: worktree) > 0 ? "\(changes) will be lost" : changes)
         }
@@ -222,7 +243,7 @@ struct RemoveWorktreesSheet: View {
             if !deleteFolders {
                 Text("The folders and branches stay on disk. You can add the worktrees back from Add Worktree.")
             } else {
-                Text("Branches with commits that are not merged are kept. Missing folders are only taken out of the sidebar.")
+                Text("A branch is kept unless git finds it fully merged, which includes being pushed to its upstream. Missing folders are only taken out of the sidebar.")
             }
         }
         .disabled(isWorking)
@@ -244,8 +265,7 @@ struct RemoveWorktreesSheet: View {
     private func loadStatus() async {
         guard model.isGitAvailable else { return }
         for worktree in worktrees where !isMissing(worktree) {
-            guard let status = try? await model.git.status(in: worktree.path) else { continue }
-            changeCounts[worktree.id] = Set((status.staged + status.unstaged).map(\.path)).count
+            await model.gitState(for: worktree.id)?.refresh()
         }
     }
 
@@ -266,7 +286,7 @@ struct RemoveWorktreesSheet: View {
                 )
                 switch result {
                 case .keptUnmerged(let branch):
-                    notes.append("The branch \(branch) was kept because it has commits that are not merged.")
+                    notes.append("The branch \(branch) was kept because it has commits that are not merged or pushed.")
                 case .failed(let branch, let message):
                     notes.append("The branch \(branch) could not be deleted: \(message)")
                 case .notRequested, .deleted:
@@ -320,14 +340,18 @@ extension PullRequestBadge.State {
         path: PreviewFixtures.root.appending(path: "orbit-worktrees/bump-deps", directoryHint: .isDirectory),
         branch: "chore/bump-deps"
     )
-    model.gitSummaries[merged.id] = GitSummary(branch: "chore/bump-deps", upstream: "origin/chore/bump-deps", ahead: 0, behind: 0, changedFiles: 0)
-    model.pullRequests[merged.id] = PullRequestLookup(
-        branch: "chore/bump-deps",
-        pullRequest: GitPullRequest(
-            number: 117, url: URL(string: "https://github.com/example/orbit/pull/117")!,
-            title: "Bump dependencies", state: .merged, isDraft: false
-        ),
-        checkedAt: .now
+    model.showGitForPreview(
+        merged.id,
+        root: merged.path,
+        summary: GitSummary(branch: "chore/bump-deps", upstream: "origin/chore/bump-deps", ahead: 0, behind: 0, changedFiles: 0),
+        pullRequest: PullRequestLookup(
+            branch: "chore/bump-deps",
+            pullRequest: GitPullRequest(
+                number: 117, url: URL(string: "https://github.com/example/orbit/pull/117")!,
+                title: "Bump dependencies", state: .merged, isDraft: false
+            ),
+            checkedAt: .now
+        )
     )
     return RemoveWorktreesSheet(worktrees: [merged, PreviewFixtures.featureWorktree, PreviewFixtures.fixWorktree])
         .environment(model)

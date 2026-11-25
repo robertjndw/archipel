@@ -20,64 +20,66 @@ extension SessionStatus {
 struct StatusGlyph: View {
     let activity: SessionActivity
 
-    /// Whether the glyph for `activity` is a spinner. Keep in step with the cases in `body` that
-    /// show a `ProgressView`.
+    /// Whether the glyph for `activity` is a spinner: the same test that counts a session as
+    /// working in the status bar and the menu bar, so a spinner never disagrees with those counts.
     static func showsSpinner(_ activity: SessionActivity) -> Bool {
-        switch activity.status {
-        case .starting, .working: true
-        case .finished: activity.isBusy
-        default: false
-        }
+        activity.showsProgress
     }
 
     var body: some View {
         Group {
-            switch activity.status {
-            case .starting, .working:
+            if Self.showsSpinner(activity) {
+                // Past `.starting` and `.working` this is a main turn that ended with background
+                // subagents still running. The result isn't final until they stop, and a checkmark
+                // would look done too early.
+                let label = activity.status == .starting || activity.status == .working ? "Working" : "Subagents running"
                 ProgressView()
                     .controlSize(.small)
-                    .accessibilityLabel("Working")
-                    .help("Working")
-            case .needsAttention(.permission):
-                attention("hand.raised.fill", label: activity.status.label)
-            case .needsAttention:
-                attention("questionmark.bubble.fill", label: activity.status.label)
-            case .finished where activity.isBusy:
-                // The main turn ended, but background subagents are still running and the result
-                // isn't final until they stop. A checkmark here would look done too early.
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel("Subagents running")
-                    .help("Subagents running")
-            case .finished:
-                // The dot is for a result you have not seen yet. Once seen, a quiet check stays until
-                // the next prompt, so a done session does not look like one that never ran.
-                if activity.unread {
-                    Circle()
-                        .fill(StatusPulse.finished.color)
-                        .frame(width: 8, height: 8)
-                        .accessibilityLabel("Finished, unread")
-                        .help("Finished, unread")
-                } else if activity.completedTurn {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .accessibilityLabel("Finished")
-                        .help("Finished")
-                }
-            case .exited(let code):
-                Image(systemName: code == 0 ? "stop.circle" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(code == 0 ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.red))
-                    .accessibilityLabel(code == 0 ? "Ended" : "Exited with an error")
-                    .help(activity.status.label)
-            case .notStarted:
-                // Nothing: a session that has not started yet is the normal state of most of them,
-                // and a glyph on every one of them says nothing. Selecting it starts it.
-                EmptyView()
+                    .accessibilityLabel(label)
+                    .help(label)
+            } else {
+                settled
             }
         }
         .frame(width: 18)
-        .transition(.opacity.combined(with: .scale(scale: 0.6)))
+        // Opacity only: scaling a spinner by a fractional amount crashes AppKit's layout, see `statusGlowLanding`.
+        .transition(.opacity)
+    }
+
+    @ViewBuilder
+    private var settled: some View {
+        switch activity.status {
+        case .needsAttention(.permission):
+            attention("hand.raised.fill", label: activity.status.label)
+        case .needsAttention:
+            attention("questionmark.bubble.fill", label: activity.status.label)
+        case .finished:
+            // The dot is for a result you have not seen yet. Once seen, a quiet check stays until
+            // the next prompt, so a done session does not look like one that never ran.
+            if activity.unread {
+                Circle()
+                    .fill(StatusPulse.finished.color)
+                    .frame(width: 8, height: 8)
+                    .accessibilityLabel("Finished, unread")
+                    .help("Finished, unread")
+            } else if activity.completedTurn {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Finished")
+                    .help("Finished")
+            }
+        case .exited(let code):
+            Image(systemName: code == 0 ? "stop.circle" : "exclamationmark.triangle.fill")
+                .foregroundStyle(code == 0 ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.red))
+                .accessibilityLabel(code == 0 ? "Ended" : "Exited with an error")
+                .help(activity.status.label)
+        case .notStarted, .starting, .working:
+            // Nothing for a session that has not started yet: that is the normal state of most
+            // of them, and a glyph on every one of them says nothing. Selecting it starts it.
+            // The other two always spin.
+            EmptyView()
+        }
     }
 
     /// Bounces once when it appears or the reason changes, which is what draws the eye to a row in a

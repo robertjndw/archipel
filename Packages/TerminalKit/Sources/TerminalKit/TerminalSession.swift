@@ -43,7 +43,26 @@ public final class TerminalSession: Identifiable {
 
     public private(set) var title: String = ""
     public private(set) var workingDirectory: String?
+    private var spawnDirectory: URL?
+
+    /// Where relative paths in terminal output are most likely relative to:
+    /// the program's reported pwd, else the directory it was started in.
+    var linkBaseDirectory: URL? {
+        guard let pwd = workingDirectory, !pwd.isEmpty else { return spawnDirectory }
+        // OSC 7 sends a file URL, but some programs send a bare path.
+        if let url = URL(string: pwd), url.isFileURL { return url }
+        return pwd.hasPrefix("/") ? URL(filePath: pwd) : spawnDirectory
+    }
     public private(set) var hasExited = false
+
+    /// Scrollback search. Ghostty opens it on its `start_search` binding
+    /// (Cmd-F by default); the host shows a field for it while it is active.
+    public let search: TerminalSearch
+
+    /// Run when Return is pressed in the terminal after the child exited.
+    /// Ghostty turns any key on an exited surface into a close request, so
+    /// without this the key does nothing unless the host closes on request.
+    public var onReturnAfterExit: (() -> Void)?
 
     let key: UInt
     let surfaceView: SurfaceView
@@ -64,8 +83,14 @@ public final class TerminalSession: Identifiable {
         // frame even when the session starts unmounted.
         self.surfaceView = SurfaceView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         self.view = surfaceView
+        search = TerminalSearch(view: surfaceView)
         (events, continuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
         surfaceView.acceptsDroppedText = { [weak app] text in app?.acceptsDroppedText?(text) ?? true }
+        surfaceView.returnAfterExit = { [weak self] in
+            guard let self, self.hasExited, let action = self.onReturnAfterExit else { return false }
+            action()
+            return true
+        }
     }
 
     isolated deinit {
@@ -101,6 +126,7 @@ public final class TerminalSession: Identifiable {
             return Self.wrap(command, statusFile: statusFile)
         }
 
+        spawnDirectory = configuration.workingDirectory
         let surface: ghostty_surface_t? = configuration.workingDirectory.path(percentEncoded: false).withCString { cwd in
             surfaceConfig.working_directory = cwd
             return withOptionalCString(command) { command in
@@ -171,6 +197,16 @@ public final class TerminalSession: Identifiable {
         guard let surface else { return nil }
         let pid = ghostty_surface_foreground_pid(surface)
         return pid > 0 && pid <= UInt64(Int32.max) ? pid_t(pid) : nil
+    }
+
+    /// Ghostty's answer to whether closing the surface could lose something: false once the child
+    /// has exited, or while the cursor sits at a prompt that shell integration marked, and true
+    /// otherwise. It follows the user's `confirm-close-surface`. Without shell integration Ghostty
+    /// cannot see a prompt, so an idle shell reads as true as well and the host has to look at
+    /// `foregroundProcessID` to tell.
+    public var needsCloseConfirmation: Bool {
+        guard let surface else { return false }
+        return ghostty_surface_needs_confirm_quit(surface)
     }
 
     public func setOccluded(_ occluded: Bool) {

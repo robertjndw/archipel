@@ -1,4 +1,5 @@
 import AgentKit
+import AppKit
 import ArchipelCore
 import EditorUI
 import InspectorUI
@@ -29,9 +30,12 @@ struct PaneTabBar: View {
     @State private var renaming: RenameTarget?
     /// Width of the scrolling part of the row, which the tabs share.
     @State private var rowWidth: CGFloat = 0
-    /// Pinned while you close tabs with the pointer in the bar, so the next close button lands
-    /// under the pointer (Safari does the same). Cleared when the pointer leaves.
-    @State private var frozenTabWidth: CGFloat?
+    /// While the pointer is in the bar, tabs keep the width they had for this many tabs, so the
+    /// next close button lands under the pointer (Safari does the same). Cleared on leave.
+    ///
+    /// Set on hover, not in `onChange` after a close: that runs a frame late, so the tabs would
+    /// start to widen, snap back, and flicker their truncated titles.
+    @State private var frozenTabCount: Int?
     @State private var isPointerInRow = false
     @State private var dragSlot: TabSlot?
     @State private var scrollPosition = ScrollPosition()
@@ -62,7 +66,7 @@ struct PaneTabBar: View {
     /// Tabs share the row evenly, clamped to the min and max width. Leftover space stays empty.
     /// Without the cap a single tab stretches across the pane and looks like a title bar.
     private var tabWidth: CGFloat {
-        frozenTabWidth ?? tabWidth(forCount: pane.tabs.count)
+        tabWidth(forCount: max(pane.tabs.count, frozenTabCount ?? 0))
     }
 
     private func tabWidth(forCount tabCount: Int) -> CGFloat {
@@ -220,17 +224,17 @@ struct PaneTabBar: View {
         .background(background)
         .onHover { inside in
             isPointerInRow = inside
-            if !inside, frozenTabWidth != nil {
-                withAnimation(reduceMotion ? nil : Motion.selection) { frozenTabWidth = nil }
+            if inside {
+                frozenTabCount = pane.tabs.count
+            } else if frozenTabCount != nil {
+                withAnimation(reduceMotion ? nil : Motion.selection) { frozenTabCount = nil }
             }
         }
         .localEventMonitor(.scrollWheel, while: isPointerInRow, handle: scrollSideways)
-        .onChange(of: pane.tabs.count) { old, new in
-            if new < old, isPointerInRow {
-                frozenTabWidth = frozenTabWidth ?? tabWidth(forCount: old)
-            } else if new > old {
-                frozenTabWidth = nil
-            }
+        // Tabs opened while hovering get room through the max in `tabWidth`. Raising the count
+        // keeps that width when they're closed again.
+        .onChange(of: pane.tabs.count) { _, new in
+            if let frozen = frozenTabCount, new > frozen { frozenTabCount = new }
         }
         .renameAlert($renaming)
     }
@@ -280,6 +284,7 @@ struct PaneTabBar: View {
     private func tabMenu(_ tab: ArchipelCore.Tab) -> some View {
         Button("Split Right", systemImage: "rectangle.split.2x1") { model.split(tab: tab.id) }
             .disabled(pane.tabs.count < 2)
+        movesToPane(tab)
         if tab.isPreview {
             Button("Keep Open", systemImage: "pin") { model.pin(tab: tab.id) }
         }
@@ -310,6 +315,17 @@ struct PaneTabBar: View {
                 Button("Open in \(editor.name)", systemImage: "chevron.left.forwardslash.chevron.right") { model.openInEditor(url) }
             }
             Button("Open in Default App", systemImage: "arrow.up.forward.app") { NSWorkspace.shared.open(url) }
+            Button("Copy Path", systemImage: "document.on.document") { model.copyToPasteboard(url.path) }
+        }
+        if case .diff(let path, _) = tab.content {
+            let url = worktree.path.appending(path: path)
+            Divider()
+            Button("Open File", systemImage: "doc.text") { model.openFile(url, preview: false) }
+                // A deleted file has nothing to open or reveal.
+                .disabled(!FileManager.default.fileExists(atPath: url.path))
+            Button("Show in Finder", systemImage: "folder") { model.revealInFinder(url) }
+                .disabled(!FileManager.default.fileExists(atPath: url.path))
+            Button("Copy Path", systemImage: "document.on.document") { model.copyToPasteboard(url.path) }
         }
         if case .web(let url) = tab.content {
             Divider()
@@ -318,6 +334,29 @@ struct PaneTabBar: View {
         }
         Divider()
         Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
+        let others = pane.tabs.filter { $0.id != tab.id }
+        let right = pane.tabs.drop { $0.id != tab.id }.dropFirst()
+        Button("Close Other Tabs") { model.close(tabs: others.map(\.id)) }
+            .disabled(others.isEmpty)
+        Button("Close Tabs to the Right") { model.close(tabs: right.map(\.id)) }
+            .disabled(right.isEmpty)
+    }
+
+    /// One button when there is a single other pane, a submenu when there are several.
+    @ViewBuilder
+    private func movesToPane(_ tab: ArchipelCore.Tab) -> some View {
+        let others = worktree.panes.enumerated().filter { $0.element.id != pane.id }
+        if others.count == 1, let other = others.first {
+            Button("Move to Other Pane", systemImage: "rectangle.righthalf.inset.filled.arrow.right") {
+                model.move(tab: tab.id, toPane: other.element.id)
+            }
+        } else if others.count > 1 {
+            Menu("Move to Pane", systemImage: "rectangle.righthalf.inset.filled.arrow.right") {
+                ForEach(others, id: \.element.id) { index, other in
+                    Button("Pane \(index + 1)") { model.move(tab: tab.id, toPane: other.id) }
+                }
+            }
+        }
     }
 }
 
@@ -483,6 +522,7 @@ private struct TabButtonContent: View, Equatable {
         // button shows up on hover, so XCUITest and VoiceOver clicks closed the tab.
         .accessibilityActivationPoint(.center)
         .accessibilityAction(.default) { model.select(tab: tab.id) }
+        .accessibilityAction(named: "Close Tab") { model.close(tab: tab.id) }
     }
 
     private var title: some View {
@@ -550,13 +590,19 @@ private struct TabButtonContent: View, Equatable {
                 }
             }
             .modifier(SwapEffect(isShown: !isHovered, reduceMotion: reduceMotion))
-            Button("Close Tab", systemImage: "xmark") { model.close(tab: tab.id) }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .imageScale(.small)
-                .modifier(SwapEffect(isShown: isHovered, reduceMotion: reduceMotion))
-                .onHover { isOverClose = $0 }
+            Button { model.close(tab: tab.id) } label: {
+                Image(systemName: "xmark")
+                    .imageScale(.small)
+                    // The whole slot is the target, not just the glyph, so a click a little off
+                    // does not select the tab instead.
+                    .frame(width: Self.iconSlot, height: Chrome.controlHeight)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Close Tab")
+            .modifier(SwapEffect(isShown: isHovered, reduceMotion: reduceMotion))
+            .onHover { isOverClose = $0 }
         }
         .frame(width: Self.iconSlot)
     }
@@ -651,8 +697,6 @@ private struct TabRowControls<Content: View>: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(GlyphButtonStyle())
                 .foregroundStyle(.secondary)
-                // For the menu, which the button style does not reach.
-                .frame(width: Chrome.controlHeight + 4, height: Chrome.controlHeight)
         }
     }
 }
@@ -720,7 +764,7 @@ private struct TabFrames: PreferenceKey {
     }
 }
 
-/// Scale, fade and blur for tabs being opened or closed.
+/// Scale, fade and blur for tabs being opened.
 private struct TabTransition: Transition {
     func body(content: Content, phase: TransitionPhase) -> some View {
         content
@@ -731,7 +775,15 @@ private struct TabTransition: Transition {
 }
 
 private extension AnyTransition {
-    static var tab: AnyTransition { AnyTransition(TabTransition()) }
+    /// A closed tab leaves the layout right away but is still drawn while it animates out, and
+    /// its neighbours slide over it. A slow blurred exit smears its title into theirs, so it
+    /// just fades out fast.
+    static var tab: AnyTransition {
+        .asymmetric(
+            insertion: AnyTransition(TabTransition()),
+            removal: .opacity.animation(.easeOut(duration: 0.1))
+        )
+    }
 }
 
 #if DEBUG
@@ -779,8 +831,7 @@ enum PanePreviews {
         var activities = PreviewFixtures.activities
         activities[serverSessionID] = SessionActivity(status: .working)
         let model = AppModel(preview: workspace, activities: activities)
-        model.gitSummaries = PreviewFixtures.gitSummaries
-        model.pullRequests = PreviewFixtures.pullRequests
+        model.showGitForPreview(PreviewFixtures.gitSummaries, pullRequests: PreviewFixtures.pullRequests)
         model.usage = PreviewFixtures.usage
         model.devServers.showForPreview([serverSessionID: [
             DevServerLink(url: URL(string: "http://localhost:8080")!)!,
@@ -867,28 +918,121 @@ private func previewTabBars() -> some View {
 }
 #endif
 
-/// Its own view so a re-render of the tab bar doesn't rebuild the menu while it's open, which
-/// closes any open submenu. Moving the pointer out of the bar toward the presets submenu is
-/// already enough to re-render it.
+/// Pops an AppKit menu instead of using a SwiftUI `Menu`. SwiftUI rewrites the items of an open
+/// `Menu` on every render of the window, and rewriting the presets item closes its submenu. With a
+/// session printing output that happens all the time, so the presets were nearly impossible to reach.
+///
+/// Same items as `NewSessionButtons`. Change one, change the other.
 private struct NewSessionMenu: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
     let worktree: Worktree.ID
     let pane: Pane.ID
     let showsTip: Bool
+    @State private var anchor = MenuAnchor()
 
     var body: some View {
-        Menu {
-            NewSessionButtons(worktree: worktree, pane: pane)
-        } label: {
-            Image(systemName: "plus")
+        Button("New Session", systemImage: "plus", action: showMenu)
+            .background(MenuAnchorView(anchor: anchor))
+            .help("New Session")
+            .accessibilityIdentifier("pane.newSession")
+            .popoverTip(showsTip ? SidebarTips.group.currentTip as? ChatTip : nil, arrowEdge: .top)
+            .tipViewStyle(CompactTipStyle())
+    }
+
+    private func showMenu() {
+        guard let view = anchor.view else { return }
+        let actions = MenuActions()
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for agent in model.enabledAgents {
+            let canStart = model.canStartSession(with: agent)
+            let item = actions.item("New \(agent.displayName) Session", enabled: canStart) {
+                model.newSession(in: worktree, agent: agent, pane: pane)
+            }
+            if !canStart { item.toolTip = agent.missingCommandHint }
+            menu.addItem(item)
+            if agent.acp != nil {
+                // Shown in place of the item above while Option is held, like Option in the
+                // Finder's File menu.
+                let other = model.defaultInterface(for: agent).other
+                let alternate = actions.item("New \(agent.displayName) Session in \(other.title)", enabled: canStart) {
+                    model.newSession(in: worktree, agent: agent, pane: pane, interface: other)
+                }
+                item.keyEquivalentModifierMask = []
+                alternate.keyEquivalentModifierMask = .option
+                alternate.isAlternate = true
+                menu.addItem(alternate)
+            }
         }
-        .toolbarGroupMenu()
-        // A borderless menu draws its label in the tint, which would make it the loudest
-        // thing in the row.
-        .tint(.secondary)
-        .help("New Session")
-        .accessibilityLabel("New Session")
-        .accessibilityIdentifier("pane.newSession")
-        .popoverTip(showsTip ? SidebarTips.group.currentTip as? ChatTip : nil, arrowEdge: .top)
-        .tipViewStyle(CompactTipStyle())
+        let presets = model.presetsInMenuOrder
+        if !presets.isEmpty {
+            let submenu = NSMenu()
+            submenu.autoenablesItems = false
+            for entry in presets {
+                submenu.addItem(actions.item("\(entry.agent.displayName): \(entry.preset.title)", enabled: model.canStartSession(with: entry.agent)) {
+                    model.newSession(in: worktree, agent: entry.agent, preset: entry.preset, pane: pane)
+                })
+            }
+            submenu.addItem(.separator())
+            submenu.addItem(actions.item("Edit Presets…") {
+                SettingsView.select(.agents)
+                openSettings()
+            })
+            let presetsItem = NSMenuItem(title: "New Session with Preset", action: nil, keyEquivalent: "")
+            presetsItem.submenu = submenu
+            // The File menu has an item with the same title. The UI tests look this one up by identifier.
+            presetsItem.identifier = NSUserInterfaceItemIdentifier("pane.newSession.presets")
+            menu.addItem(.separator())
+            menu.addItem(presetsItem)
+        }
+        // Opens below the button like a pull-down. popUp blocks until the menu closes, so `actions`
+        // lives long enough.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.maxY + 4), in: view)
+    }
+}
+
+/// NSMenuItem holds its target weakly, so the caller has to keep this around.
+@MainActor
+private final class MenuActions: NSObject {
+    private var actions: [() -> Void] = []
+
+    func item(_ title: String, enabled: Bool = true, action: @escaping () -> Void) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
+        item.target = self
+        item.tag = actions.count
+        item.isEnabled = enabled
+        actions.append(action)
+        return item
+    }
+
+    @objc private func choose(_ sender: NSMenuItem) {
+        actions[sender.tag]()
+    }
+}
+
+/// Gives the menu an NSView to position itself against.
+private final class MenuAnchor {
+    weak var view: NSView?
+}
+
+private struct MenuAnchorView: NSViewRepresentable {
+    let anchor: MenuAnchor
+
+    func makeNSView(context: Context) -> NSView {
+        let view = AnchorView()
+        anchor.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        anchor.view = view
+    }
+
+    /// Flipped so `bounds.maxY` is the bottom edge of the button. Returns nil from hitTest so clicks
+    /// go to the button.
+    private final class AnchorView: NSView {
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

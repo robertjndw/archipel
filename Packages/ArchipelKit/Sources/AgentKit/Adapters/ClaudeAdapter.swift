@@ -37,8 +37,9 @@ public struct ClaudeAdapter: AgentAdapter {
     }
 
     public func launchCommand(for context: LaunchContext) -> LaunchCommand {
-        // Without a preset id Claude picks its own; the SessionStart hook reports it.
-        let idArguments = context.agentSessionID.map { ["--session-id", $0] } ?? []
+        // Without a preset id Claude picks its own; the SessionStart hook reports it. The id is
+        // attached to its option here and for a resume, so it can never be read as one itself.
+        let idArguments = context.agentSessionID.flatMap { acceptsSessionID($0) ? ["--session-id=\($0)"] : nil } ?? []
         return LaunchCommand(
             executable: executableName,
             arguments: idArguments + ["--settings", Self.hookSettings(hook: context.hookExecutableURL)],
@@ -47,15 +48,19 @@ public struct ClaudeAdapter: AgentAdapter {
     }
 
     public func resumeCommand(for context: LaunchContext, agentSessionID: String) -> LaunchCommand? {
-        LaunchCommand(
+        guard acceptsSessionID(agentSessionID) else { return nil }
+        return LaunchCommand(
             executable: executableName,
             arguments: [
-                "--resume", agentSessionID,
+                "--resume=\(agentSessionID)",
                 "--settings", Self.hookSettings(hook: context.hookExecutableURL),
             ],
             environment: Self.environment(context)
         )
     }
+
+    /// Claude's conversation ids are UUIDs, and `--session-id` takes nothing else.
+    public func acceptsSessionID(_ id: String) -> Bool { AgentSessionID.isUUID(id) }
 
     public func attentionReason(forTerminalNotification body: String) -> AttentionReason? {
         // A launched Claude reports through hooks and never gets here. A hand-started one without
@@ -68,13 +73,18 @@ public struct ClaudeAdapter: AgentAdapter {
             // API key accounts get no limits but still get the context.
             let usage = UsageDecoder.claudeStatusLine(payload, at: date)
             let context = UsageDecoder.claudeContext(payload)
-            guard usage != nil || context != nil else { return nil }
-            return DecodedHook(event: nil, agentSessionID: nil, usage: usage, context: context)
+            // Before the first reply there is neither, but the status line already says where
+            // the conversation will be written.
+            let transcriptPath = UsageDecoder.claudeTranscriptPath(payload)
+            guard usage != nil || context != nil || transcriptPath != nil else { return nil }
+            return DecodedHook(event: nil, agentSessionID: nil, usage: usage, context: context, transcriptPath: transcriptPath)
         }
         return DecodedHook(
             event: Self.event(payload),
-            agentSessionID: HookDecoder.nonEmptyString(payload["session_id"]),
-            lifecycle: Self.lifecycle(payload)
+            agentSessionID: sessionID(payload["session_id"]),
+            lifecycle: Self.lifecycle(payload),
+            // Only the main agent's word is taken for it: a subagent has a transcript of its own.
+            transcriptPath: HookDecoder.nonEmptyString(payload["agent_id"]) == nil ? UsageDecoder.claudeTranscriptPath(payload) : nil
         )
     }
 
@@ -93,7 +103,8 @@ public struct ClaudeAdapter: AgentAdapter {
     static func event(_ payload: [String: Any]) -> AgentEvent? {
         // Hooks fired inside a subagent carry its id. They must not be read as the main agent's:
         // a subagent's StopFailure would otherwise end the parent's turn.
-        if let agentID = HookDecoder.nonEmptyString(payload["agent_id"]) {
+        let agentID = HookDecoder.nonEmptyString(payload["agent_id"])
+        if let agentID {
             switch payload["hook_event_name"] as? String {
             case "SubagentStart": return .subagentStarted(id: agentID)
             case "SubagentStop", "StopFailure", "Stop": return .subagentFinished(id: agentID)
@@ -103,18 +114,27 @@ public struct ClaudeAdapter: AgentAdapter {
         }
         switch payload["hook_event_name"] as? String {
         case "SessionStart":
-            return .sessionStarted
+            // Compacting starts no new conversation: the turn and its subagents carry on.
+            return payload["source"] as? String == "compact" ? nil : .sessionStarted
         case "UserPromptSubmit":
             return .promptSubmitted
         case "PreToolUse", "PostToolUse":
             return .activity
         case "PermissionRequest":
-            return .attentionRequested(.permission, message: HookDecoder.nonEmptyString(payload["tool_name"]))
+            let summary = ToolRequestSummary(toolName: payload["tool_name"], toolInput: payload["tool_input"])
+            return .attentionRequested(
+                .permission,
+                message: summary?.text,
+                subagent: agentID,
+                isPartial: summary?.isComplete != true
+            )
         case "Notification":
             let message = HookDecoder.nonEmptyString(payload["message"])
             switch payload["notification_type"] as? String {
             case "permission_prompt":
-                return .attentionRequested(.permission, message: message)
+                // Comes after the PermissionRequest hook for the same prompt, and only says that
+                // some permission is needed.
+                return .attentionReminder(.permission, message: message)
             case "idle_prompt":
                 // Claude sends this about a minute after any turn ends, when nobody has typed. It
                 // carries nothing new: the turn is already finished, and real questions arrive as a
@@ -122,7 +142,7 @@ public struct ClaudeAdapter: AgentAdapter {
                 // finished turn into "waiting for you".
                 return nil
             case "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input":
-                return .attentionRequested(.question, message: message)
+                return .attentionRequested(.question, message: message, subagent: agentID)
             default:
                 return nil
             }

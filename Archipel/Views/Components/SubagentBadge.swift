@@ -4,6 +4,7 @@ import SwiftUI
 /// badges in Mail's sidebar.
 struct SubagentBadge: View {
     let count: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if count > 0 {
@@ -16,7 +17,7 @@ struct SubagentBadge: View {
                 .padding(.vertical, 1)
                 .background(.quaternary, in: .capsule)
                 .fixedSize()
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
                 .help(Self.description(count))
                 .accessibilityLabel(Self.description(count))
         }

@@ -35,4 +35,15 @@ struct ArgumentSplitterTests {
     @Test func unterminatedQuoteKeepsRest() {
         #expect(ArgumentSplitter.split(#"--x "abc def"#) == ["--x", "abc def"])
     }
+
+    @Test func balancedInputIsWellFormed() {
+        #expect(ArgumentSplitter.isWellFormed(""))
+        #expect(ArgumentSplitter.isWellFormed(#"--model "opus 4" 'a b' c\ d"#))
+    }
+
+    @Test func unterminatedQuoteOrTrailingBackslashIsNotWellFormed() {
+        #expect(!ArgumentSplitter.isWellFormed(#"--x "abc def"#))
+        #expect(!ArgumentSplitter.isWellFormed("--x 'a b"))
+        #expect(!ArgumentSplitter.isWellFormed(#"--path C:\"#))
+    }
 }

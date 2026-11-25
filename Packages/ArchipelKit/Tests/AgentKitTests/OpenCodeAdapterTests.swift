@@ -21,12 +21,12 @@ struct OpenCodeAdapterTests {
     @Test func freshAndResumeUseTheSessionFlag() throws {
         let fresh = opencode.launchCommand(for: context(agentSessionID: "ses_abc"))
         #expect(fresh.executable == "opencode")
-        #expect(fresh.arguments == ["-s", "ses_abc"])
+        #expect(fresh.arguments == ["--session=ses_abc"])
         LaunchFixture.expectHookEnvironment(fresh)
         #expect(fresh.environment["ARCHIPEL_HOOK_BIN"] == LaunchFixture.hook.path)
 
         let resumed = try #require(opencode.resumeCommand(for: context(agentSessionID: "ses_old")))
-        #expect(resumed.arguments == ["-s", "ses_old"])
+        #expect(resumed.arguments == ["--session=ses_old"])
     }
 
     @Test func presetIDsAreAcceptedByOpenCode() {

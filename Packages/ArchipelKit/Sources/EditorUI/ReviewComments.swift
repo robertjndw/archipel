@@ -42,6 +42,10 @@ public final class ReviewCommentStore {
     private var commentsByRoot: [String: [ReviewComment]] = [:] {
         didSet { if commentsByRoot != oldValue { scheduleSave() } }
     }
+    /// The batch each worktree sent last. Sending only pastes the prompt into the agent's input, where
+    /// an Esc or a dropped paste loses it, so it stays restorable until the next send or until a new
+    /// comment shows the review has moved on. Kept in memory only: a relaunch ends that window.
+    private var sentByRoot: [String: [ReviewComment]] = [:]
     @ObservationIgnored private let fileURL: URL?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     static let saveDelay = Duration.milliseconds(400)
@@ -69,6 +73,7 @@ public final class ReviewCommentStore {
 
     public func add(_ comment: ReviewComment, in root: URL) {
         let key = Self.key(root)
+        if sentByRoot[key] != nil { sentByRoot[key] = nil }
         var comments = commentsByRoot[key] ?? []
         comments.removeAll { $0.id == comment.id }
         // Inserting after every equal key, rather than sorting, is what keeps ties in insertion order.
@@ -94,11 +99,57 @@ public final class ReviewCommentStore {
         commentsByRoot[Self.key(root)] = nil
     }
 
+    /// The comments last sent from the worktree, which no longer count as pending.
+    public func sentComments(in root: URL) -> [ReviewComment] {
+        sentByRoot[Self.key(root)] ?? []
+    }
+
+    /// Called once the comments have gone to an agent: they leave the pending list, replacing the
+    /// batch sent before them.
+    public func markSent(in root: URL) {
+        let key = Self.key(root)
+        guard let comments = commentsByRoot[key] else { return }
+        sentByRoot[key] = comments
+        commentsByRoot[key] = nil
+    }
+
+    /// Puts the last sent batch back among the pending comments, for when it never reached the agent.
+    public func restoreSent(in root: URL) {
+        let key = Self.key(root)
+        guard let sent = sentByRoot.removeValue(forKey: key) else { return }
+        for comment in sent { add(comment, in: root) }
+    }
+
+    /// For a worktree whose folder moved: its pending comments and its last sent batch follow it.
+    /// Left under the old folder, `retain(only:)` would drop them as belonging to a worktree that
+    /// is gone, and the sent batch could no longer be restored.
+    public func move(from oldRoot: URL, to newRoot: URL) {
+        let old = Self.key(oldRoot)
+        let new = Self.key(newRoot)
+        guard old != new else { return }
+        if let sent = sentByRoot.removeValue(forKey: old) {
+            sentByRoot[new] = sent
+        }
+        guard let moved = commentsByRoot[old] else { return }
+        var comments = commentsByRoot[new] ?? []
+        for comment in moved {
+            comments.removeAll { $0.id == comment.id }
+            let index = comments.firstIndex { Self.sortsBefore(comment, $0) } ?? comments.endIndex
+            comments.insert(comment, at: index)
+        }
+        // One write, so the store is saved once and never holds the comments under both folders.
+        var all = commentsByRoot
+        all[old] = nil
+        all[new] = comments
+        commentsByRoot = all
+    }
+
     /// Drops the comments of every worktree not in `roots`: once a worktree is gone nothing shows
     /// them, and no session is left to send them to.
     public func retain(only roots: [URL]) {
-        guard !commentsByRoot.isEmpty else { return }
         let keys = Set(roots.map(Self.key))
+        if !sentByRoot.keys.allSatisfy(keys.contains) { sentByRoot = sentByRoot.filter { keys.contains($0.key) } }
+        guard !commentsByRoot.isEmpty else { return }
         // Checked first so the common case, nothing to drop, does not write an observed property.
         guard !commentsByRoot.keys.allSatisfy(keys.contains) else { return }
         commentsByRoot = commentsByRoot.filter { keys.contains($0.key) }

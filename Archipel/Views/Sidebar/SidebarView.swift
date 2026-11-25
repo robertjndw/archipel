@@ -29,6 +29,8 @@ struct SidebarView: View {
         .background { SidebarPeekKeyMonitor(peek: peek, model: model) }
         .environment(peek)
         .onChange(of: model.selectedIsland?.id) { peek.close() }
+        // The other list has other rows; a peek left on one of them would pop up there by itself.
+        .onChange(of: model.showsOnlyNeedsMe) { peek.close() }
         .popoverTip(SidebarTips.group.currentTip as? PeekTip, arrowEdge: .trailing)
         .tipViewStyle(CompactTipStyle())
         // The model keeps the counts current, but it's created before TipKit is configured, so
@@ -164,7 +166,11 @@ struct SidebarView: View {
     /// without changing what the window shows, since it can only show one of them.
     private func selection(showing selected: Worktree.ID?) -> Binding<Set<Worktree.ID>> {
         Binding(
-            get: { model.sidebarSelection.count > 1 ? model.sidebarSelection : Set([selected].compactMap(\.self)) },
+            get: {
+                // Only what still has a row: removed or filtered-out picks must not keep a batch alive.
+                let batch = model.multiSelectedWorktrees
+                return batch.isEmpty ? Set([selected].compactMap(\.self)) : Set(batch.map(\.id))
+            },
             set: { ids in
                 if ids.count > 1 {
                     model.sidebarSelection = ids
@@ -192,7 +198,9 @@ struct SidebarView: View {
         let batch = model.removableMultiSelection
         if !batch.isEmpty {
             model.requestRemoval(of: batch)
-        } else if let worktree = model.selectedWorktree, !worktree.isMain, model.readyForSheet() {
+        } else if let worktree = model.selectedWorktree, !worktree.isMain,
+                  // Delete is about the row the user is looking at, not one filtered out or collapsed away.
+                  model.isListedInSidebar(worktree.id), model.readyForSheet() {
             removing = worktree
         }
     }
@@ -323,6 +331,7 @@ private struct SidebarHeader: View {
     }
 }
 
+/// `NewSessionMenu` in the tab bar builds the same menu in AppKit. Change one, change the other.
 struct NewSessionButtons: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings

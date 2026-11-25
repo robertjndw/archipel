@@ -146,6 +146,80 @@ extension AppModel {
     }
 }
 
+// MARK: Removing islands and projects
+
+/// What the confirmations say, shared by the context menus and the palette.
+extension AppModel {
+    func deletionMessage(for island: Island) -> String {
+        island.projects.count == 1
+            ? "Its project is removed from Archipel and its sessions are closed. Nothing is deleted from disk."
+            : "Its \(island.projects.count) projects are removed from Archipel and their sessions are closed. Nothing is deleted from disk."
+    }
+
+    func removalMessage(for project: Project) -> String {
+        let sessions = project.worktrees.flatMap(\.sessions)
+        let working = sessions.count { activity(for: $0.id).hasWorkInFlight }
+        let closing = switch working {
+        case 0: sessions.isEmpty ? "" : " and its sessions are closed"
+        case 1: " and its sessions are closed, including an agent that is still running"
+        default: " and its sessions are closed, including \(working) agents that are still running"
+        }
+        return "The project is removed from Archipel\(closing). Nothing is deleted from disk."
+    }
+
+    /// An island with nothing in it goes without asking, as from its context menu.
+    func requestDeletion(of island: Island) {
+        guard workspace.islands.count > 1 else { return }
+        if island.projects.isEmpty {
+            removeIsland(island.id)
+        } else if readyForSheet() {
+            islandAwaitingDeletion = island
+        }
+    }
+}
+
+// MARK: Order
+
+/// Islands and projects are put in order by hand. Worktrees are not: they follow git.
+extension AppModel {
+    /// Where the island is in the switcher, for disabling Move Left and Move Right at the ends.
+    func canMoveIsland(_ id: Island.ID, by offset: Int) -> Bool {
+        guard let index = workspace.islands.firstIndex(where: { $0.id == id }) else { return false }
+        return workspace.islands.indices.contains(index + offset)
+    }
+
+    func moveIsland(_ id: Island.ID, by offset: Int) {
+        mutate { $0.moveIsland(id: id, by: offset) }
+    }
+
+    func moveIsland(_ id: Island.ID, before target: Island.ID?) {
+        mutate { $0.moveIsland(id: id, before: target) }
+    }
+
+    func canMoveProject(_ id: Project.ID, by offset: Int) -> Bool {
+        guard let projects = workspace.island(containingProject: id)?.projects,
+              let index = projects.firstIndex(where: { $0.id == id })
+        else { return false }
+        return projects.indices.contains(index + offset)
+    }
+
+    func moveProject(_ id: Project.ID, by offset: Int) {
+        mutate { $0.moveProject(id: id, by: offset) }
+    }
+
+    /// A project header dropped on another one of the same island takes its place, so dragging
+    /// down lands below the target and dragging up lands above it. False for anything else.
+    @discardableResult
+    func moveProject(_ id: Project.ID, onto target: Project.ID) -> Bool {
+        guard id != target, let island = workspace.island(containingProject: target),
+              workspace.island(containingProject: id)?.id == island.id,
+              let index = island.projects.firstIndex(where: { $0.id == target })
+        else { return false }
+        mutate { $0.moveProject(id: id, to: island.id, at: index) }
+        return true
+    }
+}
+
 struct NeedsMeIsland: Identifiable {
     let island: Island
     let projects: [NeedsMeProject]
@@ -167,11 +241,33 @@ struct WorktreeBatch: Identifiable {
 }
 
 extension AppModel {
-    /// The worktrees picked together in the sidebar, in sidebar order. Empty unless there are at
-    /// least two, so callers can fall back to the selected worktree.
+    /// The worktree rows the sidebar lists right now, in its order. The "Needs Me" list has rows
+    /// from every island and ignores collapsed projects; the normal one shows the selected island's
+    /// expanded projects.
+    var sidebarRows: [Worktree] {
+        if showsOnlyNeedsMe { return needsMeGroups().flatMap { $0.projects.flatMap(\.worktrees) } }
+        return (selectedIsland?.projects ?? []).filter(\.isExpanded).flatMap(\.worktrees)
+    }
+
+    func isListedInSidebar(_ id: Worktree.ID) -> Bool {
+        sidebarRows.contains { $0.id == id }
+    }
+
+    /// The worktrees picked together in the sidebar, in sidebar order. Empty unless at least two of
+    /// them still have a row, so callers can fall back to the selected worktree.
     var multiSelectedWorktrees: [Worktree] {
         guard sidebarSelection.count > 1 else { return [] }
-        return workspace.allWorktrees.filter { sidebarSelection.contains($0.id) }
+        let picked = sidebarRows.filter { sidebarSelection.contains($0.id) }
+        return picked.count > 1 ? picked : []
+    }
+
+    /// Drops picked worktrees that were removed. A lone survivor is not a batch any more and goes
+    /// too, so its row gets its own menu back.
+    func pruneSidebarSelection() {
+        guard !sidebarSelection.isEmpty else { return }
+        let live = sidebarSelection.filter { workspace.worktree(id: $0) != nil }
+        let kept = live.count > 1 ? live : []
+        if kept != sidebarSelection { sidebarSelection = kept }
     }
 
     /// The part of the multi-selection that can be removed. The primary checkout is the project

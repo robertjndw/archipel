@@ -58,6 +58,7 @@ struct GeneralSettingsView: View {
                     Text("Ask before quitting while agents are working")
                     Text("Quitting stops agents. Their conversations resume when you reopen the session.")
                 }
+                .accessibilityIdentifier("settings.confirmsQuitWhileWorking")
             }
         }
         .formStyle(.grouped)

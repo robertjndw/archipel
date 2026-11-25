@@ -171,8 +171,7 @@ extension AppModel {
     /// The fully populated sample: two islands, sessions in every state, git status, a PR and usage.
     static func preview() -> AppModel {
         let model = AppModel(preview: PreviewFixtures.workspace, activities: PreviewFixtures.activities)
-        model.gitSummaries = PreviewFixtures.gitSummaries
-        model.pullRequests = PreviewFixtures.pullRequests
+        model.showGitForPreview(PreviewFixtures.gitSummaries, pullRequests: PreviewFixtures.pullRequests)
         model.usage = PreviewFixtures.usage
         model.sessionContexts = PreviewFixtures.sessionContexts
         model.promptCaches = PreviewFixtures.promptCaches
@@ -186,7 +185,7 @@ extension AppModel {
             activities: PreviewFixtures.activities,
             launchFailures: [PreviewFixtures.claudeSessionID: "Could not find `claude` on your PATH."]
         )
-        model.gitSummaries = PreviewFixtures.gitSummaries
+        model.showGitForPreview(PreviewFixtures.gitSummaries)
         return model
     }
 
@@ -196,7 +195,7 @@ extension AppModel {
         workspace.updateSession(id: PreviewFixtures.claudeSessionID) { $0.interface = .acp }
         let model = AppModel(preview: workspace, activities: PreviewFixtures.activities)
         model.chats[PreviewFixtures.claudeSessionID] = .preview(state)
-        model.gitSummaries = PreviewFixtures.gitSummaries
+        model.showGitForPreview(PreviewFixtures.gitSummaries, pullRequests: PreviewFixtures.pullRequests)
         return model
     }
 

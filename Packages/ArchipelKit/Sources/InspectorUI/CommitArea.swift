@@ -25,47 +25,25 @@ struct CommitControl: Equatable {
     var title: LocalizedStringKey { mode == .commit ? "Commit" : "Commit All" }
 }
 
-/// What the sync row shows and whether pushing makes sense.
-struct SyncState: Equatable {
-    var upstream: String?
-    var ahead: Int
-    var behind: Int
-    var isDetached: Bool
-    var hasRemote: Bool
-    var isBusy: Bool
+/// The Changes tab's view of the one sync rule, see `GitSyncState`.
+typealias SyncState = GitSyncState
 
-    init(status: GitStatus, hasRemote: Bool, isBusy: Bool) {
-        upstream = status.upstream
-        ahead = status.ahead
-        behind = status.behind
-        isDetached = status.branch == nil
-        self.hasRemote = hasRemote
-        self.isBusy = isBusy
-    }
+extension GitSyncState {
+    var canPush: Bool { canPush(from: .changesTab) }
 
-    var isPublished: Bool { upstream != nil }
-
-    /// Whether a push has anything to do, ignoring whether an action is already running.
-    var canPublishOrPush: Bool {
-        guard !isDetached else { return false }
-        return isPublished ? ahead > 0 : hasRemote
-    }
-
-    var canPush: Bool { canPublishOrPush && !isBusy }
-
-    /// Whether the primary button should offer Pull. Also true for a diverged branch: the pull fails
-    /// with an explanation, which beats a push that git rejects.
-    var needsPull: Bool { isPublished && !isDetached && behind > 0 }
-
-    /// Pull fetches first, so from the menu it is useful even when the last known count is zero.
-    var canPull: Bool { isPublished && !isDetached && !isBusy }
-    var canFetch: Bool { hasRemote && !isBusy }
-
-    var pushTitle: String { isPublished ? String(localized: "Push") : String(localized: "Publish Branch") }
+    var pushTitle: String { pushTitle(from: .changesTab) }
 
     var help: LocalizedStringKey {
         if isDetached { return "HEAD is detached. Check out a branch to push." }
-        if !isPublished { return hasRemote ? "Publish this branch to origin." : "This repository has no remote." }
+        if !isPublished {
+            guard let publishRemote else {
+                return hasRemote
+                    ? "None of this repository's remotes is named origin. Push from a terminal to choose one."
+                    : "This repository has no remote."
+            }
+            if let goneUpstream { return "\(goneUpstream) no longer exists. Publish this branch to \(publishRemote) again." }
+            return "Publish this branch to \(publishRemote)."
+        }
         if behind > 0 {
             return "The branch is \(behind) behind \(upstream ?? "its upstream"). Pull first, otherwise git rejects the push."
         }
@@ -80,7 +58,10 @@ struct SyncState: Equatable {
     /// A String, not a key, because it's also the menu trigger's AppKit tooltip.
     var summary: String {
         if isDetached { return String(localized: "Detached HEAD") }
-        guard let upstream else { return hasRemote ? String(localized: "Not published") : String(localized: "No remote") }
+        guard let upstream else {
+            if let goneUpstream { return String(localized: "\(goneUpstream) no longer exists") }
+            return hasRemote ? String(localized: "Not published") : String(localized: "No remote")
+        }
         if ahead == 0 && behind == 0 { return String(localized: "Up to date with \(upstream)") }
         return String(localized: "\(ahead) ahead, \(behind) behind \(upstream)")
     }
@@ -101,12 +82,13 @@ enum PrimaryAction: Equatable {
         } else if sync.needsPull {
             // Pull before push: git rejects a push to an upstream that has moved on.
             self = .pull(commits: sync.behind, ahead: sync.ahead, isEnabled: sync.canPull)
-        } else if sync.canPublishOrPush {
+        } else if sync.promotesPush {
             self = sync.isPublished
                 ? .push(commits: sync.ahead, isEnabled: sync.canPush)
                 : .publish(isEnabled: sync.canPush)
         } else {
-            // Nothing to do. A disabled Commit looks less alarming than a disabled Push.
+            // Nothing to do, or nothing to do by default. A disabled Commit looks less alarming
+            // than a disabled Push.
             self = .commit(commit)
         }
     }
@@ -154,17 +136,6 @@ enum PrimaryAction: Equatable {
         case .publish: "icloud.and.arrow.up"
         }
     }
-}
-
-struct PullRequestLookup: Equatable {
-    enum Outcome: Equatable {
-        case none
-        case found(GitPullRequest)
-        case unavailable
-    }
-
-    var branch: String
-    var outcome: Outcome
 }
 
 extension GitPullRequest {
@@ -613,6 +584,9 @@ private func previewCommitArea(_ title: String, _ model: ChangesModel) -> some V
                 PreviewSamples.synced(ahead: 2), activity: .push, pullRequest: PreviewSamples.pullRequest(.open, isDraft: true)
             ))
             previewCommitArea("Not published", .previewSample(PreviewSamples.synced(upstream: nil)))
+            previewCommitArea("Upstream deleted", .previewSample(
+                GitStatus(branch: "fix/login", staged: [], unstaged: [], goneUpstream: "origin/fix/login")
+            ))
             previewCommitArea("Merged pull request", .previewSample(PreviewSamples.synced(), pullRequest: PreviewSamples.pullRequest(.merged)))
         }
         .padding(.vertical)

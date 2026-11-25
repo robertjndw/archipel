@@ -96,6 +96,7 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
 | Switch to recent tab | <kbd>Ctrl</kbd><kbd>Tab</kbd> |
 | Next / previous tab | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>]</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>[</kbd> |
 | Split right | <kbd>⌘</kbd><kbd>\\</kbd> |
+| Focus next / previous pane | <kbd>⌘</kbd><kbd>]</kbd> / <kbd>⌘</kbd><kbd>[</kbd> |
 | Switch island | <kbd>Ctrl</kbd><kbd>1</kbd>...<kbd>9</kbd> |
 | Next / previous island | <kbd>Ctrl</kbd><kbd>⌘</kbd><kbd>]</kbd> / <kbd>Ctrl</kbd><kbd>⌘</kbd><kbd>[</kbd> |
 | Next session needing attention | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>U</kbd> |
@@ -142,7 +143,7 @@ cd archipel
 
 Run `./scripts/install.sh` again to update. It quits and relaunches an installed
 copy that is running, and leaves it untouched if the build fails. It replaces a
-copy installed from a DMG too.
+copy installed from a DMG too. Copies built from source do not update themselves.
 
 Copies installed from a DMG update themselves. Beta versions can be turned on
 under Settings > About.
@@ -150,7 +151,11 @@ under Settings > About.
 ## How agent status works
 
 Archipel starts each agent itself and injects what it needs per launch, so your own
-agent configuration is never edited. Claude Code gets hooks through `--settings`.
+agent configuration is left alone. The one exception is opt-in: with "Full status in
+shell tabs" turned on in Settings > Agents > Claude Code, Archipel adds its hook entries to
+your Claude `settings.json`, so a Claude you start by hand in a shell tab reports its
+status too, and takes them out again when you turn it off. Claude Code gets hooks through
+`--settings`.
 Codex gets hooks through `-c hooks.<Event>` overrides, plus `notify` and approval
 notifications as a fallback. Hooks call `archipel-hook`, which forwards the event to
 the app over a Unix socket in `~/Library/Application Support/Archipel`.
@@ -173,7 +178,7 @@ title only. OpenCode keeps using your background service and providers. The plug
 reports the conversation shown in its own tab (turns, permission requests, questions and
 errors) and ignores the other sessions the shared service knows about. Permission
 requests in OpenCode are answered in the terminal, so their notifications only bring the
-session forward. Sessions start with `opencode -s <id>`, which makes resuming work after a
+session forward. Sessions start with `opencode --session=<id>`, which makes resuming work after a
 relaunch.
 
 ## Development
