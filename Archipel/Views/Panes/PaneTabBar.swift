@@ -29,9 +29,12 @@ struct PaneTabBar: View {
     @State private var renaming: RenameTarget?
     /// Width of the scrolling part of the row, which the tabs share.
     @State private var rowWidth: CGFloat = 0
-    /// Pinned while you close tabs with the pointer in the bar, so the next close button lands
-    /// under the pointer (Safari does the same). Cleared when the pointer leaves.
-    @State private var frozenTabWidth: CGFloat?
+    /// While the pointer is in the bar, tabs keep the width they had for this many tabs, so the
+    /// next close button lands under the pointer (Safari does the same). Cleared on leave.
+    ///
+    /// Set on hover, not in `onChange` after a close: that runs a frame late, so the tabs would
+    /// start to widen, snap back, and flicker their truncated titles.
+    @State private var frozenTabCount: Int?
     @State private var isPointerInRow = false
     @State private var dragSlot: TabSlot?
     @State private var scrollPosition = ScrollPosition()
@@ -62,7 +65,7 @@ struct PaneTabBar: View {
     /// Tabs share the row evenly, clamped to the min and max width. Leftover space stays empty.
     /// Without the cap a single tab stretches across the pane and looks like a title bar.
     private var tabWidth: CGFloat {
-        frozenTabWidth ?? tabWidth(forCount: pane.tabs.count)
+        tabWidth(forCount: max(pane.tabs.count, frozenTabCount ?? 0))
     }
 
     private func tabWidth(forCount tabCount: Int) -> CGFloat {
@@ -219,17 +222,17 @@ struct PaneTabBar: View {
         .background(background)
         .onHover { inside in
             isPointerInRow = inside
-            if !inside, frozenTabWidth != nil {
-                withAnimation(reduceMotion ? nil : Motion.selection) { frozenTabWidth = nil }
+            if inside {
+                frozenTabCount = pane.tabs.count
+            } else if frozenTabCount != nil {
+                withAnimation(reduceMotion ? nil : Motion.selection) { frozenTabCount = nil }
             }
         }
         .localEventMonitor(.scrollWheel, while: isPointerInRow, handle: scrollSideways)
-        .onChange(of: pane.tabs.count) { old, new in
-            if new < old, isPointerInRow {
-                frozenTabWidth = frozenTabWidth ?? tabWidth(forCount: old)
-            } else if new > old {
-                frozenTabWidth = nil
-            }
+        // Tabs opened while hovering get room through the max in `tabWidth`. Raising the count
+        // keeps that width when they're closed again.
+        .onChange(of: pane.tabs.count) { _, new in
+            if let frozen = frozenTabCount, new > frozen { frozenTabCount = new }
         }
         .renameAlert($renaming)
     }
@@ -744,7 +747,7 @@ private struct TabFrames: PreferenceKey {
     }
 }
 
-/// Scale, fade and blur for tabs being opened or closed.
+/// Scale, fade and blur for tabs being opened.
 private struct TabTransition: Transition {
     func body(content: Content, phase: TransitionPhase) -> some View {
         content
@@ -755,7 +758,15 @@ private struct TabTransition: Transition {
 }
 
 private extension AnyTransition {
-    static var tab: AnyTransition { AnyTransition(TabTransition()) }
+    /// A closed tab leaves the layout right away but is still drawn while it animates out, and
+    /// its neighbours slide over it. A slow blurred exit smears its title into theirs, so it
+    /// just fades out fast.
+    static var tab: AnyTransition {
+        .asymmetric(
+            insertion: AnyTransition(TabTransition()),
+            removal: .opacity.animation(.easeOut(duration: 0.1))
+        )
+    }
 }
 
 #if DEBUG
