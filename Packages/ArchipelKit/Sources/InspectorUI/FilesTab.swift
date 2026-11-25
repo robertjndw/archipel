@@ -47,13 +47,16 @@ final class FileTreeModel {
         expanded[directory.pathKey] != nil
     }
 
-    func setExpanded(_ directory: URL, _ isExpanded: Bool) {
+    /// Hands back the reload so tests can await it.
+    @discardableResult
+    func setExpanded(_ directory: URL, _ isExpanded: Bool) -> Task<Void, Never>? {
         if isExpanded {
             expanded[directory.pathKey] = directory
             // Cached children show immediately; the reload catches anything that changed while collapsed.
-            Task { await load(directory) }
+            return Task { await load(directory) }
         } else {
             expanded[directory.pathKey] = nil
+            return nil
         }
     }
 

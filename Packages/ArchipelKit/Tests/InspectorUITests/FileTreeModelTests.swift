@@ -140,15 +140,10 @@ final class FileTreeModelTests {
             if directory.lastPathComponent == "Sources" { nodes.insert(FileNode(url: app, name: "App", isDirectory: true), at: 0) }
             return nodes
         }
-        // Spelled with trailing slashes, the way folder URLs come out of a real listing.
-        model.setExpanded(URL(filePath: "/tree/Sources/"), true)
-        model.setExpanded(URL(filePath: "/tree/Sources/App/"), true)
-        // Expanding loads the folder in a task of its own. Nothing else has listed these two yet,
-        // so once both show up those tasks are done and cannot land on top of a later refresh.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while model.nodes(in: sources) == nil || model.nodes(in: app) == nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        // Expanding reloads the folder in its own task. Await both so neither lands on top of the
+        // refresh below. Spelled with trailing slashes, the way folder URLs come out of a real listing.
+        await model.setExpanded(URL(filePath: "/tree/Sources/"), true)?.value
+        await model.setExpanded(URL(filePath: "/tree/Sources/App/"), true)?.value
         #expect(model.nodes(in: app)?.last?.name == "v1")
 
         version.withLock { $0 = 2 }
