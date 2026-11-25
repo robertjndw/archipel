@@ -59,10 +59,18 @@ struct StatusPulseTests {
         #expect(pulse(&activity, .subagentFinished(id: "a"), at: 10) == nil)
     }
 
-    @Test func theLastSubagentLeavingGlows() {
+    @Test func theLastSubagentLeavingDoesNotGlow() {
         var activity = working(subagents: ["a"])
         #expect(pulse(&activity, .turnFinished(message: nil)) == nil)
-        #expect(pulse(&activity, .subagentFinished(id: "a"), at: 10) == .finished)
+        #expect(pulse(&activity, .subagentFinished(id: "a"), at: 10) == nil)
+    }
+
+    @Test func theTurnAfterABackgroundSubagentGlows() {
+        var activity = working(subagents: ["a"])
+        #expect(pulse(&activity, .turnFinished(message: nil)) == nil)
+        #expect(pulse(&activity, .subagentFinished(id: "a"), at: 10) == nil)
+        #expect(pulse(&activity, .activity, at: 11) == nil)
+        #expect(pulse(&activity, .turnFinished(message: nil), at: 20) == .finished)
     }
 
     @Test func aSubagentEndingInsideTheTurnDoesNotGlow() {
@@ -99,11 +107,11 @@ struct StatusPulseTests {
         #expect(pulse(&activity, .sessionStarted) == nil)
     }
 
-    @Test func anExpiredSubagentGlowsLate() {
+    @Test func anExpiredSubagentDoesNotGlow() {
         var activity = working(subagents: ["lost"])
         activity.apply(.turnFinished(message: nil), isBeingViewed: false, at: Self.start)
         let before = activity
         activity.expireSubagents(at: Self.start + 11 * 60)
-        #expect(StatusPulse.kind(from: before, to: activity, siblings: []) == .finished)
+        #expect(StatusPulse.kind(from: before, to: activity, siblings: []) == nil)
     }
 }
