@@ -93,11 +93,15 @@ public struct ACPNodeTools: Sendable, Equatable {
     public var node: URL
     /// Given to npm as `PATH`; npm's own launcher looks `node` up there.
     public var path: String
+    /// Set on top of the app's environment, so npm sees the proxy, registry and `.npmrc` settings
+    /// the user's shell profile exports.
+    public var environment: [String: String]
 
-    public init(npm: URL, node: URL, path: String) {
+    public init(npm: URL, node: URL, path: String, environment: [String: String] = [:]) {
         self.npm = npm
         self.node = node
         self.path = path
+        self.environment = environment
     }
 }
 
@@ -431,6 +435,7 @@ public actor ACPInstaller {
         // npm's launcher finds `node` through PATH. The rest of the environment is kept because
         // npm needs HOME for its cache and breaks without it.
         var environment = ProcessInfo.processInfo.environment
+        environment.merge(tools.environment) { _, shell in shell }
         environment["PATH"] = tools.path
         let result: ProcessResult
         do {

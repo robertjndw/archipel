@@ -26,7 +26,7 @@ public struct ChatAgentConnection: Sendable {
     /// Starts `launch` as a child process in `workingDirectory`, with the app's environment plus
     /// the launch's variables.
     public static func spawn(_ launch: ChatLaunch, workingDirectory: String) throws -> ChatAgentConnection {
-        var environment = ProcessInfo.processInfo.environment
+        var environment = inheritedEnvironment(ProcessInfo.processInfo.environment)
         environment.merge(launch.environment) { _, launch in launch }
         let transport = try StdioTransport(
             executable: launch.executable.path,
@@ -41,5 +41,12 @@ public struct ChatAgentConnection: Sendable {
             terminateNow: { process.terminateNow() },
             waitForExit: { await process.waitForExit(timeout: $0) != nil }
         )
+    }
+
+    /// The app's environment without `ARCHIPEL_` variables. An Archipel started from one of its own
+    /// tabs has that tab's session id and socket, and the Claude hooks in the user's settings would
+    /// then report the chat's every step to that other tab. A chat reports through the protocol.
+    static func inheritedEnvironment(_ environment: [String: String]) -> [String: String] {
+        environment.filter { name, _ in !name.hasPrefix("ARCHIPEL_") }
     }
 }

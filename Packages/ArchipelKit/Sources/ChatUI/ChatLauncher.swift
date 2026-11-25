@@ -116,6 +116,10 @@ public struct ChatLauncher: Sendable {
     /// The user's login shell PATH. GUI apps start with a minimal one, and node-based adapters
     /// need the real one to find `node`.
     public var loginPATH: String
+    /// What the login shell exports that a session should get, as
+    /// `LoginShellEnvironment.sessionVariables(from:)` picks it. An app started from the Dock has
+    /// none of it, so without this the agent would miss its config folder, API key or proxy.
+    public var shellEnvironment: [String: String]
     /// Finds a command on `loginPATH`.
     public var locate: @Sendable (String) -> URL?
     public var registry: ACPRegistryStore
@@ -127,6 +131,7 @@ public struct ChatLauncher: Sendable {
         support: ACPSupport,
         cliPath: URL?,
         loginPATH: String,
+        shellEnvironment: [String: String] = [:],
         locate: @escaping @Sendable (String) -> URL?,
         registry: ACPRegistryStore,
         installer: ACPInstaller,
@@ -136,6 +141,7 @@ public struct ChatLauncher: Sendable {
         self.support = support
         self.cliPath = cliPath
         self.loginPATH = loginPATH
+        self.shellEnvironment = shellEnvironment
         self.locate = locate
         self.registry = registry
         self.installer = installer
@@ -251,7 +257,7 @@ public struct ChatLauncher: Sendable {
                 guard let node = locate("node"), let npm = locate("npm") else {
                     throw ChatLaunchError.nodeMissing(agentName: agentName)
                 }
-                let tools = ACPNodeTools(npm: npm, node: node, path: loginPATH)
+                let tools = ACPNodeTools(npm: npm, node: node, path: loginPATH, environment: shellEnvironment)
                 // Reported up front because npm says nothing until it is done.
                 progress(.installingPackages)
                 return try await installer.installPackage(
@@ -284,10 +290,11 @@ public struct ChatLauncher: Sendable {
         return ChatLaunch(executable: executable, arguments: installed.launch.arguments, environment: environment(adding: extra))
     }
 
-    /// Registry variables first, then the adapter's own, then `PATH`, which nothing may override:
-    /// the adapter has to find the same tools the user's shell would.
+    /// The shell's variables first, then the registry's, then the adapter's own, then `PATH`, which
+    /// nothing may override: the adapter has to find the same tools the user's shell would.
     private func environment(adding registryEnvironment: [String: String]) -> [String: String] {
-        var environment = registryEnvironment
+        var environment = shellEnvironment
+        environment.merge(registryEnvironment) { _, registry in registry }
         environment.merge(support.environment) { _, adapter in adapter }
         environment["PATH"] = loginPATH
         return environment

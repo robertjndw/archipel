@@ -46,6 +46,7 @@ extension AppModel {
         SidebarTips.chatOpened()
         Task { [self] in
             let path = await loginPATH.value
+            let exported = await LoginEnvironment.exported.value ?? [:]
             await waitForStoppingChat(of: id)
             // The same checks as a terminal launch. Nothing is awaited between them and storing the
             // chat, so a launch that went stale meanwhile never gets as far as starting a process.
@@ -65,7 +66,7 @@ extension AppModel {
                 apply(.processExited(code: 127), to: id)
                 return
             }
-            guard let launcher = chatLauncher(for: adapter, inPATH: path) else { return }
+            guard let launcher = chatLauncher(for: adapter, inPATH: path, exported: exported) else { return }
             var configuration = ChatSession.Configuration(
                 launcher: launcher,
                 workingDirectory: worktree.path.path(percentEncoded: false),
@@ -96,12 +97,12 @@ extension AppModel {
     /// The launcher Settings uses to show and update an agent's chat adapter, outside any session.
     /// Nil for an agent without chat, and in previews, which have no registry.
     func chatLauncher(for adapter: any AgentAdapter) async -> ChatLauncher? {
-        chatLauncher(for: adapter, inPATH: await loginPATH.value)
+        chatLauncher(for: adapter, inPATH: await loginPATH.value, exported: await LoginEnvironment.exported.value ?? [:])
     }
 
-    /// Synchronous once the PATH is known, so `launchChat` can build it without a suspension
-    /// between its staleness checks and storing the chat.
-    private func chatLauncher(for adapter: any AgentAdapter, inPATH path: String) -> ChatLauncher? {
+    /// Synchronous once the PATH and the shell's exports are known, so `launchChat` can build it
+    /// without a suspension between its staleness checks and storing the chat.
+    private func chatLauncher(for adapter: any AgentAdapter, inPATH path: String, exported: [String: String]) -> ChatLauncher? {
         guard let sources = chatAgents, let support = adapter.acp else { return nil }
         let chosen = settings.executablePath(for: adapter.id).map { Self.locateExecutable(adapter, override: $0, inPATH: path) }
         let cliPath = chosen?.path ?? LoginEnvironment.locate(adapter.executableName, inPATH: path)
@@ -110,6 +111,7 @@ extension AppModel {
             support: support,
             cliPath: cliPath.map { URL(fileURLWithPath: $0) },
             loginPATH: path,
+            shellEnvironment: LoginShellEnvironment.sessionVariables(from: exported),
             locate: { name in LoginEnvironment.locate(name, inPATH: path).map { URL(fileURLWithPath: $0) } },
             registry: sources.registry,
             installer: sources.installer

@@ -84,7 +84,8 @@ struct ChatLauncherTests {
         func launcher(
             support: ACPSupport,
             cliPath: URL? = URL(fileURLWithPath: "/usr/local/bin/demo"),
-            withNode: Bool = true
+            withNode: Bool = true,
+            shellEnvironment: [String: String] = [:]
         ) -> ChatLauncher {
             let tools = tools
             return ChatLauncher(
@@ -92,6 +93,7 @@ struct ChatLauncherTests {
                 support: support,
                 cliPath: cliPath,
                 loginPATH: ChatLauncherTests.loginPATH,
+                shellEnvironment: shellEnvironment,
                 locate: { name in
                     let url = tools.appendingPathComponent(name)
                     return withNode && FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
@@ -138,6 +140,27 @@ struct ChatLauncherTests {
             environment: ["A": "B", "PATH": Self.loginPATH]
         ))
         #expect(try await box.launcher(support: support).checkForUpdate() == nil)
+    }
+
+    @Test func theShellsVariablesGiveWayToTheAdaptersAndPATH() async throws {
+        let box = try Sandbox()
+        defer { box.cleanup() }
+        let support = ACPSupport(registryID: "opencode", launch: .cli(arguments: ["acp"]), sharesConversationIDs: true, environment: ["A": "B"])
+        let launcher = box.launcher(
+            support: support,
+            cliPath: URL(fileURLWithPath: "/opt/homebrew/bin/opencode"),
+            shellEnvironment: ["ANTHROPIC_API_KEY": "key", "A": "shell", "PATH": "/shell/bin"]
+        )
+        #expect(try await launcher.resolve().environment == ["ANTHROPIC_API_KEY": "key", "A": "B", "PATH": Self.loginPATH])
+    }
+
+    @Test func theAppsOwnSessionVariablesAreNotInherited() {
+        let inherited = ChatAgentConnection.inheritedEnvironment([
+            "HOME": "/Users/me",
+            "ARCHIPEL_SESSION_ID": "parent-tab",
+            "ARCHIPEL_SOCKET": "/tmp/parent.sock",
+        ])
+        #expect(inherited == ["HOME": "/Users/me"])
     }
 
     @Test func cliLaunchNeedsTheCLI() async throws {
