@@ -1321,6 +1321,17 @@ final class AppModel {
         closeNow(tab)
     }
 
+    /// Tabs with unsaved edits stay open so the edits aren't lost. Saving recreates the file.
+    func closeFileTabs(under trashed: [URL]) {
+        let roots = trashed.map { $0.standardizedFileURL.path }
+        let tabs = workspace.allWorktrees.flatMap(\.panes).flatMap(\.tabs).filter { tab in
+            guard case .file(let url) = tab.content else { return false }
+            let path = url.standardizedFileURL.path
+            return roots.contains { path == $0 || path.hasPrefix($0 + "/") } && !documents.isDirty(url)
+        }
+        for tab in tabs { close(tab: tab.id) }
+    }
+
     func resolveClose(of tab: Tab, saving: Bool) {
         guard case .file(let url) = tab.content else { return }
         if saving {

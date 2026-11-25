@@ -23,11 +23,13 @@ public struct InspectorView: View {
         focusCommitMessage: Binding<Bool> = .constant(false),
         onOpenFile: @escaping (_ url: URL, _ preview: Bool) -> Void,
         onOpenDiff: @escaping (_ path: String, _ staged: Bool, _ preview: Bool) -> Void,
-        onSwitchBranch: (() -> Void)? = nil
+        onSwitchBranch: (() -> Void)? = nil,
+        onTrash: @escaping (_ urls: [URL]) -> Void = { _ in },
+        onProblem: @escaping (_ message: String) -> Void = { _ in }
     ) {
         self.git = git
         _focusCommitMessage = focusCommitMessage
-        actions = InspectorActions(openFile: onOpenFile, openDiff: onOpenDiff, switchBranch: onSwitchBranch)
+        actions = InspectorActions(openFile: onOpenFile, openDiff: onOpenDiff, switchBranch: onSwitchBranch, didTrash: onTrash, reportProblem: onProblem)
     }
 
     public var body: some View {
@@ -217,6 +219,9 @@ struct InspectorActions {
     var openFile: (_ url: URL, _ preview: Bool) -> Void
     var openDiff: (_ path: String, _ staged: Bool, _ preview: Bool) -> Void
     var switchBranch: (() -> Void)? = nil
+    /// Lets the app close tabs for whatever was just trashed.
+    var didTrash: (_ urls: [URL]) -> Void = { _ in }
+    var reportProblem: (_ message: String) -> Void = { _ in }
 }
 
 /// The strip under the picker: what is being shown on the left, a refresh control on the right.

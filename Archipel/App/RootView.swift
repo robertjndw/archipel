@@ -184,7 +184,9 @@ struct RootView: View {
                 onOpenDiff: { path, staged, preview in model.openDiff(path: path, staged: staged, preview: preview) },
                 onSwitchBranch: {
                     if let worktree = model.selectedWorktree { model.switchBranchWorktreeID = worktree.id }
-                }
+                },
+                onTrash: { urls in model.closeFileTabs(under: urls) },
+                onProblem: { message in model.problem = message }
             )
         } else {
             // The inspector starts git as soon as it is on screen, and without the developer
