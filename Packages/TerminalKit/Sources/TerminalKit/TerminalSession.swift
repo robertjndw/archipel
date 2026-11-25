@@ -43,6 +43,16 @@ public final class TerminalSession: Identifiable {
 
     public private(set) var title: String = ""
     public private(set) var workingDirectory: String?
+    private var spawnDirectory: URL?
+
+    /// Where relative paths in terminal output are most likely relative to:
+    /// the program's reported pwd, else the directory it was started in.
+    var linkBaseDirectory: URL? {
+        guard let pwd = workingDirectory, !pwd.isEmpty else { return spawnDirectory }
+        // OSC 7 sends a file URL, but some programs send a bare path.
+        if let url = URL(string: pwd), url.isFileURL { return url }
+        return pwd.hasPrefix("/") ? URL(filePath: pwd) : spawnDirectory
+    }
     public private(set) var hasExited = false
 
     /// Scrollback search. Ghostty opens it on its `start_search` binding
@@ -116,6 +126,7 @@ public final class TerminalSession: Identifiable {
             return Self.wrap(command, statusFile: statusFile)
         }
 
+        spawnDirectory = configuration.workingDirectory
         let surface: ghostty_surface_t? = configuration.workingDirectory.path(percentEncoded: false).withCString { cwd in
             surfaceConfig.working_directory = cwd
             return withOptionalCString(command) { command in

@@ -458,7 +458,7 @@ extension TerminalApp {
             if url.isFileURL { NSWorkspace.shared.open(url) }
             return
         }
-        guard let link = TerminalLink(string) else {
+        guard let link = TerminalLink(string, relativeTo: session?.linkBaseDirectory) else {
             logger.info("refusing to open untrusted link target")
             return
         }

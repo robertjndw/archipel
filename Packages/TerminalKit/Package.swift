@@ -27,6 +27,10 @@ let package = Package(
             name: "terminal-demo",
             dependencies: ["TerminalKit"]
         ),
+        .testTarget(
+            name: "TerminalKitTests",
+            dependencies: ["TerminalKit"]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )
