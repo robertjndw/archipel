@@ -1,4 +1,5 @@
 import AgentKit
+import ArchipelCore
 import Foundation
 import Observation
 
@@ -241,6 +242,15 @@ final class AppSettings {
         agentPreferences[agentID, default: AgentPreferences()].executablePath = path.flatMap { $0.isEmpty ? nil : $0 }
     }
 
+    /// Whether new sessions of an agent start as a terminal or as a chat.
+    func interface(for agentID: String) -> SessionInterface {
+        agentPreferences[agentID]?.interface ?? .terminal
+    }
+
+    func setInterface(_ interface: SessionInterface, for agentID: String) {
+        agentPreferences[agentID, default: AgentPreferences()].interface = interface
+    }
+
     static let standardWorktreesRoot = URL.homeDirectory.appending(path: ".archipel/worktrees", directoryHint: .isDirectory)
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -348,10 +358,13 @@ struct AgentPreferences: Codable, Equatable {
     var isEnabled = true
     /// Nil finds the agent on the login PATH.
     var executablePath: String?
+    /// What a new session of the agent starts as.
+    var interface: SessionInterface = .terminal
 
-    init(isEnabled: Bool = true, executablePath: String? = nil) {
+    init(isEnabled: Bool = true, executablePath: String? = nil, interface: SessionInterface = .terminal) {
         self.isEnabled = isEnabled
         self.executablePath = executablePath
+        self.interface = interface
     }
 
     /// Each field falls back on its own, so a value of the wrong type or a field written by a newer
@@ -360,6 +373,9 @@ struct AgentPreferences: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .isEnabled)) ?? true
         executablePath = (try? container.decodeIfPresent(String.self, forKey: .executablePath)) ?? nil
+        // A string, so an interface from a later version falls back to the terminal.
+        interface = ((try? container.decodeIfPresent(String.self, forKey: .interface)) ?? nil)
+            .flatMap(SessionInterface.init(rawValue:)) ?? .terminal
     }
 
     /// Decodes the stored dictionary entry by entry: one broken entry costs only that agent its

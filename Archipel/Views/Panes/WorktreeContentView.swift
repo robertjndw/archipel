@@ -230,9 +230,13 @@ private struct PaneView: View {
 
     /// The tab row and the card take the color of what the pane shows, so they read as one surface.
     private var surface: PaneSurface {
-        var showsSession = false
-        if case .session = pane.selectedTab?.content { showsSession = true }
-        return PaneSurface(showsSession: showsSession, colors: model.terminalColors)
+        PaneSurface(showsTerminal: shownInterface.interface == .terminal, colors: model.terminalColors)
+    }
+
+    private var shownInterface: ShownInterface {
+        guard case .session(let id) = pane.selectedTab?.content else { return ShownInterface(sessionID: nil, interface: nil) }
+        // A session that cannot be found is drawn as what sessions are by default, a terminal.
+        return ShownInterface(sessionID: id, interface: worktree.sessions.first { $0.id == id }?.effectiveInterface ?? .terminal)
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -264,6 +268,9 @@ private struct PaneView: View {
         // A dark terminal in a light window needs light text and dark glass in its tab row, and
         // the other way round. Always set, so a change of tab never changes the view's identity.
         .environment(\.colorScheme, surface.colorScheme ?? colorScheme)
+        // The surface, its light or dark and the content change together when a session switches
+        // between terminal and chat, so they fade as one. A change of tab stays instant.
+        .animation(reduceMotion ? nil : Motion.page, value: shownInterface)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             model.paneFrames[pane.id] = frame
         }
@@ -332,10 +339,13 @@ private struct PaneView: View {
                         ForEach(model.enabledAgents, id: \.id) { agent in
                             let canStart = model.canStartSession(with: agent)
                             Button(agent.displayName, symbol: agent.symbolName) {
-                                model.newSession(in: worktree.id, agent: agent, pane: pane.id)
+                                // ⌥-click opens the other interface, the way ⌥ flips where a link opens.
+                                let flips = agent.acp != nil && NSEvent.modifierFlags.contains(.option)
+                                let interface = flips ? model.defaultInterface(for: agent).other : nil
+                                model.newSession(in: worktree.id, agent: agent, pane: pane.id, interface: interface)
                             }
                             .disabled(!canStart)
-                            .help(canStart ? "" : agent.missingCommandHint)
+                            .help(canStart ? startHelp(for: agent) : agent.missingCommandHint)
                         }
                     }
                 }
@@ -343,6 +353,26 @@ private struct PaneView: View {
                 .controlSize(.large)
             }
         }
+    }
+
+    /// Only agents that can run either way have an Option-click to mention.
+    private func startHelp(for agent: any AgentAdapter) -> String {
+        guard agent.acp != nil else { return "" }
+        return "Option-click to open in \(model.defaultInterface(for: agent).other.title)"
+    }
+}
+
+/// What a pane's selected tab shows, for animating a switch between terminal and chat.
+///
+/// Equal whenever the session differs, which is not a lawful equality but is what
+/// `.animation(_:value:)` needs: it only compares a value with the one before, and only the same
+/// session changing its interface should animate.
+private struct ShownInterface: Equatable {
+    var sessionID: Session.ID?
+    var interface: SessionInterface?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.sessionID != rhs.sessionID || lhs.interface == rhs.interface
     }
 }
 
@@ -358,10 +388,10 @@ struct PaneSurface {
     /// light window.
     var colorScheme: ColorScheme?
 
-    /// A session tab takes the terminal's colors, and also dims the way Ghostty dims its own
-    /// splits. Everything else is drawn on the text background and fades into it.
-    init(showsSession: Bool, colors: TerminalColors?) {
-        if showsSession, let colors {
+    /// A terminal takes the terminal's colors, and also dims the way Ghostty dims its own splits.
+    /// Everything else, a chat included, is drawn on the text background and fades into it.
+    init(showsTerminal: Bool, colors: TerminalColors?) {
+        if showsTerminal, let colors {
             let background = colors.background
             color = Color(background)
             foreground = Color(colors.foreground)
@@ -396,6 +426,7 @@ private struct SessionContent: View {
 
     var body: some View {
         let activity = model.activity(for: sessionID)
+        // A chat shows its own end, with its own way to restart.
         let exitCode: Int32? = if case .exited(let code) = activity.status, model.terminals[sessionID] != nil { code } else { nil }
         Group {
             if let terminal = model.terminals[sessionID] {
@@ -415,6 +446,13 @@ private struct SessionContent: View {
                     .onChange(of: terminal.id, initial: true) { [weak model] in
                         terminal.onReturnAfterExit = { model?.restartSession(sessionID) }
                     }
+            } else if let chat = model.chats[sessionID] {
+                ChatSessionContent(
+                    chat: chat, sessionID: sessionID, tabID: tabID,
+                    canSwitchToTerminal: model.canSwitchInterface(sessionID),
+                    agentSymbolName: model.workspace.session(id: sessionID)?.agent.adapter.symbolName ?? "sparkles"
+                )
+                .equatable()
             } else if let failure = model.launchFailures[sessionID] {
                 ContentUnavailableView {
                     Label("Could Not Start", systemImage: "exclamationmark.triangle")
@@ -436,6 +474,10 @@ private struct SessionContent: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        // One interface's content gives way to the other's as a whole, so a switch fades the
+        // terminal out and the chat in, however long after the switch the chat appears.
+        .id(model.workspace.session(id: sessionID)?.effectiveInterface)
+        .transition(.opacity)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // The animation stays in here, so the bar fades in while the terminal above it takes
             // its new height at once instead of reflowing its lines on every frame.
@@ -487,6 +529,19 @@ private struct ExitedBar: View {
     WorktreeContentView(isSidebarCollapsed: false, toggleSidebar: {})
         .environment(AppModel.preview())
         .frame(width: 900, height: 500)
+}
+
+#Preview("Chat") {
+    WorktreeContentView(isSidebarCollapsed: false, toggleSidebar: {})
+        .environment(AppModel.chatPreview())
+        .frame(width: 900, height: 500)
+}
+
+#Preview("Chat, Dark") {
+    WorktreeContentView(isSidebarCollapsed: false, toggleSidebar: {})
+        .environment(AppModel.chatPreview(.awaitingPermission))
+        .frame(width: 900, height: 500)
+        .preferredColorScheme(.dark)
 }
 
 #Preview("Could Not Start") {

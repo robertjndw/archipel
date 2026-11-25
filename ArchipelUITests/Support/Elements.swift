@@ -118,6 +118,81 @@ extension ArchipelUITestCase {
         paletteRows.matching(NSPredicate(format: "label BEGINSWITH %@", title)).element(boundBy: 0)
     }
 
+    // MARK: Chat
+
+    /// The text view prompts are typed into. The ended bar takes its place once the agent is gone.
+    var chatComposer: XCUIElement {
+        mainWindow.descendants(matching: .any).matching(identifier: "chat.composer").element(boundBy: 0)
+    }
+
+    /// Send and Stop are one button that changes its identifier with the turn.
+    var chatSendButton: XCUIElement {
+        mainWindow.buttons.matching(identifier: "chat.send").element(boundBy: 0)
+    }
+
+    var chatStopButton: XCUIElement {
+        mainWindow.buttons.matching(identifier: "chat.stop").element(boundBy: 0)
+    }
+
+    var chatRestartButton: XCUIElement {
+        mainWindow.buttons.matching(identifier: "chat.restart").element(boundBy: 0)
+    }
+
+    /// What an empty chat shows above the composer.
+    func chatWelcome(_ agentName: String) -> XCUIElement {
+        chatText("Chat with \(agentName)")
+    }
+
+    /// A line of the chat that is not a message. Plain text reports what it says as its value and
+    /// labelled elements as their label, so this takes either.
+    func chatText(_ text: String) -> XCUIElement {
+        mainWindow.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)).element(boundBy: 0)
+    }
+
+    /// The user's bubble reads as "You: " and the text.
+    func chatUserMessage(_ text: String) -> XCUIElement {
+        mainWindow.descendants(matching: .any).matching(identifier: "chat.message.user")
+            .matching(NSPredicate(format: "label == %@", "You: \(text)")).element(boundBy: 0)
+    }
+
+    /// A reply is Markdown, which may come out as more than one text, so this matches a part.
+    func chatAgentMessage(containing text: String) -> XCUIElement {
+        mainWindow.staticTexts.matching(identifier: "chat.message.agent")
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)).element(boundBy: 0)
+    }
+
+    /// A tool call row reads as its title and its status, as in "Read README.md, completed".
+    func chatToolCall(_ title: String) -> XCUIElement {
+        mainWindow.buttons.matching(identifier: "chat.toolCall")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "\(title), ")).element(boundBy: 0)
+    }
+
+    var chatPermissionCard: XCUIElement {
+        mainWindow.descendants(matching: .any).matching(identifier: "chat.permission").element(boundBy: 0)
+    }
+
+    /// `role` is the end of the button's identifier: `allow`, `allowAlways` or `reject`. Each
+    /// answer has its identifier whatever the agent calls it.
+    func chatPermissionButton(_ role: String) -> XCUIElement {
+        mainWindow.buttons.matching(identifier: "chat.permission.\(role)").element(boundBy: 0)
+    }
+
+    /// One of the agent's settings under the composer, by the id the agent gave it.
+    func chatControl(_ id: String) -> XCUIElement {
+        mainWindow.descendants(matching: .any).matching(identifier: "chat.control.\(id)").element(boundBy: 0)
+    }
+
+    /// Types a prompt into the composer and sends it with Return, then waits for its bubble.
+    /// Only letters and spaces: those sit on the same keys in every keyboard layout.
+    func sendChatPrompt(_ text: String, file: StaticString = #filePath, line: UInt = #line) {
+        assertExists(chatComposer, "The chat should have its composer.", file: file, line: line)
+        chatComposer.click()
+        app.typeText(text)
+        app.typeKey(.return, modifierFlags: [])
+        assertExists(chatUserMessage(text), "The prompt should show as the user's message.", file: file, line: line)
+    }
+
     // MARK: Sheets
 
     var sheet: XCUIElement { mainWindow.sheets.element(boundBy: 0) }

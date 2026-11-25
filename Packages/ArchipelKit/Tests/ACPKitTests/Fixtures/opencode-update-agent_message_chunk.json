@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "ses_df3193135ffeTlLv2y8SLsigBU",
+    "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "messageId": "msg_20ce6cf0d001JTWS8rHCSk9B0H",
+      "content": {
+        "type": "text",
+        "text": "pong"
+      }
+    }
+  }
+}

@@ -1,0 +1,85 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20ceb-2a9f-7c00-b32a-71f21d55070e",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-ba8a8c59-6749-45d8-86ff-dfc3bf5b21d9",
+        "kind": "edit",
+        "title": "Editing files",
+        "status": "in_progress",
+        "content": [
+          {
+            "type": "diff",
+            "oldText": null,
+            "newText": "yes\n",
+            "path": "/Users/someone/project/allowed.txt",
+            "_meta": {
+              "kind": "add"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "01a20ceb-2a9f-7c00-b32a-71f21d55070e",
+      "toolCall": {
+        "toolCallId": "exec-ba8a8c59-6749-45d8-86ff-dfc3bf5b21d9",
+        "title": "Edit files",
+        "locations": [
+          {
+            "path": "/Users/someone/project/allowed.txt"
+          }
+        ],
+        "kind": "edit",
+        "status": "pending"
+      },
+      "options": [
+        {
+          "optionId": "allow_once",
+          "name": "Yes, proceed",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow_for_session",
+          "name": "Yes, and don't ask again for these files",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "cancel",
+          "name": "No, and tell Codex what to do differently",
+          "kind": "reject_once"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "allow_once"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20ceb-2a9f-7c00-b32a-71f21d55070e",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-ba8a8c59-6749-45d8-86ff-dfc3bf5b21d9",
+        "status": "completed"
+      }
+    }
+  }
+]

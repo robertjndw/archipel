@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "method": "auth/status_update",
+  "params": {
+    "state": "authenticated",
+    "accounts": [
+      {
+        "label": "Claude Max",
+        "active": true,
+        "email": "someone@example.com",
+        "organization": "someone@example.com's Organization",
+        "_meta": {
+          "claudeCode": {
+            "kind": "account",
+            "plan": "max"
+          }
+        }
+      }
+    ]
+  }
+}

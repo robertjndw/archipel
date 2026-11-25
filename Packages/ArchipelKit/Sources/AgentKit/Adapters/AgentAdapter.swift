@@ -38,11 +38,14 @@ public protocol AgentAdapter: Sendable {
     /// The conversation's name inside the title the agent sets on its terminal, or nil when the
     /// title says nothing about it. The title is shown as is, minus leading status glyphs.
     func conversationTitle(fromTerminalTitle title: String) -> String?
+    /// How the agent runs as a chat over the Agent Client Protocol. Nil when it only has a terminal.
+    var acp: ACPSupport? { get }
 }
 
 extension AgentAdapter {
     public var executableToLocate: String { executableName }
     public var fallbackHookSources: Set<String> { [] }
+    public var acp: ACPSupport? { nil }
 
     /// Nil when the agent cannot resume, no agent session id is known yet or the one that was
     /// saved does not look like an id; start fresh then.

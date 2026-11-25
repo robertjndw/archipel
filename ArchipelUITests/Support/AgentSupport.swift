@@ -84,7 +84,7 @@ struct AgentStubRecord {
 }
 
 extension Sandbox {
-    fileprivate static let endOfLaunch = "end-of-launch"
+    static let endOfLaunch = "end-of-launch"
 
     /// Like `installAgentStub(named:)`, but each launch is added to the record instead of replacing
     /// it, so a test can tell a restart or a relaunch apart from the launch before it. Instead of

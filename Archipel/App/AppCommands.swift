@@ -1,5 +1,6 @@
 import AgentKit
 import ArchipelCore
+import ChatUI
 import InspectorUI
 import SwiftUI
 
@@ -32,7 +33,7 @@ struct AppCommands: Commands {
         CommandGroup(after: .appInfo) { UpdateMenuItem(updater: updater) }
         CommandGroup(replacing: .newItem) { FileMenuItems(model: model, actions: actions) }
         CommandGroup(replacing: .saveItem) { SaveMenuItems(model: model, actions: actions) }
-        CommandGroup(after: .pasteboard) { FindMenu(model: model) }
+        CommandGroup(after: .pasteboard) { FindMenu(model: model, actions: actions) }
         CommandGroup(after: .sidebar) { InspectorMenuItems(actions: actions) }
         CommandMenu("Go") { GoMenuItems(model: model, actions: actions) }
         CommandMenu("Project") { ProjectMenuItems(model: model, actions: actions) }
@@ -128,6 +129,42 @@ struct AppActions {
 
     func restartFocusedSession(fresh: Bool = false) {
         if let id = model.focusedSessionID { model.restartSession(id, fresh: fresh) }
+    }
+
+    /// What Switch to Chat or Switch to Terminal would move the focused session to. Nil when there
+    /// is no session or it cannot switch, which the menu and the palette show differently.
+    var focusedSessionSwitchTarget: SessionInterface? {
+        guard let session = focusedSession, model.canSwitchInterface(session.id) else { return nil }
+        return session.effectiveInterface.other
+    }
+
+    func switchFocusedSessionInterface() {
+        guard let id = model.focusedSessionID, let target = focusedSessionSwitchTarget else { return }
+        model.requestInterfaceSwitch(target, for: id)
+    }
+
+    // MARK: Find
+
+    /// The chat in the focused tab, which Find in the menu bar searches instead of sending the
+    /// text finder actions up the responder chain.
+    var focusedChat: ChatSession? {
+        model.focusedSessionID.flatMap { model.chats[$0] }
+    }
+
+    /// Opens Find in the focused chat, or puts the cursor back into its field.
+    func findInChat() {
+        // With Settings or a sheet in front, the chat behind it is not what ⌘F is about.
+        guard AppModel.isMainWindow(NSApp.keyWindow), focusedChat?.showFind() == true else {
+            NSSound.beep()
+            return
+        }
+    }
+
+    func stepFindInChat(forward: Bool) {
+        guard AppModel.isMainWindow(NSApp.keyWindow), focusedChat?.stepFind(forward: forward) == true else {
+            NSSound.beep()
+            return
+        }
     }
 
     var focusedWebTab: ArchipelCore.Tab? {
@@ -273,12 +310,36 @@ private struct FileMenuItems: View {
             .disabled(worktree == nil || !model.canStartSession(with: agent))
         }
         PresetMenu(model: model, actions: actions, worktree: worktree?.id)
+        OpenInMenu(model: model, worktree: worktree?.id)
         Divider()
         Button("Add Project…", systemImage: "folder.badge.plus") { actions.addProject() }
             .keyboardShortcut("o", modifiers: [.command, .shift])
         Divider()
         Button(model.focusedTab == nil ? "Close" : "Close Tab", systemImage: "xmark") { actions.closeTabOrWindow() }
             .keyboardShortcut("w")
+    }
+}
+
+/// Each agent that can run either way, in the interface its plain item above does not open. No
+/// shortcuts: ⌘T, ⌥⌘T and ⇧⌘T already belong to the first three agents, so there is no Option
+/// alternate of them left to give.
+private struct OpenInMenu: View {
+    let model: AppModel
+    let worktree: Worktree.ID?
+
+    var body: some View {
+        let agents = model.agentsInMenuOrder.filter { $0.acp != nil }
+        if !agents.isEmpty {
+            Menu("Open In", systemImage: "rectangle.on.rectangle") {
+                ForEach(agents, id: \.id) { agent in
+                    let other = model.defaultInterface(for: agent).other
+                    Button("New \(agent.displayName) Session in \(other.title)", symbol: agent.symbolName) {
+                        if let worktree { model.newSession(in: worktree, agent: agent, interface: other) }
+                    }
+                    .disabled(worktree == nil || !model.canStartSession(with: agent))
+                }
+            }
+        }
     }
 }
 
@@ -327,30 +388,49 @@ private struct SaveMenuItems: View {
     }
 }
 
-/// Sends the standard text finder actions up the responder chain: the file editor's text view
-/// answers them with its find bar, a terminal with Ghostty's scrollback search. The editor takes
-/// the shortcuts itself before the menu sees them; a terminal hands them to the menu first.
+/// Edit > Find. A focused chat searches its conversation. Everything else gets the standard text
+/// finder actions up the responder chain: the file editor's text view answers them with its find
+/// bar, a terminal with Ghostty's scrollback search. The editor takes the shortcuts itself before
+/// the menu sees them; a terminal hands them to the menu first.
 private struct FindMenu: View {
     let model: AppModel
+    let actions: AppActions
 
     var body: some View {
+        // Whether a chat has the focus is looked up on click, not read here: a menu that followed
+        // the chat would be rebuilt with every chunk of a reply.
+        Divider()
         Menu("Find") {
-            Button("Find…") { Self.send(.showFindInterface) }
+            Button("Find…", systemImage: "magnifyingglass") { find() }
                 .keyboardShortcut("f")
-            Button("Find Next") { step(.nextMatch) }
+            Button("Find Next", systemImage: "chevron.down") { step(.nextMatch) }
                 .keyboardShortcut("g")
-            Button("Find Previous") { step(.previousMatch) }
+            Button("Find Previous", systemImage: "chevron.up") { step(.previousMatch) }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
             Button("Use Selection for Find") { Self.send(.setSearchString) }
                 .keyboardShortcut("e")
         }
     }
 
+    /// With Settings or a sheet in front, the chat behind it is not what the key is about.
+    private var chatHasFocus: Bool {
+        AppModel.isMainWindow(NSApp.keyWindow) && actions.focusedChat != nil
+    }
+
+    private func find() {
+        if chatHasFocus { actions.findInChat() } else { Self.send(.showFindInterface) }
+    }
+
     /// While a terminal's search is open, the keyboard is usually in its field, and the field's
     /// editor answers the finder action itself without the terminal ever hearing of it. So the
     /// search is stepped directly, which also sends off a needle that is still waiting.
     private func step(_ action: NSTextFinder.Action) {
-        if !model.stepTerminalSearch(forward: action == .nextMatch) { Self.send(action) }
+        let forward = action == .nextMatch
+        if chatHasFocus {
+            actions.stepFindInChat(forward: forward)
+        } else if !model.stepTerminalSearch(forward: forward) {
+            Self.send(action)
+        }
     }
 
     private static func send(_ action: NSTextFinder.Action) {
@@ -518,6 +598,11 @@ private struct TabMenuItems: View {
             // Without a conversation there is nothing a plain restart would resume.
             Button("Restart with a New Conversation", systemImage: "plus.bubble") { actions.restartFocusedSession(fresh: true) }
                 .disabled(session?.agentSessionID == nil)
+            // Named after where it goes even when disabled, so the item does not read as missing.
+            let target = actions.focusedSessionSwitchTarget ?? session?.effectiveInterface.other ?? .acp
+            Button("Switch to \(target.title)", systemImage: target.symbolName) { actions.switchFocusedSessionInterface() }
+                .keyboardShortcut("c", modifiers: [.command, .control])
+                .disabled(actions.focusedSessionSwitchTarget == nil)
         }
         Divider()
         Button("Next Session Needing Attention", systemImage: "bell.badge") { model.selectNextNeedingAttention() }

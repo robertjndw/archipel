@@ -1,0 +1,225 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Find secret fruit in README"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "messageId": "01a20cea-10f0-7091-a134-34f03b8d965c",
+        "content": {
+          "type": "text",
+          "text": "Read README.md and tell me the secret fruit in one word."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_08bcde649f69b01f016b055aa63f5c87d294133fc986eb0fd5",
+        "content": {
+          "type": "text",
+          "text": "**Planning README inspection**"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08bcde649f69b01f016b055aa6b17c87d292108463c403bd89",
+        "content": {
+          "type": "text",
+          "text": "I'll check the repository README for the requested word."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d",
+        "name": "exec_command",
+        "kind": "execute",
+        "title": "rg -n -i \"secret|fruit\" README.md && sed -n '1,240p' README.md",
+        "status": "completed",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d"
+          }
+        ],
+        "rawInput": {
+          "command": "/bin/zsh -lc \"rg -n -i \\\"secret|fruit\\\" README.md && sed -n '1,240p' README.md\"",
+          "cwd": "/Users/someone/project"
+        },
+        "_meta": {
+          "terminal_info": {
+            "cwd": "/Users/someone/project",
+            "terminal_id": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d",
+        "_meta": {
+          "terminal_output_delta": {
+            "data": "3:The secret fruit is mango.\n# Sample repo\n\nThe secret fruit is mango.\n",
+            "terminal_id": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d"
+          },
+          "terminal_exit": {
+            "exit_code": 0,
+            "signal": null,
+            "terminal_id": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08bcde649f69b01f016b055aac0a6c87d2af025e9cbb9654be",
+        "content": {
+          "type": "text",
+          "text": "mango"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "messageId": "01a20cea-380d-78e3-9bfe-decd74d4a09e",
+        "content": {
+          "type": "text",
+          "text": "Create a file named hello.txt containing exactly the text hi. Use your file write/edit tool, not a shell command."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08bcde649f69b01f016b055ab0813c87d2b8acac370fec6c64",
+        "content": {
+          "type": "text",
+          "text": "I'll create `hello.txt` using the file-edit tool with exactly `hi`."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-d2f97034-c80a-4122-8231-329cbf697c43",
+        "kind": "edit",
+        "title": "Editing files",
+        "status": "completed",
+        "content": [
+          {
+            "type": "diff",
+            "oldText": null,
+            "newText": "hi\n",
+            "path": "/Users/someone/project/hello.txt",
+            "_meta": {
+              "kind": "add"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08bcde649f69b01f016b055ab3773c87d2bb7a4939090be419",
+        "content": {
+          "type": "text",
+          "text": "Created [hello.txt](/Users/someone/project/hello.txt)."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "idle"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 17213,
+        "size": 258400
+      }
+    }
+  }
+]

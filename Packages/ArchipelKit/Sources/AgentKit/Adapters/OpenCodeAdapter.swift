@@ -10,6 +10,10 @@ public struct OpenCodeAdapter: AgentAdapter {
     public let executableName = "opencode"
     public let hookSources: Set<String> = ["opencode"]
 
+    public var acp: ACPSupport? {
+        ACPSupport(registryID: "opencode", launch: .cli(arguments: ["acp"]), sharesConversationIDs: true)
+    }
+
     /// OpenCode rejects ids that do not start with this.
     static let sessionIDPrefix = "ses_"
 

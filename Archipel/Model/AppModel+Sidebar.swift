@@ -1,6 +1,7 @@
 import AgentKit
 import AppKit
 import ArchipelCore
+import ChatUI
 import EditorUI
 
 /// Small conveniences for the sidebar and the island switcher.
@@ -126,14 +127,18 @@ extension AppModel {
 }
 
 extension AppModel {
-    /// Focuses whatever the focused tab shows, its terminal or a file's editor, so the user can type
-    /// without clicking first. The short wait lets SwiftUI swap in the new tab's view.
+    /// Focuses whatever the focused tab shows, its terminal, its chat's composer or a file's editor,
+    /// so the user can type without clicking first. The short wait lets SwiftUI swap in the new tab's view.
     func focusFocusedTabSoon() {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(80))
             guard let self, NSApp.keyWindow?.attachedSheet == nil else { return }
             if let id = focusedSessionID {
-                terminals[id]?.focus()
+                if let chat = chats[id] {
+                    chat.requestComposerFocus()
+                } else {
+                    terminals[id]?.focus()
+                }
             } else if case .file(let url)? = focusedTab?.content {
                 EditorFocus.request(url)
             }

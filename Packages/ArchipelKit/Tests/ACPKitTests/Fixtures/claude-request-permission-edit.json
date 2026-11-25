@@ -1,0 +1,51 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "method": "session/request_permission",
+  "params": {
+    "toolCall": {
+      "toolCallId": "toolu_01DGiYVRWaUw5ZeAYBXpTCUY",
+      "name": "Edit",
+      "status": "pending",
+      "rawInput": {
+        "file_path": "/Users/someone/project/hello.txt",
+        "old_string": "hi",
+        "new_string": "hey",
+        "replace_all": false
+      },
+      "title": "Edit hello.txt",
+      "kind": "edit",
+      "content": [
+        {
+          "type": "diff",
+          "path": "/Users/someone/project/hello.txt",
+          "oldText": "hi",
+          "newText": "hey"
+        }
+      ],
+      "locations": [
+        {
+          "path": "/Users/someone/project/hello.txt"
+        }
+      ]
+    },
+    "options": [
+      {
+        "optionId": "allow-once",
+        "name": "Yes",
+        "kind": "allow_once"
+      },
+      {
+        "optionId": "allow-with-updates",
+        "name": "Yes, allow all edits during this session",
+        "kind": "allow_always"
+      },
+      {
+        "optionId": "reject",
+        "name": "No",
+        "kind": "reject_once"
+      }
+    ],
+    "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e"
+  }
+}

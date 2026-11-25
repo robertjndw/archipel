@@ -8,8 +8,10 @@ let package = Package(
         .library(name: "ArchipelCore", targets: ["ArchipelCore"]),
         .library(name: "AgentKit", targets: ["AgentKit"]),
         .library(name: "GitKit", targets: ["GitKit"]),
+        .library(name: "ACPKit", targets: ["ACPKit"]),
         .library(name: "InspectorUI", targets: ["InspectorUI"]),
         .library(name: "EditorUI", targets: ["EditorUI"]),
+        .library(name: "ChatUI", targets: ["ChatUI"]),
         .executable(name: "archipel-hook", targets: ["archipel-hook"]),
     ],
     dependencies: [
@@ -22,6 +24,9 @@ let package = Package(
         .target(name: "ArchipelCore"),
         .target(name: "AgentKit", dependencies: ["ArchipelCore"]),
         .target(name: "GitKit"),
+        // The Agent Client Protocol client: wire types, the connection to an agent process, and
+        // the registry its adapter programs are installed from. No UI and no other target.
+        .target(name: "ACPKit"),
         // SwiftUI helpers shared by the inspector and the editor; not a product of its own.
         .target(name: "UISupport"),
         .target(name: "InspectorUI", dependencies: ["GitKit", "UISupport"]),
@@ -34,14 +39,18 @@ let package = Package(
                 .product(name: "Markdown", package: "swift-markdown"),
             ]
         ),
+        // The native chat: one conversation with an agent over ACP, and how its process is launched.
+        .target(name: "ChatUI", dependencies: ["ACPKit", "AgentKit", "ArchipelCore", "EditorUI", "GitKit", "UISupport"]),
         // Manual verification harness; see Sources/editor-demo/main.swift for usage.
         .executableTarget(name: "editor-demo", dependencies: ["EditorUI"]),
         .executableTarget(name: "archipel-hook"),
         .testTarget(name: "ArchipelCoreTests", dependencies: ["ArchipelCore"]),
         .testTarget(name: "AgentKitTests", dependencies: ["AgentKit"]),
         .testTarget(name: "GitKitTests", dependencies: ["GitKit"]),
+        .testTarget(name: "ACPKitTests", dependencies: ["ACPKit"], resources: [.copy("Fixtures")]),
         .testTarget(name: "EditorUITests", dependencies: ["EditorUI"]),
         .testTarget(name: "InspectorUITests", dependencies: ["InspectorUI"]),
+        .testTarget(name: "ChatUITests", dependencies: ["ChatUI"]),
     ],
     swiftLanguageModes: [.v6]
 )

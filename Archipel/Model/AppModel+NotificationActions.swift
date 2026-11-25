@@ -1,6 +1,8 @@
+import ACPKit
 import AgentKit
 import AppKit
 import ArchipelCore
+import ChatUI
 import TerminalKit
 
 extension AppModel {
@@ -43,6 +45,9 @@ extension AppModel {
         if activity.needsUser, !activity.canAnswerUnseen { return nil }
         switch activity.status {
         case .needsAttention(.permission):
+            if let chat = chats[session.id] {
+                return chat.permissionRequests.first.flatMap(Self.allowAndDeny) == nil ? nil : .permission
+            }
             // An agent whose prompt we cannot read gets a notification that only opens the session.
             guard agent.adapter.capabilities.answersApprovalsInTerminal else { return nil }
             // Claude asks its multiple choice questions through the permission hook; they have no Yes and No.
@@ -64,12 +69,14 @@ extension AppModel {
         let current = activity(for: id)
         let status = current.status
         guard let session = workspace.session(id: id), effectiveAgent(for: session).acceptsPrompts,
-              let terminal = terminals[id],
               notifier.isCurrent(response), AttentionNotifier.statusKey(status) == response.status,
               // The banner named one request. Another may have taken its place without the status
               // changing, and the key would then answer something the user never read.
               notifier.request(answeredBy: response) == current.pendingRequest,
-              !current.needsUser || current.canAnswerUnseen,
+              !current.needsUser || current.canAnswerUnseen
+        else { return bringForward(id) }
+        if let chat = chats[id] { return answer(response, in: chat, status: status) }
+        guard let terminal = terminals[id],
               // A hand-started Claude may have exited since, and the shell would run the answer as a command.
               detectedAgentHoldsTerminal(id)
         else { return bringForward(id) }
@@ -107,6 +114,39 @@ extension AppModel {
             }
             resolveAttention(of: id, to: .working)
         }
+    }
+
+    /// A chat's request carries its own options, so there is no screen to read and nothing to type.
+    private func answer(_ response: AttentionNotifier.Response, in chat: ChatSession, status: SessionStatus) {
+        let id = response.sessionID
+        switch response.choice {
+        case .allow, .deny:
+            guard status == .needsAttention(.permission), let request = chat.permissionRequests.first,
+                  let options = Self.allowAndDeny(request)
+            else { return bringForward(id) }
+            let allowing = if case .allow = response.choice { true } else { false }
+            Task { await chat.respond(to: request, optionId: allowing ? options.allow : options.deny) }
+            // Working either way: some agents carry on after a denial and others end the turn, and
+            // the chat reports which.
+            resolveAttention(of: id, to: .working)
+
+        case .reply(let text):
+            let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !message.isEmpty else { return }
+            // A chat that is starting, signed out or busy takes no prompt, and the user should see why.
+            guard chat.send(text: message) else { return bringForward(id) }
+            resolveAttention(of: id, to: .working)
+        }
+    }
+
+    /// The options behind Allow and Deny. Only a request offering both a one-time allow and a
+    /// one-time reject gets the buttons: "always" choices change the agent's rules, which a button
+    /// in a notification should not do behind the user's back.
+    private static func allowAndDeny(_ request: ChatPermissionRequest) -> (allow: String, deny: String)? {
+        guard let allow = request.options.first(where: { $0.kind == .allowOnce }),
+              let deny = request.options.first(where: { $0.kind == .rejectOnce })
+        else { return nil }
+        return (allow.optionId, deny.optionId)
     }
 
     private func bringForward(_ id: Session.ID) {

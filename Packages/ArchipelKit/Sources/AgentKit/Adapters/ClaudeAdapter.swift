@@ -14,6 +14,15 @@ public struct ClaudeAdapter: AgentAdapter {
     public let executableName = "claude"
     public let hookSources: Set<String> = ["claude", Self.statusLineSource]
 
+    public var acp: ACPSupport? {
+        ACPSupport(
+            registryID: "claude-acp",
+            launch: .registry(cliExecutableVariable: "CLAUDE_CODE_EXECUTABLE"),
+            sharesConversationIDs: true,
+            environment: Self.launchedByArchipelEnvironment
+        )
+    }
+
     public var capabilities: AgentCapabilities {
         AgentCapabilities(
             sessionID: .presetByApp,
@@ -189,10 +198,14 @@ public struct ClaudeAdapter: AgentAdapter {
         return String(decoding: data, as: UTF8.self)
     }
 
-    /// Adds the flag that makes Archipel's entries in the user's settings skip this Claude, which
-    /// already reports through `--settings`. A Claude it starts inherits the flag.
+    /// The flag that makes Archipel's entries in the user's settings skip this Claude. A terminal
+    /// Claude already reports through `--settings`, and a chat one through the protocol. A Claude it
+    /// starts inherits the flag.
+    static let launchedByArchipelEnvironment = [
+        ClaudeUserHooks.launchedByArchipelVariable: ClaudeUserHooks.launchedByArchipelValue,
+    ]
+
     static func environment(_ context: LaunchContext) -> [String: String] {
-        hookEnvironment(context)
-            .merging([ClaudeUserHooks.launchedByArchipelVariable: ClaudeUserHooks.launchedByArchipelValue]) { $1 }
+        hookEnvironment(context).merging(launchedByArchipelEnvironment) { $1 }
     }
 }

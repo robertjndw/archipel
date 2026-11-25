@@ -1,0 +1,174 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Read README.md and tell me the secret fruit in one word."
+        },
+        "messageId": "9977871c-6baa-4681-a483-1cf5fe8f725a"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01KXgKcyVftv1HPLF3jqqV5V",
+        "sessionUpdate": "tool_call",
+        "name": "Read",
+        "rawInput": {
+          "file_path": "/Users/someone/project/README.md"
+        },
+        "status": "pending",
+        "title": "Read README.md",
+        "kind": "read",
+        "content": [],
+        "locations": [
+          {
+            "path": "/Users/someone/project/README.md",
+            "line": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_01KXgKcyVftv1HPLF3jqqV5V",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "1\t# Sample repo\n2\t\n3\tThe secret fruit is mango.\n4\t",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```\n1\t# Sample repo\n2\t\n3\tThe secret fruit is mango.\n4\t\n```"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Mango"
+        },
+        "messageId": "msg_011ChMXXrYVtw6unTZZhVU9e"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Create a file named hello.txt containing exactly the text hi. Use your file write/edit tool, not a shell command."
+        },
+        "messageId": "22f615f3-147e-4861-ae12-4c76895f6711"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_01UD6hqfLsJioVLLLswsK6YL",
+        "sessionUpdate": "tool_call",
+        "name": "Write",
+        "rawInput": {
+          "file_path": "/Users/someone/project/hello.txt",
+          "content": "hi"
+        },
+        "status": "pending",
+        "title": "Write hello.txt",
+        "kind": "edit",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/Users/someone/project/hello.txt",
+            "oldText": null,
+            "newText": "hi"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/Users/someone/project/hello.txt"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_01UD6hqfLsJioVLLLswsK6YL",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "File created successfully at: /Users/someone/project/hello.txt (file state is current in your context - no need to Read it back)"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "4c4371d1-4140-4db5-957d-419744ded93c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I created `hello.txt` in the repo root with the Write tool. It contains just `hi`, with no newline at the end."
+        },
+        "messageId": "msg_011ChMXYD9kJkTnq3rhL6DmE"
+      }
+    }
+  }
+]

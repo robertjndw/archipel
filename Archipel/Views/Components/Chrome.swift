@@ -3,6 +3,9 @@ import SwiftUI
 
 /// Shared measurements for the window chrome, so the tab rows, their toolbar
 /// groups and the palette keep the same rhythm.
+///
+/// `panelRadius` and `controlRadius` are the app's two corner radii. The packages cannot see this
+/// enum, so `CornerRadius` in UISupport holds the same two values; keep them in step.
 enum Chrome {
     /// Height of a toolbar group and of a tab in the pane tab row. Leaves 4pt
     /// above and below inside `PaneTabBar.height` for the glass shadow.

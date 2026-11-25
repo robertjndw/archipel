@@ -1,0 +1,221 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01DGiYVRWaUw5ZeAYBXpTCUY",
+        "sessionUpdate": "tool_call",
+        "name": "Edit",
+        "rawInput": {},
+        "status": "pending",
+        "title": "Edit",
+        "kind": "edit",
+        "content": [],
+        "locations": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01DGiYVRWaUw5ZeAYBXpTCUY",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/Users/someone/project/hello.txt"
+        },
+        "title": "Edit hello.txt",
+        "locations": [
+          {
+            "path": "/Users/someone/project/hello.txt"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01DGiYVRWaUw5ZeAYBXpTCUY",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/Users/someone/project/hello.txt",
+          "old_string": "hi"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01DGiYVRWaUw5ZeAYBXpTCUY",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "replace_all": false,
+          "file_path": "/Users/someone/project/hello.txt",
+          "old_string": "hi",
+          "new_string": "hey"
+        },
+        "content": [
+          {
+            "type": "diff",
+            "path": "/Users/someone/project/hello.txt",
+            "oldText": "hi",
+            "newText": "hey"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "method": "session/request_permission",
+    "params": {
+      "toolCall": {
+        "toolCallId": "toolu_01DGiYVRWaUw5ZeAYBXpTCUY",
+        "name": "Edit",
+        "status": "pending",
+        "rawInput": {
+          "file_path": "/Users/someone/project/hello.txt",
+          "old_string": "hi",
+          "new_string": "hey",
+          "replace_all": false
+        },
+        "title": "Edit hello.txt",
+        "kind": "edit",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/Users/someone/project/hello.txt",
+            "oldText": "hi",
+            "newText": "hey"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/Users/someone/project/hello.txt"
+          }
+        ]
+      },
+      "options": [
+        {
+          "optionId": "allow-once",
+          "name": "Yes",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow-with-updates",
+          "name": "Yes, allow all edits during this session",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "reject",
+          "name": "No",
+          "kind": "reject_once"
+        }
+      ],
+      "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "allow-once"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "filePath": "/Users/someone/project/hello.txt",
+              "oldString": "hi",
+              "newString": "hey",
+              "originalFile": "hi\n",
+              "structuredPatch": [
+                {
+                  "oldStart": 1,
+                  "oldLines": 1,
+                  "newStart": 1,
+                  "newLines": 1,
+                  "lines": [
+                    "-hi",
+                    "+hey"
+                  ]
+                }
+              ],
+              "userModified": false,
+              "replaceAll": false
+            },
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01DGiYVRWaUw5ZeAYBXpTCUY",
+        "sessionUpdate": "tool_call_update",
+        "locations": [
+          {
+            "path": "/Users/someone/project/hello.txt",
+            "line": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01DGiYVRWaUw5ZeAYBXpTCUY",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "The file /Users/someone/project/hello.txt has been updated successfully. (file state is current in your context - no need to Read it back)"
+      }
+    }
+  }
+]

@@ -1,0 +1,28 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "ses_df3193135ffeTlLv2y8SLsigBU",
+    "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+        {
+          "name": "init",
+          "description": "guided AGENTS.md setup"
+        },
+        {
+          "name": "review",
+          "description": "review changes [commit|branch|pr], defaults to uncommitted"
+        },
+        {
+          "name": "goal",
+          "description": "keep working until an objective is met [pause|resume|clear]"
+        },
+        {
+          "name": "automation",
+          "description": "create an automation, or list, pause, resume and delete this project's automations"
+        }
+      ]
+    }
+  }
+}

@@ -322,6 +322,8 @@ private struct PreviewContent: View {
             case .terminal(let lines):
                 // A terminal grows from the bottom, so that is the end worth showing.
                 text(lines.joined(separator: "\n"), alignment: .bottomLeading, fadeFrom: .top)
+            case .chat(let reply):
+                text(reply, alignment: .bottomLeading, fadeFrom: .top, wraps: true)
             case .text(let lines):
                 text(lines.joined(separator: "\n"), alignment: .topLeading, fadeFrom: .bottom)
             case .image(let image):
@@ -338,12 +340,15 @@ private struct PreviewContent: View {
         .accessibilityHidden(true)
     }
 
-    private func text(_ string: String, alignment: Alignment, fadeFrom edge: UnitPoint) -> some View {
+    /// `wraps` fits the text to the card instead of cropping each line, for prose that has no line
+    /// breaks of its own.
+    private func text(_ string: String, alignment: Alignment, fadeFrom edge: UnitPoint, wraps: Bool = false) -> some View {
         Text(verbatim: string)
             .font(Self.font)
             .lineSpacing(0.5)
             .foregroundStyle(.primary.opacity(0.85))
-            .fixedSize()
+            .frame(width: wraps ? SwitcherMetrics.previewSize.width - 16 : nil, alignment: .leading)
+            .fixedSize(horizontal: !wraps, vertical: true)
             .padding(8)
             // A fixed frame, not a flexible one: a flexible frame grows to the text's full width
             // and the card then shows the middle of each line.

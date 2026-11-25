@@ -90,6 +90,54 @@ struct WorkspaceStoreTests {
         #expect(loaded.allSessions.map(\.script) == [.run, nil])
     }
 
+    @Test func sessionInterfaceDefaultsToTerminalAndRoundTrips() throws {
+        let id = "576782B3-1F07-40B8-AED6-EE5CFAEFE199"
+        func session(_ extra: String) throws -> Session {
+            let json = #"{"id": "\#(id)", "title": "Chat", "agent": "claude", "createdAt": 0\#(extra)}"#
+            return try JSONDecoder().decode(Session.self, from: Data(json.utf8))
+        }
+        #expect(try session("").interface == .terminal)
+        #expect(try session(#", "interface": "acp""#).interface == .acp)
+        // A value from a later version must not make the workspace unreadable.
+        #expect(try session(#", "interface": "voice""#).interface == .terminal)
+
+        for interface in SessionInterface.allCases {
+            let original = Session(title: "Chat", agent: .claude, interface: interface)
+            let encoded = try JSONEncoder().encode(original)
+            #expect(String(decoding: encoded, as: UTF8.self).contains(#""interface":"\#(interface.rawValue)""#))
+            #expect(try JSONDecoder().decode(Session.self, from: encoded) == original)
+        }
+    }
+
+    @Test func aWorkspaceFileWithoutSessionInterfacesStillLoads() throws {
+        let url = tempFile()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent().deletingLastPathComponent()) }
+        let store = WorkspaceStore(fileURL: url)
+        var ws = Workspace()
+        let p = makeProject()
+        ws.addProject(p, to: ws.islands[0].id)
+        ws.addSession(Session(title: "Chat", agent: .claude, interface: .acp), to: p.worktrees[0].id)
+        ws.addSession(makeSession(), to: p.worktrees[0].id)
+        try store.save(ws)
+
+        // What a build from before the interface existed wrote.
+        func withoutInterface(_ value: Any) -> Any {
+            if let object = value as? [String: Any] {
+                return object.filter { $0.key != "interface" }.mapValues(withoutInterface)
+            }
+            if let array = value as? [Any] { return array.map(withoutInterface) }
+            return value
+        }
+        let original = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
+        let stripped = try JSONSerialization.data(withJSONObject: withoutInterface(original))
+        #expect(String(decoding: stripped, as: UTF8.self).contains("\"interface\"") == false)
+        try stripped.write(to: url)
+
+        let loaded = try store.load()
+        #expect(loaded.allSessions.map(\.interface) == [.terminal, .terminal])
+        #expect(loaded.allSessions.count == 2)
+    }
+
     @Test func missingFileGivesDefault() throws {
         let store = WorkspaceStore(fileURL: tempFile())
         let ws = try store.load()

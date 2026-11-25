@@ -1,0 +1,72 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_3ef10d500c0144ce9987f7f2",
+        "name": "read",
+        "title": "read",
+        "kind": "read",
+        "status": "pending",
+        "locations": [],
+        "rawInput": {}
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_3ef10d500c0144ce9987f7f2",
+        "status": "in_progress",
+        "kind": "read",
+        "title": "read",
+        "locations": [
+          {
+            "path": "/Users/someone/project/README.md"
+          }
+        ],
+        "rawInput": {
+          "path": "/Users/someone/project/README.md"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "ses_df315f557ffedtbNW666NGB2Sj",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_3ef10d500c0144ce9987f7f2",
+        "status": "completed",
+        "locations": [
+          {
+            "path": "/Users/someone/project/README.md"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Read file /Users/someone/project/README.md, lines 1-3\n1: # Sample repo\n2: \n3: The secret fruit is mango."
+            }
+          }
+        ],
+        "rawOutput": {
+          "metadata": {
+            "truncated": false
+          }
+        }
+      }
+    }
+  }
+]

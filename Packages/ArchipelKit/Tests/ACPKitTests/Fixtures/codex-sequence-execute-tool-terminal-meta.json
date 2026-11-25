@@ -1,0 +1,56 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d",
+        "name": "exec_command",
+        "kind": "execute",
+        "title": "rg -n -i \"secret|fruit\" README.md && sed -n '1,240p' README.md",
+        "status": "in_progress",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d"
+          }
+        ],
+        "rawInput": {
+          "command": "/bin/zsh -lc \"rg -n -i \\\"secret|fruit\\\" README.md && sed -n '1,240p' README.md\"",
+          "cwd": "/Users/someone/project"
+        },
+        "_meta": {
+          "terminal_info": {
+            "cwd": "/Users/someone/project",
+            "terminal_id": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "01a20cea-0bdd-7b90-9d3b-702b34c464f8",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d",
+        "status": "completed",
+        "_meta": {
+          "terminal_output_delta": {
+            "data": "3:The secret fruit is mango.\n# Sample repo\n\nThe secret fruit is mango.\n",
+            "terminal_id": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d"
+          },
+          "terminal_exit": {
+            "exit_code": 0,
+            "signal": null,
+            "terminal_id": "exec-e83a86a3-0ca8-4122-a76a-5acb5d6cba0d"
+          }
+        }
+      }
+    }
+  }
+]

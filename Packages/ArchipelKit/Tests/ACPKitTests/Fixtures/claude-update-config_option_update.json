@@ -1,0 +1,153 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e",
+    "update": {
+      "sessionUpdate": "config_option_update",
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Model",
+          "description": "AI model to use",
+          "category": "model",
+          "type": "select",
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default (recommended)",
+              "description": "Opus 5.5"
+            },
+            {
+              "value": "opus",
+              "name": "Opus 5.5",
+              "description": "For complex work and everyday tasks"
+            },
+            {
+              "value": "fable",
+              "name": "Fable 5.2",
+              "description": "For your toughest challenges"
+            },
+            {
+              "value": "sonnet",
+              "name": "Sonnet 5.5",
+              "description": "Most efficient for simpler tasks"
+            }
+          ]
+        },
+        {
+          "id": "effort",
+          "name": "Effort",
+          "description": "Available effort levels for this model",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "medium",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default"
+            },
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ]
+        },
+        {
+          "id": "fast",
+          "name": "Fast mode",
+          "description": "Faster responses on supported models",
+          "category": "speed",
+          "type": "select",
+          "currentValue": "off",
+          "options": [
+            {
+              "value": "off",
+              "name": "Off"
+            },
+            {
+              "value": "on",
+              "name": "On"
+            }
+          ]
+        },
+        {
+          "id": "ultracode",
+          "name": "Ultracode",
+          "description": "Dynamic workflows on every task, at any effort level",
+          "category": "model_config",
+          "type": "select",
+          "currentValue": "off",
+          "options": [
+            {
+              "value": "on",
+              "name": "On"
+            },
+            {
+              "value": "off",
+              "name": "Off"
+            }
+          ]
+        },
+        {
+          "id": "mode",
+          "name": "Mode",
+          "description": "Session permission mode",
+          "category": "mode",
+          "type": "select",
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Manual",
+              "description": "Always ask before making changes"
+            },
+            {
+              "value": "acceptEdits",
+              "name": "Accept edits",
+              "description": "Automatically accept all file edits"
+            },
+            {
+              "value": "plan",
+              "name": "Plan",
+              "description": "Create a plan before making changes"
+            },
+            {
+              "value": "auto",
+              "name": "Auto",
+              "description": "Claude handles permission decisions"
+            }
+          ]
+        },
+        {
+          "id": "agent",
+          "name": "Agent",
+          "description": "Main-thread agent persona",
+          "type": "select",
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "The main agent"
+            },
+            {
+              "value": "reviewer",
+              "name": "Reviewer",
+              "description": "Reviews code changes"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

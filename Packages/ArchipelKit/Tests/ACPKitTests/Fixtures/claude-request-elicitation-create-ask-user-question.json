@@ -1,0 +1,37 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "method": "elicitation/create",
+  "params": {
+    "mode": "form",
+    "sessionId": "38ff5671-8685-4b47-a016-021efc966fe2",
+    "toolCallId": "toolu_014Q6QZJvPmJXsg3SBufai5p",
+    "message": "Which fruit do you prefer, apple or pear?",
+    "requestedSchema": {
+      "type": "object",
+      "properties": {
+        "question_0": {
+          "type": "string",
+          "title": "Fruit",
+          "oneOf": [
+            {
+              "const": "Apple",
+              "title": "Apple",
+              "description": "Choose apple"
+            },
+            {
+              "const": "Pear",
+              "title": "Pear",
+              "description": "Choose pear"
+            }
+          ]
+        },
+        "question_0_custom": {
+          "type": "string",
+          "title": "Other",
+          "description": "Type your own answer, or add a note to the option you chose above (optional)."
+        }
+      }
+    }
+  }
+}

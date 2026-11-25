@@ -4,6 +4,7 @@ import ArchipelCore
 import EditorUI
 import InspectorUI
 import SwiftUI
+import TipKit
 
 /// The tab row of one pane. With the window's own title bar gone this is the
 /// top edge of the content area, so the first and last pane also carry the
@@ -201,7 +202,8 @@ struct PaneTabBar: View {
             }
 
             TabRowControls {
-                NewSessionMenu(worktree: worktree.id, pane: pane.id)
+                // One pane is enough to carry the tip, and the active one is where the user is.
+                NewSessionMenu(worktree: worktree.id, pane: pane.id, showsTip: isActive)
 
                 if pane.id == worktree.panes.last?.id {
                     // Only once there is something to run. Setting a script up is rare and lives in
@@ -297,6 +299,14 @@ struct PaneTabBar: View {
                     model.restartSession(id, fresh: true)
                 }
             }
+            if model.canSwitchInterface(id) {
+                let target = session.effectiveInterface.other
+                // The words of the Tab menu and the command palette. "Open in" is for what leaves
+                // the tab where it is and shows it somewhere else, as the items below do.
+                Button("Switch to \(target.title)", systemImage: target.symbolName) {
+                    model.requestInterfaceSwitch(target, for: id)
+                }
+            }
         }
         if case .file(let url) = tab.content {
             Divider()
@@ -363,6 +373,8 @@ struct TabLabel: Equatable {
     /// Shown as the tooltip.
     var detail: String?
     var activity: SessionActivity?
+    /// Set on a chat session's tab. Its icon and title match the terminal's, so VoiceOver says it.
+    var isChat = false
     var hasUnsavedChanges = false
     var devServers: [DevServerLink] = []
 }
@@ -397,13 +409,17 @@ private struct TabButton: View {
         switch tab.content {
         case .session(let id):
             let title = session?.displayTitle ?? "Session"
+            let isChat = session?.effectiveInterface == .acp
+            // A chat shows the conversation itself, so the tab only needs to say so where people
+            // look for details: the tooltip under the title, not a badge that takes title room.
+            let heading = isChat ? title + "\n" + SessionInterface.acp.title : title
+            let context = model.sessionContexts[id].map { ContextFormat.summary(of: $0, cache: model.promptCaches[id], at: .now) }
             return TabLabel(
                 title: title,
                 symbol: (session.map { model.effectiveAgent(for: $0).adapter } ?? ShellAdapter()).symbolName,
-                detail: model.sessionContexts[id].map {
-                    title + "\n" + ContextFormat.summary(of: $0, cache: model.promptCaches[id], at: .now)
-                },
+                detail: context.map { heading + "\n" + $0 } ?? (isChat ? heading : nil),
                 activity: model.activity(for: id),
+                isChat: isChat,
                 devServers: model.devServers.links[id] ?? []
             )
         case .file(let url):
@@ -596,6 +612,7 @@ private struct TabButtonContent: View, Equatable {
         let tasks = label.activity?.backgroundTasks ?? 0
         let subagents = label.activity?.subagents.count ?? 0
         return [
+            label.isChat ? SessionInterface.acp.title : nil,
             tasks > 0 ? BackgroundTaskBadge.description(tasks) : nil,
             subagents > 0 ? SubagentBadge.description(subagents) : nil,
         ].compactMap(\.self).joined(separator: ", ")
@@ -911,6 +928,7 @@ private struct NewSessionMenu: View {
     @Environment(\.openSettings) private var openSettings
     let worktree: Worktree.ID
     let pane: Pane.ID
+    let showsTip: Bool
     @State private var anchor = MenuAnchor()
 
     var body: some View {
@@ -918,6 +936,8 @@ private struct NewSessionMenu: View {
             .background(MenuAnchorView(anchor: anchor))
             .help("New Session")
             .accessibilityIdentifier("pane.newSession")
+            .popoverTip(showsTip ? SidebarTips.group.currentTip as? ChatTip : nil, arrowEdge: .top)
+            .tipViewStyle(CompactTipStyle())
     }
 
     private func showMenu() {
@@ -932,6 +952,18 @@ private struct NewSessionMenu: View {
             }
             if !canStart { item.toolTip = agent.missingCommandHint }
             menu.addItem(item)
+            if agent.acp != nil {
+                // Shown in place of the item above while Option is held, like Option in the
+                // Finder's File menu.
+                let other = model.defaultInterface(for: agent).other
+                let alternate = actions.item("New \(agent.displayName) Session in \(other.title)", enabled: canStart) {
+                    model.newSession(in: worktree, agent: agent, pane: pane, interface: other)
+                }
+                item.keyEquivalentModifierMask = []
+                alternate.keyEquivalentModifierMask = .option
+                alternate.isAlternate = true
+                menu.addItem(alternate)
+            }
         }
         let presets = model.presetsInMenuOrder
         if !presets.isEmpty {

@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "67d14d66-2bf3-4f0f-97a4-5e9829c6d73e",
+    "update": {
+      "sessionUpdate": "session_info_update",
+      "title": "Hello.txt hi-to-hey replacement",
+      "updatedAt": "2026-11-24T09:39:03.258Z"
+    }
+  }
+}

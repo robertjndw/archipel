@@ -47,6 +47,9 @@ struct SidebarView: View {
                 IslandSwitcher(swipe: swipe)
                     .popoverTip(SidebarTips.group.currentTip as? IslandSwipeTip, arrowEdge: .top)
                     .tipViewStyle(CompactTipStyle())
+                    // Its tip has no place while the filter takes the switcher away.
+                    .onAppear { SidebarTips.islandSwitcherVisibilityChanged(true) }
+                    .onDisappear { SidebarTips.islandSwitcherVisibilityChanged(false) }
             }
         }
         .islandSwipe(swipe, isEnabled: !model.showsOnlyNeedsMe)
@@ -338,11 +341,25 @@ struct NewSessionButtons: View {
     var body: some View {
         ForEach(model.enabledAgents, id: \.id) { agent in
             let canStart = model.canStartSession(with: agent)
-            Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
+            let item = Button("New \(agent.displayName) Session", symbol: agent.symbolName) {
                 model.newSession(in: worktree, agent: agent, pane: pane)
             }
             .disabled(!canStart)
             .help(canStart ? "" : agent.missingCommandHint)
+            if agent.acp != nil {
+                // Becomes an alternate NSMenuItem, like Option in the Finder's File menu. For those
+                // who never hold Option, File > Open In starts one the other way and a tab's
+                // context menu moves a running session over.
+                let other = model.defaultInterface(for: agent).other
+                item.modifierKeyAlternate(.option) {
+                    Button("New \(agent.displayName) Session in \(other.title)", symbol: agent.symbolName) {
+                        model.newSession(in: worktree, agent: agent, pane: pane, interface: other)
+                    }
+                    .disabled(!canStart)
+                }
+            } else {
+                item
+            }
         }
         let presets = model.presetsInMenuOrder
         if !presets.isEmpty {

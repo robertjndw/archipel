@@ -57,6 +57,14 @@ struct CodexAdapterTests {
         #expect(command.arguments.count == 8)
     }
 
+    @Test func chatSupport() throws {
+        let acp = try #require(codex.acp)
+        #expect(acp.registryID == "codex-acp")
+        #expect(acp.launch == .registry(cliExecutableVariable: nil))
+        #expect(acp.sharesConversationIDs)
+        #expect(acp.environment.isEmpty)
+    }
+
     @Test func capabilities() {
         let capabilities = codex.capabilities
         #expect(capabilities.sessionID == .reportedByHook)

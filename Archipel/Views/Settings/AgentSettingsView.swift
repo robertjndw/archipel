@@ -180,6 +180,10 @@ private struct AgentDetails: View {
                     : "Agents that are off leave the New Session menus. Sessions already open keep running.")
             }
 
+            if agent.acp != nil {
+                AgentInterfaceSection(agent: agent)
+            }
+
             if agent.capabilities.acceptsPrompts {
                 Section {
                     PresetsEditor(agent: agent)
