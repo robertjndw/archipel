@@ -1251,9 +1251,12 @@ final class AppModel {
         switch link {
         case .web(let url):
             openWebLink(url, alternate: alternate, in: worktreeID)
-        case .file(let url) where !isDirectory(url):
+        case .file(let url, let position) where !isDirectory(url):
             let destination = alternate ? settings.fileLinkDestination.other : settings.fileLinkDestination
             if destination == .archipel {
+                // Asked before opening: an editor already showing the file answers at once, a new
+                // one picks the request up when its text view is built.
+                if let position { EditorReveal.request(url, line: position.line, column: position.column) }
                 open(.file(url), in: worktreeID, preview: true)
             } else {
                 link.openExternally()

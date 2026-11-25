@@ -26,6 +26,7 @@ final class CodeScrollView: NSScrollView, NSTextViewDelegate {
     private let layoutManager = NSLayoutManager()
     private var highlightTask: Task<Void, Never>?
     private var editCount = 0
+    private var pendingReveal: Int?
 
     /// Long enough to skip highlighting between keystrokes, short enough to feel immediate.
     private static let highlightDelay = Duration.milliseconds(250)
@@ -59,9 +60,14 @@ final class CodeScrollView: NSScrollView, NSTextViewDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(boundsChanged), name: NSView.boundsDidChangeNotification, object: contentView)
         NotificationCenter.default.addObserver(self, selector: #selector(storageChanged), name: NSTextStorage.didProcessEditingNotification, object: buffer.textStorage)
         NotificationCenter.default.addObserver(self, selector: #selector(focusRequested), name: EditorFocus.requested, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(revealRequested), name: EditorReveal.requested, object: nil)
 
         ruler.lineIndex = LineIndex(buffer.text)
-        restoreViewState()
+        if let target = EditorReveal.claim(buffer.url) {
+            reveal(line: target.line, column: target.column)
+        } else {
+            restoreViewState()
+        }
         highlight(after: .zero)
     }
 
@@ -131,6 +137,42 @@ final class CodeScrollView: NSScrollView, NSTextViewDelegate {
         }
     }
 
+    @objc private func revealRequested() {
+        // An editor that is not on screen (another tab's) must leave the request for the one that is.
+        guard window != nil, let target = EditorReveal.claim(buffer.url) else { return }
+        reveal(line: target.line, column: target.column)
+    }
+
+    /// Doesn't take focus: the click came from the terminal, and that is where the user keeps typing.
+    private func reveal(line: Int, column: Int?) {
+        let text = buffer.text
+        let offset = EditorReveal.offset(line: line, column: column, in: text, index: LineIndex(text))
+        textView.selectedRange = NSRange(location: offset, length: 0)
+        pendingReveal = offset
+        DispatchQueue.main.async { [weak self] in self?.scrollToPendingReveal() }
+    }
+
+    /// A view that hasn't been sized yet has no height to place the line in, so the reveal waits for
+    /// `tile()` to try again.
+    private func scrollToPendingReveal() {
+        guard let offset = pendingReveal else { return }
+        let visibleHeight = contentView.bounds.height
+        guard visibleHeight > 0 else { return }
+        pendingReveal = nil
+        let length = buffer.textStorage.length
+        let lineRange = (buffer.textStorage.string as NSString).lineRange(for: NSRange(location: min(offset, length), length: 0))
+        // Lay out everything above the line too: with non-contiguous layout the lines above would
+        // only have estimated heights, and the real layout later pushes the target far down.
+        layoutManager.ensureLayout(forCharacterRange: NSRange(location: 0, length: NSMaxRange(lineRange)))
+        let glyphs = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textView.textContainer!)
+        let top = rect.minY + textView.textContainerOrigin.y
+        let maxY = max(textView.frame.height - visibleHeight, 0)
+        let y = min(max(top - visibleHeight / 3, 0), maxY)
+        textView.scroll(NSPoint(x: contentView.bounds.origin.x, y: y))
+        textView.showFindIndicator(for: lineRange)
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         // Deferred a turn: SwiftUI may still be swapping out the view that had the keyboard.
@@ -156,6 +198,7 @@ final class CodeScrollView: NSScrollView, NSTextViewDelegate {
             textView.minSize = visible
             textView.sizeToFit()
         }
+        if pendingReveal != nil { DispatchQueue.main.async { [weak self] in self?.scrollToPendingReveal() } }
     }
 
     @objc private func boundsChanged() {
