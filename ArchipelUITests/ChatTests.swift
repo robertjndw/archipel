@@ -185,7 +185,7 @@ final class ChatTests: ArchipelUITestCase {
         chooseMenu("Tab", "Switch to Terminal")
         // The second launch of the stub overall: the chat's, then the terminal's.
         let terminal = try waitForLaunch(2, recordedIn: stub.launches)
-        XCTAssertEqual(terminal.argument(after: "-s"), "ses_stub1", "The terminal should resume the chat's conversation: \(terminal.arguments)")
+        XCTAssertEqual(terminal.argument(after: "--session"), "ses_stub1", "The terminal should resume the chat's conversation: \(terminal.arguments)")
         XCTAssertFalse(terminal.arguments.contains("acp"), "The terminal runs the CLI itself, not its chat server: \(terminal.arguments)")
         assertGone(chatComposer, "The terminal should take the chat's place.")
         waitUntil("the session is saved as a terminal") {
@@ -224,7 +224,7 @@ final class ChatTests: ArchipelUITestCase {
         chooseMenu("File", "New OpenCode Session")
         let terminal = try waitForLaunch(1, recordedIn: stub.launches)
         XCTAssertFalse(terminal.arguments.contains("acp"), "By default a new session runs the CLI in a terminal: \(terminal.arguments)")
-        XCTAssertTrue(terminal.argument(after: "-s")?.hasPrefix("ses_") == true, "OpenCode is given its conversation id up front: \(terminal.arguments)")
+        XCTAssertTrue(terminal.argument(after: "--session")?.hasPrefix("ses_") == true, "OpenCode is given its conversation id up front: \(terminal.arguments)")
         XCTAssertFalse(chatComposer.exists, "A terminal session has no composer.")
 
         chooseSubmenu("File", "Open In", "New OpenCode Session in Chat")
