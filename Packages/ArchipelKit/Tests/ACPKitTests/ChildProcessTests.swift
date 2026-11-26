@@ -98,6 +98,15 @@ final class ChildProcessTests {
         return true
     }
 
+    private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return true
+    }
+
     private func readLine(from output: AsyncStream<Data>) async -> String? {
         var collected = Data()
         for await chunk in output {
@@ -137,7 +146,9 @@ final class ChildProcessTests {
         // It exits at end of input, so shutdown never had to signal it.
         #expect(transport.process.termination == .exited(3))
         #expect(transport.stderrText.contains("fake agent: started"))
-        #expect(transport.stderrText.contains("fake agent: end of input"))
+        // Shutdown returns as soon as the child is reaped, and the last stderr line can still be
+        // in the pipe then. The client owns `output`, so we can't wait for it to end here.
+        #expect(await waitUntil { transport.stderrText.contains("fake agent: end of input") })
     }
 
     @Test func exitIsReportedAsTheCloseReason() async throws {
