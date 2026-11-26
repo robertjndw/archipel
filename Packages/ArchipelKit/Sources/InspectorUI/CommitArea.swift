@@ -140,14 +140,6 @@ enum PrimaryAction: Equatable {
 
 extension GitPullRequest {
     var symbol: String { state == .merged ? "arrow.triangle.merge" : "arrow.triangle.pull" }
-
-    var color: Color {
-        switch state {
-        case .open: isDraft ? .gray : .green
-        case .merged: .purple
-        case .closed: .red
-        }
-    }
 }
 
 /// Glass only while the button is enabled. A disabled glass button still draws a full-width
@@ -288,7 +280,9 @@ struct CommitArea: View {
                 NSWorkspace.shared.open(pullRequest.url)
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: pullRequest.symbol).foregroundStyle(pullRequest.color)
+                    // Not colored by state. Glass recolors tinted content for contrast, so the
+                    // icon ended up a different color than the number.
+                    Image(systemName: pullRequest.symbol)
                     Text("#\(pullRequest.number)").monospacedDigit()
                 }
             }
