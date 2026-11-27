@@ -76,6 +76,25 @@ final class ChatTests: ArchipelUITestCase {
         waitUntilTheTurnHasEnded()
     }
 
+    // MARK: Settings under the composer
+
+    func testTheModeMenuOpensFromAClickBesideItsLabel() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let stub = try sandbox.installChatAgentStub()
+        try launchWithChat(stub, in: repository)
+
+        let mode = chatControl("mode")
+        assertExists(mode, "The agent's mode should show under the composer.")
+        // Click the padding near the corner, not the text. The highlight covers it, so it has to
+        // take the click too.
+        mode.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 3, dy: 3)).click()
+        let plan = app.menuItems["Plan"]
+        assertExists(plan, "Clicking the padding should open the mode menu.")
+        plan.click()
+        waitUntilChatAgentReceived("session/set_config_option", for: "ses_stub1", from: stub)
+        waitUntil("the bar shows the chosen mode") { self.chatControl("mode").value as? String == "Plan" }
+    }
+
     // MARK: Permissions
 
     func testAllowingAPermissionRequestCompletesTheTurn() throws {
