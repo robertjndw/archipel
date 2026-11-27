@@ -269,8 +269,34 @@ public struct ToolCall: Sendable, Hashable, Codable, Identifiable {
     public var terminalOutput: String?
     /// The exit code from `_meta.terminal_exit`, when the agent reported one.
     public var terminalExitCode: Int?
+    /// The agent sent `_meta.terminal_exit`, with or without a code: the command is over.
+    public var terminalExited = false
+    /// The agent's own name for the tool, from Claude's `_meta.claudeCode.toolName`.
+    public var toolName: String?
+    /// The call that started the subagent this call was made by, from Claude's
+    /// `_meta.claudeCode.parentToolUseId`. Nil for the main agent's calls.
+    public var parentToolCallId: String?
+    /// Set when a command was left running in the background: the call itself finishes at once
+    /// and the command goes on. From Claude's `_meta.claudeCode.toolResponse.backgroundTaskId`.
+    public var backgroundTaskId: String?
+    /// The call started a subagent that works on after the call has finished.
+    public var startedBackgroundSubagent = false
+    /// What this call left running in the background is over, or is taken to be.
+    public var backgroundWorkEnded = false
 
     public var id: String { toolCallId }
+
+    /// The call started a subagent. Claude's tool for that is "Agent", and was "Task".
+    public var startsSubagent: Bool {
+        toolName == "Agent" || toolName == "Task"
+    }
+
+    /// The call has finished, but a command or a subagent it started has not.
+    public var isRunningInBackground: Bool {
+        guard !backgroundWorkEnded else { return false }
+        if backgroundTaskId != nil { return !terminalExited }
+        return startedBackgroundSubagent
+    }
 
     public init(
         toolCallId: String,
@@ -331,13 +357,38 @@ public struct ToolCall: Sendable, Hashable, Codable, Identifiable {
         absorbTerminalMeta(update.meta)
     }
 
+    /// A re-announcement of the call starts from nothing; what was learned about its
+    /// background work must outlast it.
+    mutating func keepBackgroundState(of existing: ToolCall) {
+        terminalExited = terminalExited || existing.terminalExited
+        toolName = toolName ?? existing.toolName
+        parentToolCallId = parentToolCallId ?? existing.parentToolCallId
+        backgroundTaskId = backgroundTaskId ?? existing.backgroundTaskId
+        startedBackgroundSubagent = startedBackgroundSubagent || existing.startedBackgroundSubagent
+        backgroundWorkEnded = backgroundWorkEnded || existing.backgroundWorkEnded
+    }
+
+    /// Keeps what a `_meta` says for good. Each update's `_meta` replaces the last, and only
+    /// some of them carry these.
     private mutating func absorbTerminalMeta(_ meta: JSONValue?) {
         guard let meta else { return }
         if let delta = meta["terminal_output_delta"]?["data"]?.stringValue {
             terminalOutput = (terminalOutput ?? "") + delta
         }
-        if let exitCode = meta["terminal_exit"]?["exit_code"]?.intValue {
-            terminalExitCode = exitCode
+        // Claude sends the output whole, once the command is over.
+        if let output = meta["terminal_output"]?["data"]?.stringValue {
+            terminalOutput = output
+        }
+        if let exit = meta["terminal_exit"], exit != .null {
+            terminalExited = true
+            if let exitCode = exit["exit_code"]?.intValue { terminalExitCode = exitCode }
+        }
+        guard let claude = meta["claudeCode"] else { return }
+        if let name = claude["toolName"]?.stringValue { toolName = name }
+        if let parent = claude["parentToolUseId"]?.stringValue { parentToolCallId = parent }
+        if let response = claude["toolResponse"] {
+            if let task = response["backgroundTaskId"]?.stringValue { backgroundTaskId = task }
+            if response["isAsync"]?.boolValue == true { startedBackgroundSubagent = true }
         }
     }
 }

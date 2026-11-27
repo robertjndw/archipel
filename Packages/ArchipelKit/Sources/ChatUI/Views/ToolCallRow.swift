@@ -6,6 +6,8 @@ import UISupport
 /// A run of tool calls, one line each, with nothing between them.
 struct ToolCallGroup: View {
     let calls: [ToolCall]
+    /// What the subagents among the calls did, by call.
+    var steps: [String: [ToolCall]] = [:]
     let expanded: Set<String>
     /// What Find marks in this run while a search is on.
     var mark: RowFindMark?
@@ -18,7 +20,7 @@ struct ToolCallGroup: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(calls) { call in
                 let id = ChatItem.toolCall(call).id
-                ToolCallRow(call: call, isExpanded: expanded.contains(id), toggle: { toggle(id) }, openFile: openFile)
+                ToolCallRow(call: call, steps: steps[call.toolCallId] ?? [], isExpanded: expanded.contains(id), toggle: { toggle(id) }, openFile: openFile)
                     .equatable()
                     .environment(\.textHighlight, mark?.highlight(forCall: id))
                     .background(alignment: .top) {
@@ -52,6 +54,8 @@ private struct FindCallMark: View {
 /// the header's own state, so it never re-evaluates the details below.
 struct ToolCallRow: View, Equatable {
     let call: ToolCall
+    /// What the subagent this call started has done so far. Empty for any other call.
+    var steps: [ToolCall] = []
     let isExpanded: Bool
     let toggle: () -> Void
     let openFile: (URL, Int?) -> Void
@@ -59,28 +63,33 @@ struct ToolCallRow: View, Equatable {
     @Environment(\.chatWorkingDirectory) private var workingDirectory
 
     nonisolated static func == (lhs: ToolCallRow, rhs: ToolCallRow) -> Bool {
-        lhs.call == rhs.call && lhs.isExpanded == rhs.isExpanded
+        lhs.call == rhs.call && lhs.steps == rhs.steps && lhs.isExpanded == rhs.isExpanded
     }
+
+    private var hasDetails: Bool { call.hasDetails || !steps.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: toggle) {
-                ToolCallHeader(call: call, isExpanded: isExpanded)
+                ToolCallHeader(call: call, steps: steps, hasDetails: hasDetails, isExpanded: isExpanded)
             }
             .buttonStyle(.plain)
             // Not `disabled`, which would dim the row: a call with nothing to show is as much a
             // part of the record as one with output.
-            .allowsHitTesting(call.hasDetails)
+            .allowsHitTesting(hasDetails)
             .accessibilityLabel(call.accessibilityLabel(relativeTo: workingDirectory))
-            .accessibilityValue(call.hasDetails ? (isExpanded ? "Expanded" : "Collapsed") : "")
+            .accessibilityValue(hasDetails ? (isExpanded ? "Expanded" : "Collapsed") : "")
             .accessibilityIdentifier("chat.toolCall")
 
             if isExpanded {
-                ToolCallDetail(call: call, openFile: openFile)
-                    .padding(.leading, ChatMetrics.detailIndent)
-                    .padding(.top, 4)
-                    .padding(.bottom, 10)
-                    .transition(.opacity)
+                VStack(alignment: .leading, spacing: 8) {
+                    if !steps.isEmpty { SubagentSteps(steps: steps) }
+                    if call.hasDetails { ToolCallDetail(call: call, openFile: openFile) }
+                }
+                .padding(.leading, ChatMetrics.detailIndent)
+                .padding(.top, 4)
+                .padding(.bottom, 10)
+                .transition(.opacity)
             }
         }
     }
@@ -88,15 +97,24 @@ struct ToolCallRow: View, Equatable {
 
 private struct ToolCallHeader: View {
     let call: ToolCall
+    let steps: [ToolCall]
+    let hasDetails: Bool
     let isExpanded: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.chatWorkingDirectory) private var workingDirectory
     @State private var isHovered = false
 
+    /// Next to a subagent's title: what it is doing while it runs, how much it did after.
+    private var stepsNote: String? {
+        guard let last = steps.last else { return nil }
+        if call.isStillWorking { return last.displayTitle(relativeTo: workingDirectory) }
+        return steps.count == 1 ? "1 step" : "\(steps.count) steps"
+    }
+
     var body: some View {
         HStack(spacing: ChatMetrics.symbolSpacing) {
-            Image(systemName: call.kind.symbolName)
+            Image(systemName: call.symbolName)
                 .font(.system(size: 12))
                 .frame(width: ChatMetrics.symbolColumn)
             SearchableText(text: call.displayTitle(relativeTo: workingDirectory))
@@ -108,17 +126,23 @@ private struct ToolCallHeader: View {
                     .truncationMode(.middle)
                     .foregroundStyle(.tertiary)
             }
+            if let stepsNote {
+                Text(stepsNote)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.tertiary)
+            }
             if !call.diffs.isEmpty {
                 DiffStatsBadge(diffs: call.diffs)
                     .equatable()
                     .layoutPriority(1)
             }
-            if call.hasDetails {
+            if hasDetails {
                 DisclosureChevron(isExpanded: isExpanded)
                     .opacity(isHovered || isExpanded ? 1 : 0)
             }
             Spacer(minLength: 8)
-            ToolCallStatusGlyph(status: call.status)
+            ToolCallStatusGlyph(status: call.status, runsInBackground: call.isRunningInBackground)
         }
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -130,7 +154,7 @@ private struct ToolCallHeader: View {
             RoundedRectangle(cornerRadius: ChatMetrics.blockRadius, style: .continuous)
                 .fill(.quinary)
                 .padding(.horizontal, -6)
-                .opacity(isHovered && call.hasDetails ? 1 : 0)
+                .opacity(isHovered && hasDetails ? 1 : 0)
         }
         .onHover { isHovered = $0 }
         .animation(reduceMotion ? nil : Motion.hover, value: isHovered)
@@ -153,8 +177,12 @@ struct DisclosureChevron: View {
 /// A spinner while the call runs, turning into its outcome.
 struct ToolCallStatusGlyph: View {
     let status: ToolCallStatus
+    /// The call is over, but the command or subagent it started is not, so the spinner stays.
+    var runsInBackground = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var isSpinning: Bool { !status.isFinished || runsInBackground }
 
     var body: some View {
         Image(systemName: symbol)
@@ -162,7 +190,7 @@ struct ToolCallStatusGlyph: View {
             .foregroundStyle(status == .failed ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
             // The spinner is a symbol too, so finishing is one symbol replacing another instead
             // of a progress view popping out and an icon popping in.
-            .symbolEffect(.variableColor.iterative, options: .repeat(.continuous), isActive: !status.isFinished && !reduceMotion)
+            .symbolEffect(.variableColor.iterative, options: .repeat(.continuous), isActive: isSpinning && !reduceMotion)
             .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
             .frame(width: 16, height: 16)
             .help(help)
@@ -170,7 +198,8 @@ struct ToolCallStatusGlyph: View {
     }
 
     private var symbol: String {
-        switch status {
+        if runsInBackground { return "progress.indicator" }
+        return switch status {
         case .pending, .inProgress: "progress.indicator"
         case .completed: "checkmark"
         case .failed: "xmark"
@@ -179,12 +208,42 @@ struct ToolCallStatusGlyph: View {
     }
 
     private var help: String {
-        switch status {
+        if runsInBackground { return "Running in the background" }
+        return switch status {
         case .pending: "Waiting"
         case .inProgress: "Running"
         case .completed: "Completed"
         case .failed: "Failed"
         case .cancelled: "Canceled"
         }
+    }
+}
+
+/// What a subagent did, one line a step, under the call that started it.
+private struct SubagentSteps: View {
+    let steps: [ToolCall]
+
+    @Environment(\.chatWorkingDirectory) private var workingDirectory
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(steps) { step in
+                HStack(spacing: ChatMetrics.symbolSpacing) {
+                    Image(systemName: step.symbolName)
+                        .font(.system(size: 12))
+                        .frame(width: ChatMetrics.symbolColumn)
+                    Text(step.displayTitle(relativeTo: workingDirectory))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    ToolCallStatusGlyph(status: step.status)
+                }
+                .frame(height: ChatMetrics.activityRowHeight)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(step.accessibilityLabel(relativeTo: workingDirectory))
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
     }
 }

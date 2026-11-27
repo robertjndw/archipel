@@ -364,15 +364,83 @@ struct ChatRowTests {
 
     @Test func consecutiveToolCallsShareARow() {
         let items: [ChatItem] = [
-            .userMessage(message("u")), call("a"), call("b"), call("c"), .agentMessage(message("m")), call("d"),
+            .userMessage(message("u")), call("a"), call("b"), .agentMessage(message("m")), call("d"),
         ]
         let rows = ChatRow.rows(for: items, isTurnRunning: false)
         #expect(rows.map(\.id) == ["u", "tool:a", "m", "tool:d"])
-        guard case let .tools(_, calls) = rows[1] else {
+        guard case let .tools(_, calls, _) = rows[1] else {
             Issue.record("expected a tool group")
             return
         }
-        #expect(calls.map(\.toolCallId) == ["a", "b", "c"])
+        #expect(calls.map(\.toolCallId) == ["a", "b"])
+    }
+
+    private func edit(_ id: String) -> ChatItem {
+        .toolCall(ToolCall(toolCallId: id, title: "Edit \(id)", kind: .edit, status: .completed))
+    }
+
+    @Test func aFinishedStretchFoldsIntoOneLine() throws {
+        let items: [ChatItem] = [
+            .userMessage(message("u")), call("a"), .agentThought(message("t")), call("b"), call("c"), .agentMessage(message("m")),
+        ]
+        let rows = ChatRow.rows(for: items, isTurnRunning: false)
+        #expect(rows.map(\.id) == ["u", "fold:tool:a", "m"])
+        let fold = try #require(rows[1].fold)
+        #expect(fold.itemIDs == ["tool:a", "t", "tool:b", "tool:c"])
+        #expect(fold.summary == "Read 3 files")
+        #expect(!fold.isOpen)
+        // A hit inside is in no row until the fold opens.
+        #expect(!rows.contains { $0.contains(itemID: "tool:b") })
+    }
+
+    @Test func anOpenFoldIsFollowedByItsSteps() {
+        let items: [ChatItem] = [call("a"), .agentThought(message("t")), call("b"), call("c"), edit("e")]
+        let rows = ChatRow.rows(for: items, isTurnRunning: false, openFolds: ["fold:tool:a"])
+        // The edit after the fold does not join the fold's last group.
+        #expect(rows.map(\.id) == ["fold:tool:a", "tool:a", "t", "tool:b", "tool:e"])
+        #expect(rows[0].fold?.isOpen == true)
+    }
+
+    @Test func editsAndShortStretchesStayOnThePage() {
+        let items: [ChatItem] = [call("a"), call("b"), edit("e"), call("c"), .agentMessage(message("m"))]
+        let rows = ChatRow.rows(for: items, isTurnRunning: false)
+        #expect(rows.map(\.id) == ["tool:a", "m"])
+        let folded = ChatRow.rows(for: [call("a"), call("b"), call("c"), edit("e"), call("d")], isTurnRunning: false)
+        #expect(folded.map(\.id) == ["fold:tool:a", "tool:e"])
+    }
+
+    @Test func theActivityARunningTurnEndsOnIsShownInFull() {
+        let items: [ChatItem] = [.userMessage(message("u")), call("a"), call("b"), call("c"), edit("e"), call("d", .inProgress)]
+        #expect(ChatRow.rows(for: items, isTurnRunning: true).map(\.id) == ["u", "tool:a"])
+        // What came before the agent last spoke has settled, running turn or not.
+        let spoken = items + [.agentMessage(message("m")), call("f")]
+        #expect(ChatRow.rows(for: spoken, isTurnRunning: true).map(\.id) == ["u", "fold:tool:a", "tool:e", "m", "tool:f"])
+        // A call that never finished stays on the page.
+        #expect(ChatRow.rows(for: [call("a"), call("b"), call("c", .pending)], isTurnRunning: false).map(\.id) == ["tool:a"])
+    }
+
+    @Test func subagentsAndShellsStillRunningAreNotFolded() {
+        var shell = ToolCall(toolCallId: "sh", title: "npm run dev", kind: .execute, status: .completed)
+        shell.backgroundTaskId = "b1"
+        var subagent = ToolCall(toolCallId: "sub", title: "Explore", kind: .think, status: .completed)
+        subagent.toolName = "Agent"
+        let items: [ChatItem] = [call("a"), call("b"), call("c"), .toolCall(shell), .toolCall(subagent), .agentMessage(message("m"))]
+        #expect(ChatRow.rows(for: items, isTurnRunning: false).map(\.id) == ["fold:tool:a", "tool:sh", "m"])
+        // Once the shell has exited it is a command like any other.
+        shell.terminalExited = true
+        let exited: [ChatItem] = [call("a"), call("b"), .toolCall(shell), .toolCall(subagent), .agentMessage(message("m"))]
+        #expect(ChatRow.rows(for: exited, isTurnRunning: false).map(\.id) == ["fold:tool:a", "tool:sub", "m"])
+    }
+
+    @Test func aFoldSaysWhatItHoldsMostOfFirst() {
+        func step(_ id: String, _ kind: ToolKind, _ status: ToolCallStatus = .completed) -> ChatItem {
+            .toolCall(ToolCall(toolCallId: id, title: id, kind: kind, status: status))
+        }
+        let mixed = [step("a", .read), step("b", .execute), step("c", .execute, .failed), .agentThought(message("t")), step("d", .search)]
+        #expect(ActivityFold.describe(mixed).summary == "Ran 2 commands, read 1 file, searched once, 1 failed")
+        #expect(ActivityFold.describe(mixed).symbolName == ToolKind.execute.symbolName)
+        let thoughts: [ChatItem] = [.agentThought(message("t")), .agentThought(message("v")), .agentThought(message("w"))]
+        #expect(ActivityFold.describe(thoughts).summary == "Thought 3 times")
     }
 
     @Test func aGroupKeepsItsIdAsItGrows() {

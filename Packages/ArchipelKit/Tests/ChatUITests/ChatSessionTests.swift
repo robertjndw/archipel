@@ -125,6 +125,68 @@ struct ChatSessionTests {
         await harness.session.shutDown()
     }
 
+    /// The updates Claude's agent sends for a shell and a subagent left in the background, as
+    /// recorded from claude-agent-acp 0.113.
+    @Test func backgroundShellsAndSubagentsAreReportedUntilTheyEnd() async throws {
+        let harness = ChatHarness()
+        try await harness.start()
+        let agent = try harness.agent()
+        let promptID = try await harness.send("Go")
+        func update(_ json: String) throws { try agent.update("s-new", json) }
+
+        try update(#"{"sessionUpdate":"tool_call","toolCallId":"sh","title":"sleep 20","kind":"execute","status":"pending","_meta":{"claudeCode":{"toolName":"Bash"},"terminal_info":{"terminal_id":"sh"}}}"#)
+        try update(#"{"sessionUpdate":"tool_call","toolCallId":"sub","title":"Read the README","kind":"think","status":"pending","_meta":{"claudeCode":{"toolName":"Agent"}}}"#)
+        try update(#"{"sessionUpdate":"tool_call_update","toolCallId":"sub","_meta":{"claudeCode":{"toolName":"Agent","toolResponse":{"isAsync":true,"status":"async_launched"}}}}"#)
+        try update(#"{"sessionUpdate":"tool_call_update","toolCallId":"sub","status":"completed","_meta":{"claudeCode":{"toolName":"Agent"}}}"#)
+        try update(#"{"sessionUpdate":"tool_call_update","toolCallId":"sh","_meta":{"claudeCode":{"toolName":"Bash","toolResponse":{"backgroundTaskId":"b1"}}}}"#)
+        try update(#"{"sessionUpdate":"tool_call_update","toolCallId":"sh","_meta":{"terminal_output":{"terminal_id":"sh","data":"Command running in background with ID: b1."}}}"#)
+        try update(#"{"sessionUpdate":"tool_call_update","toolCallId":"sh","status":"completed","_meta":{"claudeCode":{"toolName":"Bash"}}}"#)
+        try agent.agentText("s-new", "Started.")
+        try agent.finishPrompt(promptID)
+        try await waitUntil("the turn ends") { !harness.session.isTurnRunning }
+
+        // Both calls are finished, and what they started is not.
+        #expect(harness.session.transcript.backgroundWork.map(\.toolCallId) == ["sh", "sub"])
+        #expect(harness.session.transcript.toolCall(id: "sh")?.terminalOutput == "Command running in background with ID: b1.")
+        #expect(harness.agentEvents.contains(.subagentStarted(id: "sub")))
+        #expect(harness.agentEvents.contains(.backgroundTasksChanged(1)))
+
+        // The subagent works on after the turn, then hands its report back.
+        harness.clearEvents()
+        try update(#"{"sessionUpdate":"tool_call","toolCallId":"read","title":"Read README.md","kind":"read","status":"pending","_meta":{"claudeCode":{"toolName":"Read","parentToolUseId":"sub"}}}"#)
+        try await waitUntil("the subagent's step is heard of") { harness.agentEvents.contains(.subagentActivity(id: "sub")) }
+        try update(#"{"sessionUpdate":"tool_call","toolCallId":"back","title":"SubagentHandback","kind":"other","status":"pending","_meta":{"claudeCode":{"toolName":"SubagentHandback","parentToolUseId":"sub"}}}"#)
+        try update(#"{"sessionUpdate":"tool_call_update","toolCallId":"back","status":"completed","_meta":{"claudeCode":{"toolName":"SubagentHandback","parentToolUseId":"sub"}}}"#)
+        try await waitUntil("the subagent ends") { harness.agentEvents.contains(.subagentFinished(id: "sub")) }
+        #expect(harness.session.transcript.backgroundWork.map(\.toolCallId) == ["sh"])
+
+        // The shell's exit comes as an update of its own, without a code.
+        try update(#"{"sessionUpdate":"tool_call_update","toolCallId":"sh","_meta":{"terminal_exit":{"terminal_id":"sh","exit_code":null,"signal":null}}}"#)
+        try await waitUntil("the shell ends") { harness.agentEvents.contains(.backgroundTasksChanged(0)) }
+        #expect(harness.session.transcript.backgroundWork.isEmpty)
+
+        // What the subagent did is with its call, not in the conversation.
+        let rows = ChatRow.rows(for: harness.session.transcript.items, isTurnRunning: false)
+        guard case let .tools(_, calls, steps) = rows[1] else {
+            Issue.record("expected a tool group")
+            return
+        }
+        #expect(calls.map(\.toolCallId) == ["sh", "sub"])
+        #expect(steps["sub"]?.map(\.toolCallId) == ["read", "back"])
+        await harness.session.shutDown()
+    }
+
+    @Test func nothingRunsInTheBackgroundOnceTheAgentIsGone() async throws {
+        let harness = ChatHarness()
+        try await harness.start()
+        let agent = try harness.agent()
+        _ = try await harness.send("Go")
+        try agent.update("s-new", #"{"sessionUpdate":"tool_call","toolCallId":"sh","title":"sleep 20","kind":"execute","status":"completed","_meta":{"claudeCode":{"toolName":"Bash","toolResponse":{"backgroundTaskId":"b1"}}}}"#)
+        try await waitUntil("the shell shows") { harness.session.transcript.backgroundWork.count == 1 }
+        agent.close()
+        try await waitUntil("the shell is taken as over") { harness.session.transcript.backgroundWork.isEmpty }
+    }
+
     @Test func aPromptSentWhileATurnRunsWaitsForItsEnd() async throws {
         let harness = ChatHarness()
         try await harness.start()

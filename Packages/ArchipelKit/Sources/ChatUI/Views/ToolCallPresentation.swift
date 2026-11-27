@@ -160,7 +160,18 @@ extension ToolCall {
     }
 
     func accessibilityLabel(relativeTo workingDirectory: String? = nil) -> String {
-        "\(displayTitle(relativeTo: workingDirectory)), \(status.spokenName)"
+        "\(displayTitle(relativeTo: workingDirectory)), \(isRunningInBackground ? "running in the background" : status.spokenName)"
+    }
+
+    /// A subagent has a symbol of its own. Claude files the call under thinking, which would
+    /// make it look like a thought.
+    var symbolName: String {
+        startsSubagent ? "arrow.triangle.branch" : kind.symbolName
+    }
+
+    /// The call, or what it left in the background, is not over yet.
+    var isStillWorking: Bool {
+        !status.isFinished || isRunningInBackground
     }
 
     /// One line on what a permission request is about: the command, or the file.

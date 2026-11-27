@@ -119,7 +119,8 @@ struct CompletionList: View {
             // selection would be out of sight.
             .onChange(of: rows) { reveal(selection, with: proxy) }
         }
-        .frame(maxWidth: 460)
+        // As wide as the composer it opens over, so their edges line up.
+        .frame(maxWidth: .infinity)
         .frame(height: Self.height(for: rows.count))
         .glassEffect(.regular, in: .rect(cornerRadius: Self.radius))
         .accessibilityElement(children: .contain)

@@ -59,9 +59,17 @@ extension ChatSession {
         transcript = ChatTranscript()
         var effects: [Event] = []
         var reportedActivity = false
+        let workBefore = BackgroundWork(working)
+        var activeSubagents: Set<String> = []
         for event in events {
             fold(event, into: &working, effects: &effects, reportedActivity: &reportedActivity)
+            if case let .sessionUpdate(notification) = event, let id = notification.update.toolCallID,
+               let parent = working.toolCall(id: id)?.parentToolCallId
+            {
+                activeSubagents.insert(parent)
+            }
         }
+        BackgroundWork(working).report(since: workBefore, active: activeSubagents, into: &effects)
         transcript = working
         refreshPermissionToolCalls()
         reportTitleAndUsage(into: &effects)
@@ -205,6 +213,8 @@ extension ChatSession {
 
     private func connectionClosed(_ reason: ACPCloseReason, transcript: inout ChatTranscript, effects: inout [Event]) {
         closeReason = reason
+        // Shells and subagents go with the process.
+        transcript.endBackgroundWork()
         if transcript.isReplaying { transcript.endReplay() }
         replayEnded()
         if isTurnRunning { transcript.endTurn(nil) }
@@ -323,5 +333,43 @@ extension ChatSession {
             return "The response couldn't be completed: \(rpc.message)"
         }
         return "The response couldn't be completed."
+    }
+}
+
+/// What the agent has running besides its turn, as the owner hears of it: the same events a
+/// terminal session's hooks report, so tabs and the sidebar badge a chat alike.
+private struct BackgroundWork {
+    var shells: Set<String> = []
+    var subagents: Set<String> = []
+
+    init(_ transcript: ChatTranscript) {
+        // Replayed history says what was started once, not what is running.
+        guard !transcript.isReplaying else { return }
+        for call in transcript.backgroundWork {
+            if call.startsSubagent || call.startedBackgroundSubagent {
+                subagents.insert(call.toolCallId)
+            } else {
+                shells.insert(call.toolCallId)
+            }
+        }
+    }
+
+    /// `active` holds the subagents that made a tool call since `old`. The owner drops one it
+    /// has not heard of for a while.
+    func report(since old: BackgroundWork, active: Set<String>, into effects: inout [ChatSession.Event]) {
+        for id in subagents.subtracting(old.subagents).sorted() { effects.append(.agent(.subagentStarted(id: id))) }
+        for id in active.intersection(subagents).intersection(old.subagents).sorted() { effects.append(.agent(.subagentActivity(id: id))) }
+        for id in old.subagents.subtracting(subagents).sorted() { effects.append(.agent(.subagentFinished(id: id))) }
+        if shells.count != old.shells.count { effects.append(.agent(.backgroundTasksChanged(shells.count))) }
+    }
+}
+
+private extension SessionUpdate {
+    var toolCallID: String? {
+        switch self {
+        case let .toolCall(call): call.toolCallId
+        case let .toolCallUpdate(update): update.toolCallId
+        default: nil
+        }
     }
 }

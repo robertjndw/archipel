@@ -19,7 +19,8 @@ public struct ClaudeAdapter: AgentAdapter {
             registryID: "claude-acp",
             launch: .registry(cliExecutableVariable: "CLAUDE_CODE_EXECUTABLE"),
             sharesConversationIDs: true,
-            environment: Self.launchedByArchipelEnvironment
+            environment: Self.launchedByArchipelEnvironment,
+            rendersTerminalOutput: true
         )
     }
 

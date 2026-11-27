@@ -107,10 +107,14 @@ private func chatPreview(_ session: ChatSession, width: CGFloat = previewSize.wi
     chatPreview(ChatPreviewScenes.commandPermission, width: 480)
 }
 
+#Preview("Background Work") {
+    chatPreview(ChatPreviewScenes.backgroundWork)
+}
+
 #Preview("Tool Calls Expanded") {
     ChatTranscriptView(
         session: .preview(.finished), actions: ChatViewActions(),
-        expanded: ["message-1", "tool:sample-read", "tool:sample-search", "tool:sample-edit", "tool:sample-test"]
+        expanded: ["fold:message-1", "message-1", "tool:sample-read", "tool:sample-search", "tool:sample-edit", "tool:sample-test"]
     )
     .background(Color(nsColor: .textBackgroundColor))
     .frame(width: previewSize.width, height: previewSize.height)
@@ -195,6 +199,35 @@ private enum ChatPreviewScenes {
         transcript.apply(SessionSetup(modes: ChatPreviewSamples.modes, configOptions: ChatPreviewSamples.configOptions))
         transcript.appendUserPrompt([.text(ChatPreviewSamples.userPrompt)])
         return ChatSession(previewAgentName: "Claude Code", phase: .ready, transcript: transcript, isTurnRunning: true)
+    }
+
+    /// A turn that is over while a dev server and a subagent it started are still running.
+    static var backgroundWork: ChatSession {
+        var transcript = ChatTranscript()
+        transcript.apply(SessionSetup(modes: ChatPreviewSamples.modes, configOptions: ChatPreviewSamples.configOptions))
+        transcript.appendUserPrompt([.text("Start the dev server and have someone look into the flaky login test.")])
+        var server = ToolCall(
+            toolCallId: "sample-server", title: "npm run dev", kind: .execute, status: .completed,
+            terminalOutput: "Command running in background with ID: b1."
+        )
+        server.toolName = "Bash"
+        server.backgroundTaskId = "b1"
+        var subagent = ToolCall(toolCallId: "sample-subagent", title: "Investigate the flaky login test", kind: .think, status: .completed)
+        subagent.toolName = "Agent"
+        subagent.startedBackgroundSubagent = true
+        var search = ToolCall(toolCallId: "sample-step-1", title: "Search for \"testLogin\"", kind: .search, status: .completed)
+        search.parentToolCallId = subagent.toolCallId
+        var read = ToolCall(
+            toolCallId: "sample-step-2", title: "Read Tests/LoginTests.swift", kind: .read, status: .inProgress,
+            locations: [ToolCallLocation(path: "/Users/me/Projects/Acme/Tests/LoginTests.swift")]
+        )
+        read.parentToolCallId = subagent.toolCallId
+        transcript.apply(.toolCall(server))
+        transcript.apply(.toolCall(subagent))
+        transcript.apply(.agentMessageChunk(ContentChunk(content: .text("The dev server is up, and a subagent is looking into the test."), messageId: "sample-started")))
+        transcript.apply(.toolCall(search))
+        transcript.apply(.toolCall(read))
+        return ChatSession(previewAgentName: "Claude Code", phase: .ready, transcript: transcript)
     }
 
     /// Claude asking to leave plan mode, with wordy options and two more requests queued.

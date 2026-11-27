@@ -148,7 +148,7 @@ extension ChatSession {
         let response: InitializeResponse
         do {
             response = try await withDeadline(configuration.timing.request, launchID: launchID) {
-                try await client.initialize(clientInfo: configuration.clientInfo)
+                try await client.initialize(clientInfo: configuration.clientInfo, rendersTerminalOutput: configuration.rendersTerminalOutput)
             }
         } catch {
             guard isCurrent(launchID) else { return }

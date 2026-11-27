@@ -50,6 +50,9 @@ public enum AgentEvent: Equatable, Sendable {
     /// `backgroundTasks` is how many shells, monitors and the like the agent left running, or nil
     /// when the agent does not say. Subagents are not among them: they report themselves.
     case turnFinished(message: String?, backgroundTasks: Int? = nil)
+    /// How many shells and the like the agent has running in the background changed, between
+    /// turns as well. From an agent that reports each one as it starts and ends.
+    case backgroundTasksChanged(Int)
     /// The user stopped the turn, or dismissed its request, at the terminal. The agent is back at
     /// its prompt without a result.
     case turnInterrupted

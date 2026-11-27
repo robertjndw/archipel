@@ -37,7 +37,7 @@ struct ChatTranscriptView: View {
 
     var body: some View {
         let items = session.transcript.items
-        let rows = PlacedRow.place(ChatRow.rows(for: items, isTurnRunning: session.isTurnRunning))
+        let rows = placedRows(openFolds: expanded)
         let showsWorking = WorkingStatus.isShown(isTurnRunning: session.isTurnRunning, isAwaitingPermission: !session.permissionRequests.isEmpty)
         let find = session.viewState.find
         let request = FindRequest(find: find, items: items)
@@ -63,6 +63,7 @@ struct ChatTranscriptView: View {
                             openFile: actions.openFile
                         )
                         .equatable()
+                        .padding(.leading, placed.isInFold ? ChatMetrics.detailIndent : 0)
                         .padding(.top, placed.spacing)
                         // Find aims with these. Measured on the view the row's id names, room
                         // above included, in the content's own space, where scrolling changes
@@ -206,17 +207,32 @@ struct ChatTranscriptView: View {
         }
     }
 
-    /// Brings the hit Find is on into view, opening its row first when the hit is in a thought
-    /// or in a tool call's details.
+    private func placedRows(openFolds: Set<String>) -> [PlacedRow] {
+        PlacedRow.place(ChatRow.rows(for: session.transcript.items, isTurnRunning: session.isTurnRunning, openFolds: openFolds))
+    }
+
+    /// Brings the hit Find is on into view, opening what hides it first: the fold its step is
+    /// in, and its row when the hit is in a thought or in a tool call's details.
     private func reveal(_ match: ChatFindMatch?, in rows: [PlacedRow], with proxy: ScrollViewProxy) {
-        guard let match, let target = ChatRow.scrollTarget(for: match, in: rows.map(\.row)) else { return }
-        actions.userInteracted()
+        guard let match else { return }
+        var rows = rows
+        let fold = rows.lazy.compactMap(\.row.fold).first { $0.itemIDs.contains(match.itemID) }
         // Rows the search opened and has moved out of close behind it. Without animation, like
         // the opening below: the scroll aims at where the rows will be.
-        let left = openedByFind.subtracting([match.itemID])
+        let left = openedByFind.subtracting([match.itemID, fold?.id].compactMap(\.self))
         var heightsChange = !left.isEmpty
         expanded.subtract(left)
         openedByFind.subtract(left)
+        if let fold, !fold.isOpen {
+            isFollowing = false
+            expanded.insert(fold.id)
+            openedByFind.insert(fold.id)
+            heightsChange = true
+        }
+        // Folds that opened or closed changed which rows there are.
+        if heightsChange { rows = placedRows(openFolds: expanded) }
+        guard let target = ChatRow.scrollTarget(for: match, in: rows.map(\.row)) else { return }
+        actions.userInteracted()
         if match.isInDetails, !expanded.contains(match.itemID) {
             // Following would pull the transcript back to its end the moment the row opens. If the
             // hit turns out to be at the end, the scroll view reports that and following resumes.
@@ -308,14 +324,20 @@ private final class ScrollState {
 private struct PlacedRow: Identifiable {
     var row: ChatRow
     var spacing: CGFloat
+    /// A step of an open fold, which is set in under the fold's line.
+    var isInFold = false
 
     var id: String { row.id }
 
     static func place(_ rows: [ChatRow]) -> [PlacedRow] {
         var placed: [PlacedRow] = []
         placed.reserveCapacity(rows.count)
+        var foldSteps: Set<String> = []
         for row in rows {
-            placed.append(PlacedRow(row: row, spacing: row.spacing(after: placed.last?.row)))
+            if let fold = row.fold { foldSteps = Set(fold.itemIDs) }
+            // A thought's row and a tool group are both named after their first item.
+            let isInFold = row.fold == nil && foldSteps.contains(row.id)
+            placed.append(PlacedRow(row: row, spacing: row.spacing(after: placed.last?.row), isInFold: isInFold))
         }
         return placed
     }
@@ -326,11 +348,11 @@ private extension ChatRow {
     func expandedIDs(in expanded: Set<String>) -> Set<String> {
         guard !expanded.isEmpty else { return [] }
         switch self {
-        case .user, .agent:
+        case .user, .agent, .fold:
             return []
         case let .thought(message, _):
             return expanded.contains(message.id) ? [message.id] : []
-        case let .tools(_, calls):
+        case let .tools(_, calls, _):
             return expanded.intersection(calls.map { ChatItem.toolCall($0).id })
         }
     }
@@ -346,7 +368,8 @@ private struct FindRequest: Equatable {
     init?(find: ChatFindModel, items: [ChatItem]) {
         guard find.isPresented, ChatFindSearch.isSearchable(find.query) else { return nil }
         query = find.query
-        self.items = items
+        // What subagents did is not in the conversation, so it is not searched either.
+        self.items = ChatRow.mainItems(of: items).items
     }
 }
 
@@ -439,8 +462,10 @@ private struct ChatRowView: View, Equatable {
             AgentMessageView(message: message, showsCopyButton: endsTurn && !isStreaming)
         case let .thought(message, _):
             ThoughtRow(message: message, isExpanded: expanded.contains(message.id), toggle: { toggle(message.id) })
-        case let .tools(_, calls):
-            ToolCallGroup(calls: calls, expanded: expanded, mark: mark, toggle: toggle, openFile: openFile)
+        case let .tools(_, calls, steps):
+            ToolCallGroup(calls: calls, steps: steps, expanded: expanded, mark: mark, toggle: toggle, openFile: openFile)
+        case let .fold(fold):
+            ActivityFoldRow(fold: fold, toggle: { toggle(fold.id) })
         }
     }
 }
