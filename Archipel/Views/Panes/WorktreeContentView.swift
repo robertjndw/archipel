@@ -101,17 +101,24 @@ private struct PaneCard: ViewModifier {
     // identity on every switch and remount the terminals inside it.
     func body(content: Content) -> some View {
         let gap = Chrome.paneGap(for: style)
-        // A plain rounded rectangle rather than ConcentricRectangle, so every corner gets the same
-        // radius and it comes from the window's real corner radius instead of a fallback value.
-        let radius = Chrome.paneRadius(for: style, windowRadius: windowRadius)
-        let shape = RoundedRectangle(cornerRadius: radius, style: Chrome.paneCornerStyle)
+        // Not ConcentricRectangle: that would round only the corners next to the window's, and
+        // from a fallback radius rather than the window's real one.
+        let shape = PaneShape(windowRadius: windowRadius, gap: gap)
         content
             .clipShape(shape)
             .overlay {
-                // Hidden through opacity instead of an `if`, for the identity reason above.
-                // Compact panes touch each other, so the line would just draw a grid there.
-                shape.strokeBorder(.white.opacity(style == .comfortable ? Chrome.paneEdgeOpacity : 0), lineWidth: 1)
-                    .allowsHitTesting(false)
+                // No `if` for the compact style, for the identity reason above. Both shapes are
+                // empty there.
+                ZStack {
+                    // A clipped terminal comes out about a third of a pixel fatter in the
+                    // corner than the shape it was clipped to, which shows on 1x displays. With
+                    // the surface painted over the slivers, the edge you see is a drawn one.
+                    PaneShape(windowRadius: windowRadius, gap: gap, part: .surround)
+                        .fill(Chrome.windowSurface)
+                    PaneShape(windowRadius: windowRadius, gap: gap, part: .edge)
+                        .fill(.white.opacity(Chrome.paneEdgeOpacity))
+                }
+                .allowsHitTesting(false)
             }
             .padding(EdgeInsets(
                 top: gap,
