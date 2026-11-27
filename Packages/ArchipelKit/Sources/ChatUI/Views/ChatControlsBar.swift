@@ -87,6 +87,7 @@ struct ChatControlsBar: View {
                     showsSettings.toggle()
                 } label: {
                     SettingsLabel(effort: effort, marksSwitch: switchedOn != nil)
+                        .barItemLabel()
                 }
                 .buttonStyle(.plain)
                 .barItem(isActive: showsSettings)
@@ -142,8 +143,19 @@ private struct SettingsLabel: View {
     }
 }
 
-/// The frame every item of the bar shares: room around the label, and a highlight under the
-/// pointer or while the item's menu or popover is open, like a toolbar item's.
+/// The padding around a bar item's label. Put this on the label, not the button: a plain button
+/// only takes clicks on its label, so padding outside it gets the hover highlight but no clicks.
+struct BarItemLabel: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, BarItem.inset)
+            .frame(height: 24)
+            .contentShape(.rect)
+    }
+}
+
+/// The highlight a bar item shows on hover or while its menu or popover is open, like a toolbar
+/// item's. Pair it with `barItemLabel()` on the button's label.
 struct BarItem: ViewModifier {
     static let inset: CGFloat = 6
 
@@ -154,9 +166,6 @@ struct BarItem: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, Self.inset)
-            .frame(height: 24)
-            .contentShape(.rect)
             .background(
                 .quaternary.opacity(isHovered || isActive ? 1 : 0),
                 in: .rect(cornerRadius: CornerRadius.control, style: .continuous)
@@ -170,6 +179,10 @@ struct BarItem: ViewModifier {
 extension View {
     func barItem(isActive: Bool = false) -> some View {
         modifier(BarItem(isActive: isActive))
+    }
+
+    func barItemLabel() -> some View {
+        modifier(BarItemLabel())
     }
 }
 
@@ -268,6 +281,7 @@ private struct ControlButton: View {
                     ControlChoices(control: control, recentModels: recentModels, favoriteModels: favoriteModels, select: select)
                 } label: {
                     ChoiceLabel(control: control)
+                        .barItemLabel()
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
@@ -286,6 +300,7 @@ private struct ControlButton: View {
                 Text(verbatim: control.barLabel)
                     .lineLimit(1)
                     .foregroundStyle(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    .barItemLabel()
             }
             .buttonStyle(.plain)
             .barItem()
@@ -340,6 +355,7 @@ private struct ModelSearchButton: View {
             isOpen.toggle()
         } label: {
             ChoiceLabel(control: control)
+                .barItemLabel()
         }
         .buttonStyle(.plain)
         .barItem(isActive: isOpen)

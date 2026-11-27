@@ -98,15 +98,18 @@ struct ChatComposer: View {
             }
             textView
             HStack(spacing: 8) {
-                Button("Attach Files", systemImage: "paperclip") { isAttaching = true }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.plain)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .barItem(isActive: isAttaching)
-                    .padding(.leading, -BarItem.inset)
-                    .help(session.fileIndex == nil ? "Attach Files" : "Attach Files, or Type @ to Mention One")
-                    .accessibilityIdentifier("chat.attach")
+                Button { isAttaching = true } label: {
+                    Label("Attach Files", systemImage: "paperclip")
+                        .labelStyle(.iconOnly)
+                        .barItemLabel()
+                }
+                .buttonStyle(.plain)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.secondary)
+                .barItem(isActive: isAttaching)
+                .padding(.leading, -BarItem.inset)
+                .help(session.fileIndex == nil ? "Attach Files" : "Attach Files, or Type @ to Mention One")
+                .accessibilityIdentifier("chat.attach")
                 ChatControlsBar(
                     controls: session.controls,
                     recentModels: RecentModels.values(in: recentModels),
