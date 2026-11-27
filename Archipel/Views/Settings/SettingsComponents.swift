@@ -192,7 +192,13 @@ struct StatusBarPreview: View {
         StatusBarStrip(items: shown) { item in
             switch item {
             case .usage: UsageItem(reading: reading, now: .now, display: settings.usageDisplay, fill: settings.usageBarFill)
-            case .context: ContextLabel(usedPercent: 61, cache: cache, display: settings.usageDisplay, fill: settings.usageBarFill)
+            case .context:
+                ContextLabel(
+                    modelName: settings.shows(.model) ? "Opus 4.7" : nil,
+                    usedPercent: settings.shows(.context) ? 61 : nil,
+                    cache: settings.shows(.context) ? cache : nil, display: settings.usageDisplay, fill: settings.usageBarFill
+                )
+            case .model: EmptyView()
             case .agents: AgentsLabel(summary: AttentionSummary(working: 2))
             case .resources: ResourcesItem()
             case .stayAwake: StayAwakeButton()

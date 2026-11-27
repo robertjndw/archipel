@@ -67,12 +67,13 @@ final class AppSettings {
 
     /// The items of the status bar, in the order they stand in it.
     enum StatusBarItem: String, CaseIterable, Identifiable {
-        case usage, context, agents, resources, stayAwake
+        case usage, model, context, agents, resources, stayAwake
         var id: Self { self }
 
         var title: String {
             switch self {
             case .usage: "Usage limits"
+            case .model: "Model"
             case .context: "Context & cache"
             case .agents: "Agents"
             case .resources: "Resources"
@@ -81,7 +82,7 @@ final class AppSettings {
         }
 
         /// Leading items report on your sessions, trailing ones on the app and the Mac.
-        var isLeading: Bool { self == .usage || self == .context }
+        var isLeading: Bool { self == .usage || self == .model || self == .context }
     }
 
     /// Where a ⌘-clicked link opens. ⌘⌥-click picks the other one.
@@ -279,8 +280,19 @@ final class AppSettings {
         usageDisplay = defaults.string(forKey: Key.usageDisplay).flatMap(UsageDisplay.init) ?? .numbers
         usageBarFill = defaults.string(forKey: Key.usageBarFill).flatMap(UsageBarFill.init) ?? .used
         let hidden = defaults.stringArray(forKey: Key.hiddenStatusBarItems) ?? []
-        hiddenStatusBarItems = Set(hidden.compactMap(StatusBarItem.init))
-        unknownHiddenStatusBarItems = hidden.filter { StatusBarItem(rawValue: $0) == nil }
+        var hiddenItems = Set(hidden.compactMap(StatusBarItem.init))
+        let unknownHidden = hidden.filter { StatusBarItem(rawValue: $0) == nil }
+        // The model lives in the context item, so anyone who hid that item shouldn't get it back
+        // just for the model. Only once, so turning the model on later sticks.
+        if !defaults.bool(forKey: Key.migratedModelStatusBarItem) {
+            defaults.set(true, forKey: Key.migratedModelStatusBarItem)
+            if hiddenItems.contains(.context) {
+                hiddenItems.insert(.model)
+                defaults.set((hiddenItems.map(\.rawValue) + unknownHidden).sorted(), forKey: Key.hiddenStatusBarItems)
+            }
+        }
+        hiddenStatusBarItems = hiddenItems
+        unknownHiddenStatusBarItems = unknownHidden
         notifiesWhenAttentionNeeded = bool(Key.notifiesWhenAttentionNeeded, true)
         notifiesWhenFinished = bool(Key.notifiesWhenFinished, true)
         notifiesWhenExited = bool(Key.notifiesWhenExited, true)
@@ -332,6 +344,7 @@ final class AppSettings {
         static let usageDisplay = "settings.usageDisplay"
         static let usageBarFill = "settings.usageBarFill"
         static let hiddenStatusBarItems = "settings.hiddenStatusBarItems"
+        static let migratedModelStatusBarItem = "settings.migratedModelStatusBarItem"
         static let notifiesWhenAttentionNeeded = "settings.notifiesWhenAttentionNeeded"
         static let notifiesWhenFinished = "settings.notifiesWhenFinished"
         static let notifiesWhenExited = "settings.notifiesWhenExited"

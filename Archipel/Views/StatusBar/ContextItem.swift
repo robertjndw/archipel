@@ -2,30 +2,40 @@ import AgentKit
 import ArchipelCore
 import SwiftUI
 
-/// How full the focused session's context window is, and how long its prompt cache stays warm.
-/// Claude's terminal sessions report it, and so do chats of any agent. Nothing at all for other tabs
-/// and before the first reply, since a guess would look like a measurement.
+/// The focused session's model, how full its context window is, and how long its prompt cache stays
+/// warm. Only Claude's terminal sessions and chats report the window and the cache, and only after
+/// the first reply. Other tabs show nothing there, since a guess would look like a measurement.
 struct ContextItem: View {
+    /// The model and the context are two toggles for one item, so the label draws what is on.
+    var showsModel = true
+    var showsContext = true
     @Environment(AppModel.self) private var model
     @State private var showsDetails = false
 
     var body: some View {
-        if let id = model.focusedSessionID, let context = model.sessionContexts[id] {
-            let settings = model.settings
+        let settings = model.settings
+        if let id = model.focusedSessionID {
+            let modelName = showsModel ? model.modelName(for: id) : nil
+            let context = showsContext ? model.sessionContexts[id] : nil
             // While Claude works every request refreshes the cache anyway, so a countdown is noise.
             let cache = model.activity(for: id).isBusy ? nil : model.promptCaches[id]
-            Button {
-                showsDetails.toggle()
-            } label: {
-                ContextLabel(usedPercent: context.usedPercent, cache: cache, display: settings.usageDisplay, fill: settings.usageBarFill)
+            if modelName != nil || context != nil {
+                Button {
+                    showsDetails.toggle()
+                } label: {
+                    ContextLabel(
+                        modelName: modelName, usedPercent: context?.usedPercent, cache: context == nil ? nil : cache,
+                        display: settings.usageDisplay, fill: settings.usageBarFill
+                    )
                     .frame(maxHeight: .infinity)
                     .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .help("Show Context Details")
-            .accessibilityIdentifier("statusBar.context")
-            .popover(isPresented: $showsDetails, arrowEdge: .top) {
-                ContextDetails(sessionID: id)
+                }
+                .buttonStyle(.plain)
+                .help(ContextLabel.parts(modelName: modelName, usedPercent: context?.usedPercent).detailsHelp)
+                .accessibilityIdentifier("statusBar.context")
+                .popover(isPresented: $showsDetails, arrowEdge: .top) {
+                    ContextDetails(sessionID: id)
+                }
             }
         }
     }
@@ -33,7 +43,10 @@ struct ContextItem: View {
 
 /// The ring and the cache countdown from values only, so the Settings preview can draw it too.
 struct ContextLabel: View {
-    let usedPercent: Double
+    /// Leads the label, since it changes least. Nil when the model is off or still unknown.
+    var modelName: String?
+    /// Nil before the first reply, or when only the model is on: no ring then.
+    let usedPercent: Double?
     /// Nil when the cache is unknown or not worth a countdown right now.
     let cache: PromptCacheState?
     let display: AppSettings.UsageDisplay
@@ -41,18 +54,25 @@ struct ContextLabel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let percent = Int(usedPercent.rounded())
+        let percent = usedPercent.map { Int($0.rounded()) }
         TimelineView(CacheCountdown.schedule(for: cache, from: .now)) { timeline in
             let countdown = cache.map { CacheCountdown(cache: $0, now: timeline.date) }
             HStack(spacing: 10) {
-                HStack(spacing: 4) {
-                    // Percentages show the number used, so the ring follows it. Only bars have a fill setting.
-                    ContextRing(usedPercent: usedPercent, fill: display == .bars ? fill : .used)
-                    if display == .numbers {
-                        Text("\(percent)%")
-                            .foregroundStyle(UsageColor.style(for: usedPercent, calm: .secondary))
-                            .contentTransition(.numericText(value: Double(percent)))
-                            .animation(reduceMotion ? nil : Motion.disclosure, value: percent)
+                if let modelName {
+                    // The size of the window is in the popover, the bar only needs to tell models apart.
+                    Text(Self.barName(modelName))
+                        .foregroundStyle(.secondary)
+                }
+                if let usedPercent, let percent {
+                    HStack(spacing: 4) {
+                        // Percentages show the number used, so the ring follows it. Only bars have a fill setting.
+                        ContextRing(usedPercent: usedPercent, fill: display == .bars ? fill : .used)
+                        if display == .numbers {
+                            Text("\(percent)%")
+                                .foregroundStyle(UsageColor.style(for: usedPercent, calm: .secondary))
+                                .contentTransition(.numericText(value: Double(percent)))
+                                .animation(reduceMotion ? nil : Motion.disclosure, value: percent)
+                        }
                     }
                 }
                 if let countdown {
@@ -73,9 +93,45 @@ struct ContextLabel: View {
             .lineLimit(1)
             .fixedSize()
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Context")
-            .accessibilityValue(["\(percent) percent", countdown?.spokenText].compactMap(\.self).joined(separator: ", "))
+            .accessibilityLabel(Self.parts(modelName: modelName, usedPercent: usedPercent).accessibilityLabel)
+            .accessibilityValue([modelName, percent.map { "\($0) percent" }, countdown?.spokenText].compactMap(\.self).joined(separator: ", "))
         }
+    }
+
+    /// Which halves are on, so the tooltip and VoiceOver don't mention one that isn't drawn.
+    enum Parts {
+        case model, context, both
+
+        var accessibilityLabel: String {
+            switch self {
+            case .model: "Model"
+            case .context: "Context"
+            case .both: "Model and context"
+            }
+        }
+
+        var detailsHelp: String {
+            switch self {
+            case .model: "Show Model Details"
+            case .context: "Show Context Details"
+            case .both: "Show Model and Context Details"
+            }
+        }
+    }
+
+    static func parts(modelName: String?, usedPercent: Double?) -> Parts {
+        switch (modelName != nil, usedPercent != nil) {
+        case (true, false): .model
+        case (true, true): .both
+        default: .context
+        }
+    }
+
+    /// "Sonnet 4.6 (1M context)" becomes "Sonnet 4.6".
+    static func barName(_ name: String) -> String {
+        guard name.hasSuffix(")"), let open = name.lastIndex(of: "("), open > name.startIndex else { return name }
+        let base = name[..<open].trimmingCharacters(in: .whitespaces)
+        return base.isEmpty ? name : base
     }
 }
 
@@ -175,56 +231,81 @@ struct ContextDetails: View {
 
     var body: some View {
         // Read live, so the popover keeps up with a turn that ends while it is open.
-        if let context = model.sessionContexts[sessionID] {
+        let context = model.sessionContexts[sessionID]
+        let modelName = model.modelName(for: sessionID)
+        if context != nil || modelName != nil {
             let cache = model.promptCaches[sessionID]
             let isWorking = model.activity(for: sessionID).isBusy
-            // Only bars have a fill setting, see ContextLabel.
-            let fill = model.settings.usageDisplay == .bars ? model.settings.usageBarFill : .used
-            let percent = Int(context.usedPercent.rounded())
             TimelineView(.explicit(cache.map { [$0.expiresAt] } ?? [])) { timeline in
                 VStack(alignment: .leading, spacing: 14) {
-                    HStack(alignment: .firstTextBaseline) {
-                        // Claude's status line reports the context window, and so does every chat.
-                        let session = model.workspace.session(id: sessionID)
-                        let agent = session.map { model.effectiveAgent(for: $0).adapter } ?? ClaudeAdapter()
-                        Label(session?.displayTitle ?? agent.displayName, symbol: agent.symbolName)
-                            .font(.headline)
-                            .lineLimit(1)
-                        Spacer()
-                        if let name = context.model {
-                            Text(name)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("Context window")
-                            Spacer()
-                            Text(fill == .used ? "\(percent)% used" : "\(100 - percent)% left")
-                                .monospacedDigit()
-                                .foregroundStyle(UsageColor.style(for: context.usedPercent, calm: .primary))
-                                .contentTransition(.numericText(value: Double(percent)))
-                                .animation(reduceMotion ? nil : Motion.disclosure, value: percent)
-                        }
-                        .font(.callout)
-                        UsageBar(usedPercent: context.usedPercent, fill: fill, height: 6, calm: AnyShapeStyle(.secondary))
-                        Text("\(ContextFormat.tokens(context.usedTokens)) of \(ContextFormat.tokens(context.windowSize)) tokens")
+                    header(modelName: modelName)
+                    if let context {
+                        contextWindow(context)
+                    } else if canReportContext {
+                        Text("Context shows up after the first reply.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     if let cache {
                         cacheDetails(cache, isWorking: isWorking, now: timeline.date)
                     }
-                    Text("Compacting or switching models clears the cache, and Anthropic may drop it sooner.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if context != nil {
+                        Text("Compacting or switching models clears the cache, and Anthropic may drop it sooner.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(16)
                 .frame(width: 320)
             }
+        }
+    }
+
+    /// Codex and the other terminal agents never report a context window, so don't promise one.
+    private var canReportContext: Bool {
+        guard let session = model.workspace.session(id: sessionID) else { return false }
+        return session.effectiveInterface == .acp || model.effectiveAgent(for: session).adapter.id == AgentKind.claude.rawValue
+    }
+
+    private func header(modelName: String?) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            // Claude's status line reports the context window, and so does every chat.
+            let session = model.workspace.session(id: sessionID)
+            let agent = session.map { model.effectiveAgent(for: $0).adapter } ?? ClaudeAdapter()
+            Label(session?.displayTitle ?? agent.displayName, symbol: agent.symbolName)
+                .font(.headline)
+                .lineLimit(1)
+            Spacer()
+            if let modelName {
+                Text(modelName)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func contextWindow(_ context: SessionContext) -> some View {
+        // Only bars have a fill setting, see ContextLabel.
+        let fill = model.settings.usageDisplay == .bars ? model.settings.usageBarFill : .used
+        let percent = Int(context.usedPercent.rounded())
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Context window")
+                Spacer()
+                Text(fill == .used ? "\(percent)% used" : "\(100 - percent)% left")
+                    .monospacedDigit()
+                    .foregroundStyle(UsageColor.style(for: context.usedPercent, calm: .primary))
+                    .contentTransition(.numericText(value: Double(percent)))
+                    .animation(reduceMotion ? nil : Motion.disclosure, value: percent)
+            }
+            .font(.callout)
+            UsageBar(usedPercent: context.usedPercent, fill: fill, height: 6, calm: AnyShapeStyle(.secondary))
+            Text("\(ContextFormat.tokens(context.usedTokens)) of \(ContextFormat.tokens(context.windowSize)) tokens")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -279,6 +360,18 @@ struct ContextDetails: View {
             ContextLabel(usedPercent: 78, cache: nil, display: .bars, fill: .remaining)
             ContextLabel(usedPercent: 94, cache: expired, display: .bars, fill: .remaining)
         }
+    }
+    .font(.system(size: 11))
+    .monospacedDigit()
+    .padding()
+}
+
+#Preview("Context Labels with model") {
+    let warm = PromptCacheState(lastRequestAt: .now.addingTimeInterval(-12 * 60), ttl: 3600)
+    VStack(alignment: .leading, spacing: 12) {
+        ContextLabel(modelName: "Opus 4.7", usedPercent: 12, cache: warm, display: .numbers, fill: .used)
+        ContextLabel(modelName: "Sonnet 4.6 (1M context)", usedPercent: 78, cache: nil, display: .bars, fill: .used)
+        ContextLabel(modelName: "Opus", usedPercent: nil, cache: nil, display: .bars, fill: .used)
     }
     .font(.system(size: 11))
     .monospacedDigit()

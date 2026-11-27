@@ -626,6 +626,18 @@ struct ChatControlLabelTests {
         #expect(select("Model", .model, current: "d", name: "Default (recommended)").barLabel == "Default (recommended)")
     }
 
+    @Test func anUnresolvedDefaultModelIsNoName() {
+        #expect(select("Model", .model, current: "default", name: "Default (recommended)").resolvedModelName == nil)
+        #expect(select("Model", .model, current: "opus", name: "Opus").resolvedModelName == "Opus")
+        #expect(select("Mode", .mode, current: "m", name: "Manual").resolvedModelName == nil)
+    }
+
+    @Test func aDefaultModelTakesTheNameItsDescriptionGives() {
+        let choice = ConfigOptionValue(value: "default", name: "Default (recommended)", description: "Opus 4.7")
+        let control = ChatControl(id: "m", name: "Model", category: .model, value: .select(current: "default", groups: [.init(name: nil, choices: [choice])]))
+        #expect(control.resolvedModelName == "Opus 4.7")
+    }
+
     @Test func otherControlsCarryTheirName() {
         #expect(select("Effort", .thoughtLevel, current: "m", name: "Medium").barLabel == "Effort: Medium")
         #expect(select("Fast Mode", nil, current: "o", name: "Off").barLabel == "Fast Mode: Off")

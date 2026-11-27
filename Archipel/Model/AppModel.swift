@@ -141,6 +141,13 @@ final class AppModel {
     /// in memory: Claude sends the context again as soon as a resumed session draws its status line.
     /// See AppModel+Context.
     var sessionContexts: [Session.ID: SessionContext] = [:]
+    /// The model each Claude session reports. Kept apart from the context because the status line
+    /// names it before the first reply and keeps naming it after /clear.
+    var sessionModels: [Session.ID: String] = [:]
+    /// The model the arguments of a terminal launch picked, for the time before the agent reports one
+    /// and for agents that never do. Recorded at launch so a later change of the default preset does
+    /// not rename a tab that is still running on the old one.
+    var launchedModels: [Session.ID: String] = [:]
     var promptCaches: [Session.ID: PromptCacheState] = [:]
     @ObservationIgnored var promptCacheReads: [Session.ID: Task<Void, Never>] = [:]
     /// Images for projects whose icon is a file or was found in the repository. See `loadIcon(of:)`.
@@ -1667,6 +1674,8 @@ final class AppModel {
                 ))
                 terminals[id] = terminal
                 terminalStartTimes[id] = .now
+                let launched = script == nil ? LaunchedModel.name(in: command.arguments) : nil
+                if launchedModels[id] != launched { launchedModels[id] = launched }
                 terminal.setOccluded(!visibleSessionIDs.contains(id))
                 observe(terminal, for: id)
                 if script?.kind == .setup {
@@ -1793,6 +1802,10 @@ final class AppModel {
         forgetInterruptions(of: id)
         activities[id] = nil
         launchFailures[id] = nil
+        // Whatever Claude reported belongs to the process that is gone, and a restart as a chat or
+        // another interface must not show it. The status line names the model again within moments.
+        if sessionModels[id] != nil { sessionModels[id] = nil }
+        if launchedModels[id] != nil { launchedModels[id] = nil }
         if !restarting {
             launchGenerations[id] = nil
             stoppingChats[id] = nil
@@ -1832,6 +1845,7 @@ final class AppModel {
         case nil:
             break
         }
+        if let model = message.model, sessionModels[session.id] != model { sessionModels[session.id] = model }
         if let context = message.context {
             recordContext(context, for: session.id)
         } else if message.source == ClaudeAdapter.statusLineSource {
