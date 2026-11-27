@@ -23,14 +23,13 @@ enum Chrome {
         style == .comfortable ? paneGap : 0
     }
     /// Corner radius of a pane: concentric with the window's corners, which sit `paneGap` away
-    /// from the outer cards. Every corner gets it, the inner ones too, so all cards have one shape.
-    /// Square in the compact style.
+    /// from the outer cards. Square in the compact style. Only the peek's zoom card uses it, to
+    /// have a number to animate to. The panes themselves are a `PaneShape`.
     static func paneRadius(for style: AppSettings.PaneStyle, windowRadius: CGFloat) -> CGFloat {
         style == .comfortable ? concentricRadius(windowRadius, inset: paneGap) : 0
     }
-    /// Circular, not continuous like the window corner. A continuous corner this small turns
-    /// almost all at once, which looks like a cut-off corner on 1x displays. The gap to the
-    /// window edge still stays within 0.2pt of `paneGap`.
+    /// For the peek's zoom card, which animates its radius and so cannot be a `PaneShape`.
+    /// Circular comes closer to that shape than continuous does.
     static let paneCornerStyle: RoundedCornerStyle = .circular
     /// Opacity of the white hairline inside a pane's edge. AppKit draws a similar one along the
     /// window edge. Against a black terminal it smooths out the stair steps of the corner on 1x
@@ -60,6 +59,40 @@ enum Chrome {
     /// island switcher and its new island button. The strip under the cards is twice this, 30pt,
     /// which leaves a small control 4pt above and below.
     static let bottomLineInset: CGFloat = 15
+}
+
+/// The outline of a pane card: the window's outline moved inward by `gap`, so the band between
+/// the card and the window edge is the same width all the way round the corner.
+///
+/// A rounded rectangle with the window's radius minus the gap does not give that. The window
+/// corner is a continuous curve and starts to turn well before a circle would, so a circular
+/// corner inside it makes the band thinner where the turn begins. It is only about a quarter of
+/// a point, but on a 1x display you can see it.
+nonisolated struct PaneShape: Shape {
+    enum Part {
+        case card
+        /// A 1pt line just inside the card's edge.
+        case edge
+        /// The four corner slivers between the card and its bounds.
+        case surround
+    }
+
+    var windowRadius: CGFloat
+    var gap: CGFloat
+    var part = Part.card
+
+    func path(in rect: CGRect) -> Path {
+        // Compact panes touch the window edge and each other, so they stay square.
+        guard gap > 0 else { return part == .card ? Path(rect) : Path() }
+        let window = RoundedRectangle(cornerRadius: windowRadius, style: .continuous)
+            .path(in: rect.insetBy(dx: -gap, dy: -gap))
+        let card = window.subtracting(window.strokedPath(StrokeStyle(lineWidth: gap * 2, lineJoin: .round)))
+        switch part {
+        case .card: return card
+        case .edge: return card.intersection(card.strokedPath(StrokeStyle(lineWidth: 2, lineJoin: .round)))
+        case .surround: return Path(rect).subtracting(card)
+        }
+    }
 }
 
 extension View {
