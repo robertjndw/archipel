@@ -67,7 +67,9 @@ struct ContextLabel: View {
                     HStack(spacing: 4) {
                         // Percentages show the number used, so the ring follows it. Only bars have a fill setting.
                         ContextRing(usedPercent: usedPercent, fill: display == .bars ? fill : .used)
-                        if display == .numbers {
+                        // Next to the model a second number crowds the bar. The ring still turns
+                        // orange and red, and the popover has the exact figure.
+                        if display == .numbers, modelName == nil {
                             Text("\(percent)%")
                                 .foregroundStyle(UsageColor.style(for: usedPercent, calm: .secondary))
                                 .contentTransition(.numericText(value: Double(percent)))
