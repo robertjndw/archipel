@@ -12,6 +12,8 @@ public struct DecodedHook: Equatable, Sendable {
     public var context: SessionContext?
     /// The file the agent writes the conversation to, when the payload names it.
     public var transcriptPath: String?
+    /// The model the agent says it runs on. Never set together with an event.
+    public var model: String?
 
     public init(
         event: AgentEvent?,
@@ -19,7 +21,8 @@ public struct DecodedHook: Equatable, Sendable {
         lifecycle: HookLifecycle? = nil,
         usage: ProviderUsage? = nil,
         context: SessionContext? = nil,
-        transcriptPath: String? = nil
+        transcriptPath: String? = nil,
+        model: String? = nil
     ) {
         self.event = event
         self.agentSessionID = agentSessionID
@@ -27,6 +30,7 @@ public struct DecodedHook: Equatable, Sendable {
         self.usage = usage
         self.context = context
         self.transcriptPath = transcriptPath
+        self.model = model
     }
 }
 

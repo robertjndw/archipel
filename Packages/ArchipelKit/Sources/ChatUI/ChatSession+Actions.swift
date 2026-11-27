@@ -240,6 +240,13 @@ extension ChatSession {
 
     // MARK: Settings
 
+    /// The model the agent is on. Nil until it lists models, and while it only says "Default".
+    public var modelName: String? {
+        // Not `controls`: this is read from a status bar on every render and that sorts them all.
+        guard let option = transcript.configOptions.first(where: { $0.category == .model }) else { return nil }
+        return Self.control(for: option).resolvedModelName
+    }
+
     /// The agent's settings for the composer, mode first, then model, then the rest in the
     /// agent's order. Built from config options; an agent that sends none but has legacy modes
     /// gets one "Mode" control with `ChatControl.modeFallbackID`.

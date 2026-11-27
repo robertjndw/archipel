@@ -140,6 +140,14 @@ extension ChatControl {
         return description
     }
 
+    /// The current model's name, for places with no room for the menu. Nil while it's a bare
+    /// "Default" we can't resolve, since that says nothing about which model runs.
+    var resolvedModelName: String? {
+        guard category == .model, case let .select(current?, _) = value, let choice = currentChoiceName else { return nil }
+        if let model = defaultModelName { return model }
+        return current.caseInsensitiveCompare("default") == .orderedSame ? nil : choice
+    }
+
     /// What the control's button says. The mode and the model are understood from the value
     /// alone; "Off" or "Default" next to them is not, so any other setting carries its name,
     /// unless the value already does ("Extended Thinking" for a control named "Thinking").

@@ -59,14 +59,20 @@ public enum UsageDecoder {
         guard used > 0 || !(window["current_usage"] is NSNull || window["current_usage"] == nil) else { return nil }
         let reported = number(window["used_percentage"]).flatMap { $0.isFinite ? $0 : nil }
         let percent = reported ?? Double(used) / Double(size) * 100
-        let model = payload["model"] as? [String: Any]
         return SessionContext(
             usedTokens: max(used, 0),
             windowSize: size,
             usedPercent: min(max(percent, 0), 100),
             transcriptPath: claudeTranscriptPath(payload),
-            model: ((model?["display_name"] as? String) ?? (model?["id"] as? String)).flatMap { $0.isEmpty ? nil : $0 }
+            model: claudeModel(payload)
         )
+    }
+
+    /// The model from Claude's status line input. Unlike the context it is there before the first
+    /// reply, so it is read on its own.
+    public static func claudeModel(_ payload: [String: Any]) -> String? {
+        let model = payload["model"] as? [String: Any]
+        return HookDecoder.nonEmptyString(model?["display_name"]) ?? HookDecoder.nonEmptyString(model?["id"])
     }
 
     /// Where Claude keeps the conversation, from its status line input or any of its hooks. Known

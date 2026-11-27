@@ -21,7 +21,9 @@ struct StatusBar: View {
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     UsageItems(now: context.date)
                 }
-            case .context: ContextItem()
+            case .context: ContextItem(showsModel: settings.shows(.model), showsContext: settings.shows(.context))
+            // Drawn by the context slot, see StatusBarStrip.
+            case .model: EmptyView()
             case .agents: AgentsItem()
             case .resources: ResourcesItem()
             case .stayAwake: StayAwakeButton()
@@ -49,15 +51,25 @@ struct StatusBarStrip<Item: View>: View {
     let items: [AppSettings.StatusBarItem]
     @ViewBuilder let item: (AppSettings.StatusBarItem) -> Item
 
+    /// The model is part of the context item, so it never gets a slot of its own: the context slot
+    /// stands in for it when only the model is on. One button and one popover for both.
+    static func slots(for items: [AppSettings.StatusBarItem]) -> [AppSettings.StatusBarItem] {
+        items.compactMap { entry in
+            guard entry == .model else { return entry }
+            return items.contains(.context) ? nil : .context
+        }
+    }
+
     var body: some View {
+        let slots = Self.slots(for: items)
         HStack(spacing: 12) {
             HStack(spacing: 14) {
-                ForEach(items.filter(\.isLeading)) { entry in
+                ForEach(slots.filter(\.isLeading)) { entry in
                     item(entry).transition(Self.transition)
                 }
             }
             Spacer(minLength: 8)
-            ForEach(items.filter { !$0.isLeading }) { entry in
+            ForEach(slots.filter { !$0.isLeading }) { entry in
                 item(entry)
                     // Room rather than a hairline between the agents and the machine's items.
                     .padding(.trailing, entry == .agents ? 6 : 0)

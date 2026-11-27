@@ -33,6 +33,13 @@ extension AppModel {
         }
     }
 
+    /// The model the session runs on. A chat knows it from its agent. A terminal has what Claude's
+    /// status line last reported, or else what the launch arguments asked for.
+    func modelName(for id: Session.ID) -> String? {
+        if workspace.session(id: id)?.effectiveInterface == .acp { return chats[id]?.modelName }
+        return sessionModels[id] ?? launchedModels[id]
+    }
+
     func forgetContext(of id: Session.ID) {
         promptCacheReads.removeValue(forKey: id)?.cancel()
         if sessionContexts[id] != nil { sessionContexts[id] = nil }

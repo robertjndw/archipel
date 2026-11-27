@@ -75,10 +75,13 @@ public struct ClaudeAdapter: AgentAdapter {
             let usage = UsageDecoder.claudeStatusLine(payload, at: date)
             let context = UsageDecoder.claudeContext(payload)
             // Before the first reply there is neither, but the status line already says where
-            // the conversation will be written.
+            // the conversation will be written and which model it runs on.
             let transcriptPath = UsageDecoder.claudeTranscriptPath(payload)
-            guard usage != nil || context != nil || transcriptPath != nil else { return nil }
-            return DecodedHook(event: nil, agentSessionID: nil, usage: usage, context: context, transcriptPath: transcriptPath)
+            let model = UsageDecoder.claudeModel(payload)
+            guard usage != nil || context != nil || transcriptPath != nil || model != nil else { return nil }
+            return DecodedHook(
+                event: nil, agentSessionID: nil, usage: usage, context: context, transcriptPath: transcriptPath, model: model
+            )
         }
         return DecodedHook(
             event: Self.event(payload),
