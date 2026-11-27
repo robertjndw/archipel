@@ -10,13 +10,14 @@ import UISupport
 public struct MarkdownText: View {
     private let source: String
     @State private var parser = StreamParserBox()
+    @Environment(\.markdownPathLinker) private var paths
 
     public init(_ source: String) {
         self.source = source
     }
 
     public var body: some View {
-        MarkdownBlockStack(blocks: parser.blocks(for: source), spacing: MarkdownMetrics.blockSpacing)
+        MarkdownBlockStack(blocks: parser.blocks(for: source, paths: paths), spacing: MarkdownMetrics.blockSpacing)
             .font(.body)
             .textSelection(.enabled)
     }
@@ -28,8 +29,10 @@ public struct MarkdownText: View {
 private final class StreamParserBox {
     private var parser = MarkdownStreamParser()
 
-    func blocks(for source: String) -> [MarkdownBlock] {
-        parser.update(source)
+    func blocks(for source: String, paths: MarkdownPathLinker?) -> [MarkdownBlock] {
+        // Links found against another folder would be wrong, so a new linker starts over.
+        if parser.paths !== paths { parser = MarkdownStreamParser(paths: paths) }
+        return parser.update(source)
     }
 }
 

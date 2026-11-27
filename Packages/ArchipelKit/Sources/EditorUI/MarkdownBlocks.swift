@@ -43,13 +43,13 @@ struct MarkdownTable: Hashable, Sendable {
 }
 
 enum MarkdownDocument {
-    static func parse(_ source: String) -> [MarkdownBlock] {
-        parseWithOffsets(source).blocks
+    static func parse(_ source: String, paths: MarkdownPathLinker? = nil) -> [MarkdownBlock] {
+        parseWithOffsets(source, paths: paths).blocks
     }
 
     /// Also returns the UTF-8 offset at which each top-level block's first line starts, which the
     /// stream parser needs to know where it can resume.
-    static func parseWithOffsets(_ source: String) -> (blocks: [MarkdownBlock], offsets: [Int]) {
+    static func parseWithOffsets(_ source: String, paths: MarkdownPathLinker? = nil) -> (blocks: [MarkdownBlock], offsets: [Int]) {
         let text = holdingBackAmbiguousLastLine(source)
         // Smart punctuation is off: agents write command lines in prose, and `--force` turning
         // into an en dash, or a quote flipping direction as the next token arrives, is worse
@@ -59,7 +59,7 @@ enum MarkdownDocument {
         var blocks: [MarkdownBlock] = []
         var lines: [Int?] = []
         for child in document.children {
-            guard let block = makeBlock(child, id: blocks.count) else { continue }
+            guard let block = makeBlock(child, id: blocks.count, paths: paths) else { continue }
             blocks.append(block)
             lines.append(child.range?.lowerBound.line)
         }
@@ -127,31 +127,31 @@ enum MarkdownDocument {
 
     // MARK: Blocks
 
-    private static func makeBlocks(_ children: some Sequence<Markup>) -> [MarkdownBlock] {
+    private static func makeBlocks(_ children: some Sequence<Markup>, paths: MarkdownPathLinker?) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         for child in children {
-            if let block = makeBlock(child, id: blocks.count) { blocks.append(block) }
+            if let block = makeBlock(child, id: blocks.count, paths: paths) { blocks.append(block) }
         }
         return blocks
     }
 
-    private static func makeBlock(_ markup: Markup, id: Int) -> MarkdownBlock? {
+    private static func makeBlock(_ markup: Markup, id: Int, paths: MarkdownPathLinker?) -> MarkdownBlock? {
         let kind: MarkdownBlock.Kind
         switch markup {
         case let paragraph as Paragraph:
-            kind = .paragraph(inlineText(paragraph))
+            kind = .paragraph(inlineText(paragraph, paths: paths))
         case let heading as Heading:
-            kind = .heading(level: heading.level, text: inlineText(heading))
+            kind = .heading(level: heading.level, text: inlineText(heading, paths: paths))
         case let code as CodeBlock:
             kind = .codeBlock(language: language(of: code), code: trimmingFinalLineBreak(code.code))
         case let quote as BlockQuote:
-            kind = .blockQuote(makeBlocks(quote.children))
+            kind = .blockQuote(makeBlocks(quote.children, paths: paths))
         case let list as UnorderedList:
-            kind = .unorderedList(makeItems(list.listItems))
+            kind = .unorderedList(makeItems(list.listItems, paths: paths))
         case let list as OrderedList:
-            kind = .orderedList(start: Int(list.startIndex), items: makeItems(list.listItems))
+            kind = .orderedList(start: Int(list.startIndex), items: makeItems(list.listItems, paths: paths))
         case let table as Table:
-            kind = .table(makeTable(table))
+            kind = .table(makeTable(table, paths: paths))
         case is ThematicBreak:
             kind = .thematicBreak
         case let html as HTMLBlock:
@@ -166,18 +166,18 @@ enum MarkdownDocument {
         return MarkdownBlock(id: id, kind: kind)
     }
 
-    private static func makeItems(_ items: some Sequence<ListItem>) -> [MarkdownListItem] {
+    private static func makeItems(_ items: some Sequence<ListItem>, paths: MarkdownPathLinker?) -> [MarkdownListItem] {
         items.enumerated().map { index, item in
             let checkbox: MarkdownListItem.Checkbox? = switch item.checkbox {
             case .checked: .checked
             case .unchecked: .unchecked
             case nil: nil
             }
-            return MarkdownListItem(id: index, checkbox: checkbox, blocks: makeBlocks(item.children))
+            return MarkdownListItem(id: index, checkbox: checkbox, blocks: makeBlocks(item.children, paths: paths))
         }
     }
 
-    private static func makeTable(_ table: Table) -> MarkdownTable {
+    private static func makeTable(_ table: Table, paths: MarkdownPathLinker?) -> MarkdownTable {
         let alignments: [MarkdownTable.Alignment?] = table.columnAlignments.map {
             switch $0 {
             case .left: .leading
@@ -191,7 +191,7 @@ enum MarkdownDocument {
                 guard let cell = child as? Table.Cell else { return nil }
                 // swift-markdown turns on cmark's span extension, which keeps a spanned-over cell
                 // in the tree with a span of zero. GitHub has no spans, so the cell is empty here.
-                return cell.colspan > 0 && cell.rowspan > 0 ? inlineText(cell) : AttributedString()
+                return cell.colspan > 0 && cell.rowspan > 0 ? inlineText(cell, paths: paths) : AttributedString()
             }
             if cells.count < alignments.count {
                 cells += Array(repeating: AttributedString(), count: alignments.count - cells.count)
@@ -220,8 +220,8 @@ enum MarkdownDocument {
 
     // MARK: Inlines
 
-    private static func inlineText(_ markup: Markup) -> AttributedString {
-        var builder = InlineBuilder()
+    private static func inlineText(_ markup: Markup, paths: MarkdownPathLinker?) -> AttributedString {
+        var builder = InlineBuilder(paths: paths)
         builder.append(children: markup)
         return builder.result
     }
@@ -234,6 +234,12 @@ private struct InlineBuilder {
     var result = AttributedString()
     private var intent: InlinePresentationIntent = []
     private var link: URL?
+    private let paths: MarkdownPathLinker?
+    private var lookupsLeft = MarkdownPathLinker.lookupsPerText
+
+    init(paths: MarkdownPathLinker?) {
+        self.paths = paths
+    }
 
     mutating func append(children markup: Markup) {
         for child in markup.children { append(child) }
@@ -242,9 +248,10 @@ private struct InlineBuilder {
     private mutating func append(_ markup: Markup) {
         switch markup {
         case let text as Markdown.Text:
-            appendText(text.string)
+            appendProse(text.string)
         case let code as InlineCode:
-            appendText(code.code, adding: .code)
+            let codeLink = link == nil ? linkForCode(code.code) : nil
+            appendText(code.code, adding: .code, link: codeLink)
         case let html as InlineHTML:
             appendText(html.rawHTML)
         case is SoftBreak:
@@ -273,13 +280,35 @@ private struct InlineBuilder {
         }
     }
 
-    private mutating func appendText(_ string: String, adding extra: InlinePresentationIntent = []) {
+    private mutating func appendText(_ string: some StringProtocol, adding extra: InlinePresentationIntent = [], link: URL? = nil) {
         guard !string.isEmpty else { return }
         var piece = AttributedString(string)
         let combined = intent.union(extra)
         if !combined.isEmpty { piece.inlinePresentationIntent = combined }
-        if let link { piece.link = link }
+        if let link = link ?? self.link { piece.link = link }
         result.append(piece)
+    }
+
+    /// Plain text, with the file paths in it linked. Text inside a Markdown link already goes
+    /// somewhere and is left alone.
+    private mutating func appendProse(_ string: String) {
+        guard let paths, link == nil, string.contains("/") else { return appendText(string) }
+        var plainStart = string.startIndex
+        for word in string.split(whereSeparator: \.isWhitespace) where word.contains("/") {
+            guard lookupsLeft > 0 else { break }
+            lookupsLeft -= 1
+            guard let found = paths.link(forWord: word) else { continue }
+            appendText(string[plainStart..<found.range.lowerBound])
+            appendText(string[found.range], link: found.url)
+            plainStart = found.range.upperBound
+        }
+        appendText(string[plainStart...])
+    }
+
+    private mutating func linkForCode(_ code: String) -> URL? {
+        guard let paths, lookupsLeft > 0 else { return nil }
+        lookupsLeft -= 1
+        return paths.link(forCode: code)
     }
 
     private mutating func withIntent(_ added: InlinePresentationIntent, _ body: (inout InlineBuilder) -> Void) {
@@ -291,11 +320,28 @@ private struct InlineBuilder {
 
     private mutating func withLink(_ destination: String?, _ body: (inout InlineBuilder) -> Void) {
         let saved = link
-        // A destination URL cannot represent (a space, say) leaves the text plain rather than
-        // dropping it.
-        link = destination.flatMap { $0.isEmpty ? nil : URL(string: $0) }
+        var target: URL?
+        if let destination, !destination.isEmpty {
+            // A destination URL cannot represent (a space, say) leaves the text plain rather than
+            // dropping it.
+            target = linkForDestination(destination) ?? URL(string: destination)
+        }
+        link = target
         body(&self)
         link = saved
+    }
+
+    /// A destination without a scheme is a path relative to the reply's folder. Resolved here,
+    /// where the folder is known; `src/a.swift:12` parses as a URL with the scheme `src/a.swift`,
+    /// so anything not written as `scheme://` gets a try.
+    private mutating func linkForDestination(_ destination: String) -> URL? {
+        guard let paths, lookupsLeft > 0 else { return nil }
+        if let scheme = URL(string: destination)?.scheme?.lowercased(),
+           destination.contains("://") || ["mailto", "file", "http", "https"].contains(scheme) {
+            return nil
+        }
+        lookupsLeft -= 1
+        return paths.link(forDestination: destination)
     }
 }
 
@@ -313,6 +359,7 @@ private struct InlineBuilder {
 /// Link reference definitions are the one thing that reaches across the whole document; once one
 /// could be present, every update parses everything.
 struct MarkdownStreamParser {
+    let paths: MarkdownPathLinker?
     private(set) var source = ""
     private(set) var blocks: [MarkdownBlock] = []
     /// UTF-8 offset of the line where the last block starts, or where parsing must resume.
@@ -322,6 +369,10 @@ struct MarkdownStreamParser {
     private var mayHaveDefinitions = false
     /// How many updates re-parsed the whole text; for tests and measurements.
     private(set) var fullParseCount = 0
+
+    init(paths: MarkdownPathLinker? = nil) {
+        self.paths = paths
+    }
 
     @discardableResult
     mutating func update(_ newSource: String) -> [MarkdownBlock] {
@@ -336,7 +387,7 @@ struct MarkdownStreamParser {
             if Self.mayContainDefinition(tail) {
                 mayHaveDefinitions = true
             } else {
-                let parsed = MarkdownDocument.parseWithOffsets(tail)
+                let parsed = MarkdownDocument.parseWithOffsets(tail, paths: paths)
                 var merged = Array(blocks.prefix(finalCount))
                 for var block in parsed.blocks {
                     block.id = merged.count
@@ -348,7 +399,7 @@ struct MarkdownStreamParser {
         }
         fullParseCount += 1
         mayHaveDefinitions = Self.mayContainDefinition(newSource)
-        let parsed = MarkdownDocument.parseWithOffsets(newSource)
+        let parsed = MarkdownDocument.parseWithOffsets(newSource, paths: paths)
         finalCount = 0
         resumeOffset = 0
         record(newSource, blocks: parsed.blocks, newOffsets: parsed.offsets)

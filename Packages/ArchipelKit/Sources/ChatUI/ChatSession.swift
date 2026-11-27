@@ -1,5 +1,6 @@
 import ACPKit
 import ArchipelCore
+import EditorUI
 import Foundation
 import Observation
 
@@ -64,6 +65,11 @@ public final class ChatSession {
     @ObservationIgnored let diffCache = DiffCache()
     /// What the views keep with the session so that it outlives them: the turn's clock and Find.
     @ObservationIgnored let viewState = ChatViewState()
+    /// Links the file paths in replies. One per session, so its lookups are shared by every reply
+    /// and survive the views. Nil for previews, whose paths name nothing on this Mac.
+    @ObservationIgnored private(set) lazy var pathLinker: MarkdownPathLinker? = configuration.map {
+        MarkdownPathLinker(base: URL(filePath: $0.workingDirectory, directoryHint: .isDirectory))
+    }
     /// The files an @ in the composer can mention. Nil only for a preview session that sets
     /// none, where the composer offers no files.
     @ObservationIgnored var fileIndex: WorktreeFileIndex?
