@@ -187,6 +187,10 @@ struct ChatSessionStoppingTests {
         let agent = try harness.agent()
         try await harness.send("Edit everything")
         await harness.session.shutDown()
+        // Sent before shutDown returns, but the fake agent reads it on its own task.
+        try await waitUntil("the agent receives the cancel") {
+            !agent.notifications(ACPMethod.sessionCancel).isEmpty
+        }
         #expect(agent.notifications(ACPMethod.sessionCancel) == [["sessionId": "s-new"]])
         #expect(harness.session.client == nil)
         #expect(harness.session.connection == nil)
