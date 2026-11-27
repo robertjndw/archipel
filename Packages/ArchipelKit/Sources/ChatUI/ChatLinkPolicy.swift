@@ -1,4 +1,5 @@
 import AppKit
+import EditorUI
 import Foundation
 
 /// Where a link clicked in a chat reply may go.
@@ -11,7 +12,8 @@ public enum ChatLinkPolicy {
         case web(URL)
         case mail(URL)
         /// A file that is safe to open: as a tab, or in its default app, as the app decides.
-        case file(URL)
+        /// `position` comes from a `#L12` or `#L12C3` fragment, which the URL no longer has.
+        case file(URL, position: MarkdownFilePosition?)
         /// A folder, a bundle or something that runs. Selecting it in Finder is safe and still
         /// takes the user to it.
         case reveal(URL)
@@ -25,7 +27,7 @@ public enum ChatLinkPolicy {
     ]
 
     /// Where `url` goes, or nil when it goes nowhere: an unknown scheme, a web link without a
-    /// host, a file that does not exist.
+    /// host, a file that does not exist, or one that is neither a regular file nor a folder.
     @MainActor
     public static func destination(for url: URL) -> Destination? {
         destination(for: url) { NSWorkspace.shared.isFilePackage(atPath: $0.path(percentEncoded: false)) }
@@ -38,17 +40,28 @@ public enum ChatLinkPolicy {
         case "mailto":
             return .mail(url)
         case "file":
-            let file = url.standardizedFileURL
+            let position = url.fragment(percentEncoded: false).flatMap(MarkdownFilePosition.init(fragment:))
+            var bare = url
+            if url.fragment() != nil || url.query() != nil, var components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
+                components.fragment = nil
+                components.query = nil
+                bare = components.url ?? url
+            }
+            let file = bare.standardizedFileURL
             // Judged by what the link ends up at, so a harmless name cannot stand in for an app.
-            let target = file.resolvingSymlinksInPath()
-            let path = target.path(percentEncoded: false)
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else { return nil }
-            let runs = isDirectory.boolValue || isPackage(target)
+            // Followed by hand rather than with `resolvingSymlinksInPath`, which would happily
+            // walk a planted link into an automount. Devices and FIFOs come back as nil: they
+            // would hang whatever reads them.
+            guard let found = SafeFileLookup.lookUp(file.path(percentEncoded: false), refusing: SafeFileLookup.automountPrefixes) else {
+                return nil
+            }
+            let path = found.path
+            let target = URL(filePath: path, directoryHint: found.kind == .folder ? .isDirectory : .notDirectory)
+            let runs = found.kind == .folder || isPackage(target)
                 || runnableExtensions.contains(target.pathExtension.lowercased())
                 || runnableExtensions.contains(file.pathExtension.lowercased())
                 || FileManager.default.isExecutableFile(atPath: path)
-            return runs ? .reveal(file) : .file(file)
+            return runs ? .reveal(file) : .file(file, position: position)
         default:
             return nil
         }

@@ -1,4 +1,5 @@
 import ACPKit
+import EditorUI
 import SwiftUI
 import UISupport
 
@@ -29,6 +30,7 @@ public struct ChatView: View {
             .environment(\.chatWorkingDirectory, session.configuration?.workingDirectory)
             .environment(\.chatAgentName, session.agentName)
             .environment(\.chatDiffCache, session.diffCache)
+            .environment(\.markdownPathLinker, session.pathLinker)
             // Links in replies go where the app sends links, not straight to the browser.
             .environment(\.openURL, OpenURLAction { url in
                 actions.openLink(url)

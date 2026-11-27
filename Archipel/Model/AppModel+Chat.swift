@@ -243,7 +243,9 @@ extension AppModel {
         switch ChatLinkPolicy.destination(for: url) {
         case .web(let url): openSessionLink(.web(url), alternate: alternate, from: sessionID)
         case .mail(let url): openSessionLink(.mail(url), alternate: alternate, from: sessionID)
-        case .file(let url): openSessionLink(.file(url, position: nil), alternate: alternate, from: sessionID)
+        case .file(let url, let position):
+            let position = position.map { TerminalLink.Position(line: $0.line, column: $0.column) }
+            openSessionLink(.file(url, position: position), alternate: alternate, from: sessionID)
         case .reveal(let url): NSWorkspace.shared.activateFileViewerSelecting([url])
         case nil: break
         }

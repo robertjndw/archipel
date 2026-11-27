@@ -1,4 +1,5 @@
 @testable import ChatUI
+import EditorUI
 import Foundation
 import Testing
 
@@ -28,7 +29,25 @@ final class ChatLinkPolicyTests {
 
     @Test func plainFilesOpen() throws {
         let readme = try file("README.md")
-        #expect(destination(readme) == .file(readme.standardizedFileURL))
+        #expect(destination(readme) == .file(readme.standardizedFileURL, position: nil))
+    }
+
+    @Test func aLineFragmentBecomesThePosition() throws {
+        let source = try file("main.swift")
+        let plain = source.standardizedFileURL
+        let at = { (fragment: String) in URL(string: plain.absoluteString + "#" + fragment)! }
+        #expect(destination(at("L12")) == .file(plain, position: MarkdownFilePosition(line: 12)))
+        #expect(destination(at("L12C3")) == .file(plain, position: MarkdownFilePosition(line: 12, column: 3)))
+        #expect(destination(at("L12-L20")) == .file(plain, position: MarkdownFilePosition(line: 12)))
+        #expect(destination(at("setup")) == .file(plain, position: nil))
+    }
+
+    @Test func devicesAndPipesGoNowhere() throws {
+        #expect(destination(URL(filePath: "/dev/zero")) == nil)
+        #expect(destination(URL(filePath: "/dev/null")) == nil)
+        let fifo = directory.appendingPathComponent("pipe")
+        try #require(mkfifo(fifo.path, 0o644) == 0)
+        #expect(destination(fifo) == nil)
     }
 
     @Test func anythingThatRunsIsOnlyRevealed() throws {
