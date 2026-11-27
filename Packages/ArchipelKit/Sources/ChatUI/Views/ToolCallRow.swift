@@ -120,6 +120,7 @@ private struct ToolCallHeader: View {
             SearchableText(text: call.displayTitle(relativeTo: workingDirectory))
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .shimmer(isActive: call.isStillWorking)
             if let name = call.diffFileNameMissingFromTitle {
                 SearchableText(text: name)
                     .lineLimit(1)
@@ -174,33 +175,38 @@ struct DisclosureChevron: View {
     }
 }
 
-/// A spinner while the call runs, turning into its outcome.
+/// How a call went, once it is over. While it runs the row's title shimmers instead, the way
+/// the status line under the transcript does, so there is no spinner here.
 struct ToolCallStatusGlyph: View {
     let status: ToolCallStatus
-    /// The call is over, but the command or subagent it started is not, so the spinner stays.
+    /// The call is over, but the command or subagent it started is not: no outcome to show yet.
     var runsInBackground = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var isSpinning: Bool { !status.isFinished || runsInBackground }
+    private var isWorking: Bool { !status.isFinished || runsInBackground }
 
     var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(status == .failed ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
-            // The spinner is a symbol too, so finishing is one symbol replacing another instead
-            // of a progress view popping out and an icon popping in.
-            .symbolEffect(.variableColor.iterative, options: .repeat(.continuous), isActive: isSpinning && !reduceMotion)
-            .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
-            .frame(width: 16, height: 16)
-            .help(help)
-            .accessibilityHidden(true)
+        ZStack {
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(status == .failed && !isWorking ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity))
+            }
+        }
+        .frame(width: 16, height: 16)
+        .contentShape(.rect)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: symbol)
+        .help(help)
+        .accessibilityHidden(true)
     }
 
-    private var symbol: String {
-        if runsInBackground { return "progress.indicator" }
+    private var symbol: String? {
+        // Under Reduce Motion the shimmer stands still, and something has to say the call runs.
+        if isWorking { return reduceMotion ? "ellipsis" : nil }
         return switch status {
-        case .pending, .inProgress: "progress.indicator"
+        case .pending, .inProgress: nil
         case .completed: "checkmark"
         case .failed: "xmark"
         case .cancelled: "slash.circle"
@@ -235,6 +241,7 @@ private struct SubagentSteps: View {
                     Text(step.displayTitle(relativeTo: workingDirectory))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .shimmer(isActive: !step.status.isFinished)
                     Spacer(minLength: 8)
                     ToolCallStatusGlyph(status: step.status)
                 }

@@ -18,19 +18,15 @@ struct BackgroundWorkButton: View {
         Button {
             isOpen.toggle()
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "progress.indicator")
-                    .font(.system(size: 11, weight: .medium))
-                    .symbolEffect(.variableColor.iterative, options: .repeat(.continuous), isActive: !reduceMotion)
-                Text(verbatim: "\(work.count)")
-                    .monospacedDigit()
-                    .contentTransition(.numericText(value: Double(work.count)))
-            }
+            // Shimmers like everything else that stands for work going on.
+            Text("\(work.count) running")
+                .monospacedDigit()
+                .contentTransition(reduceMotion ? .identity : .numericText(value: Double(work.count)))
+                .shimmer()
         }
         .buttonStyle(.plain)
         .barItem(isActive: isOpen)
         .font(.callout)
-        .foregroundStyle(.secondary)
         .help(Self.summary(of: work))
         .accessibilityLabel(Self.summary(of: work))
         .accessibilityIdentifier("chat.backgroundWork")
