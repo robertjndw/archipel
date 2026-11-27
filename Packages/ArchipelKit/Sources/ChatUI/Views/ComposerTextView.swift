@@ -71,7 +71,8 @@ struct ComposerTextView: NSViewRepresentable {
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = true
+        // Turned on by `updateHeight` once the text needs it.
+        scrollView.hasVerticalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
         scrollView.documentView = textView
@@ -154,7 +155,16 @@ struct ComposerTextView: NSViewRepresentable {
             layoutManager.ensureLayout(for: container)
             let line = ComposerTextView.lineHeight
             let used = layoutManager.usedRect(for: container).height.rounded(.up)
-            let height = min(max(used, line), line * CGFloat(parent.maximumLines))
+            let maximum = line * CGFloat(parent.maximumLines)
+            let height = min(max(used, line), maximum)
+            // Only show a scroller when the text really overflows. While the composer animates,
+            // the clip view snaps to pixel boundaries and the text view ends up a point or two
+            // taller than it, which is enough for an autohiding scroller to flash. With legacy
+            // scrollers (mouse attached) it also eats 17pt of width and the draft rewraps.
+            let overflows = used > maximum
+            if let scrollView = textView.enclosingScrollView, scrollView.hasVerticalScroller != overflows {
+                scrollView.hasVerticalScroller = overflows
+            }
             guard abs(parent.height - height) > 0.5 else { return }
             // This can run inside a SwiftUI update (`updateNSView`), where changing state is not
             // allowed; the next turn of the run loop is early enough for a height.
