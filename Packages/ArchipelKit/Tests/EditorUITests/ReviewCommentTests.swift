@@ -170,11 +170,12 @@ struct ReviewCommentPersistenceTests {
         let store = ReviewCommentStore(fileURL: file)
         store.add(comment("a.swift", 1), in: root)
         #expect(!FileManager.default.fileExists(atPath: file.path))
-        // Polled, since the write happens on a timer.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !FileManager.default.fileExists(atPath: file.path), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(50))
-        }
+        // Awaited, not polled against a deadline: a busy CI runner has kept the main actor from
+        // the save for longer than any deadline worth waiting out.
+        let save = try #require(store.saveTask)
+        await save.value
+        // Also keeps the store alive until here. The save only holds it weakly.
+        #expect(store.saveTask == nil)
         #expect(ReviewCommentStore(fileURL: file).comments(in: root).count == 1)
     }
 

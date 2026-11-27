@@ -47,7 +47,7 @@ public final class ReviewCommentStore {
     /// comment shows the review has moved on. Kept in memory only: a relaunch ends that window.
     private var sentByRoot: [String: [ReviewComment]] = [:]
     @ObservationIgnored private let fileURL: URL?
-    @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var saveTask: Task<Void, Never>?
     static let saveDelay = Duration.milliseconds(400)
 
     /// What is written to the file. Versioned so a later format can tell what it is reading.
