@@ -8,40 +8,121 @@ enum ChatRow: Identifiable, Equatable, Sendable {
     /// `endsTurn` marks the reply the turn closed with, which is the one worth a Copy button.
     case agent(ChatMessage, isStreaming: Bool, endsTurn: Bool)
     case thought(ChatMessage, isStreaming: Bool)
-    case tools(id: String, calls: [ToolCall])
+    /// `steps` holds what the subagents among `calls` did, by the call that started each.
+    case tools(id: String, calls: [ToolCall], steps: [String: [ToolCall]] = [:])
+    /// The line that stands for a finished stretch of tool calls and thoughts. While the fold
+    /// is open its steps follow as rows of their own.
+    case fold(ActivityFold)
 
     /// Stable while the row grows: a tool group is named after its first call.
     var id: String {
         switch self {
         case let .user(message), let .agent(message, _, _), let .thought(message, _): message.id
-        case let .tools(id, _): id
+        case let .tools(id, _, _): id
+        case let .fold(fold): fold.id
         }
     }
 
-    static func rows(for items: [ChatItem], isTurnRunning: Bool) -> [ChatRow] {
+    var fold: ActivityFold? {
+        if case let .fold(fold) = self { fold } else { nil }
+    }
+
+    /// `openFolds` names the folds the reader opened, whose steps are rows again.
+    static func rows(for items: [ChatItem], isTurnRunning: Bool, openFolds: Set<String> = []) -> [ChatRow] {
+        let (items, steps) = mainItems(of: items)
         var rows: [ChatRow] = []
         rows.reserveCapacity(items.count)
-        for (index, item) in items.enumerated() {
-            let isLast = index == items.count - 1
-            let isStreaming = isLast && isTurnRunning
+        // The activity a running turn ends on is still being added to, and is shown in full:
+        // it folds once the agent says something after it or the turn is over. Deciding by
+        // stretch instead would fold lines and unfold them again as calls start and finish.
+        let liveStart = isTurnRunning ? (items.lastIndex { $0.isSpoken }.map { $0 + 1 } ?? 0) : items.count
+        let streamingID = isTurnRunning ? items.last?.id : nil
+        /// The steps since the last row that could not go into a fold.
+        var stretch: [ChatItem] = []
+        /// Set after the steps of an open fold, so the call that follows starts a group of its
+        /// own instead of joining the fold's last one.
+        var lastGroupIsClosed = false
+
+        func appendActivity(_ item: ChatItem) {
             switch item {
-            case let .userMessage(message):
-                rows.append(.user(message))
-            case let .agentMessage(message):
-                guard !message.text.isEmpty || !message.attachments.isEmpty else { continue }
-                let nextIsPrompt = if !isLast, case .userMessage = items[index + 1] { true } else { false }
-                rows.append(.agent(message, isStreaming: isStreaming, endsTurn: nextIsPrompt || (isLast && !isTurnRunning)))
             case let .agentThought(message):
-                rows.append(.thought(message, isStreaming: isStreaming))
+                rows.append(.thought(message, isStreaming: item.id == streamingID))
             case let .toolCall(call):
-                if case let .tools(id, calls) = rows.last {
-                    rows[rows.count - 1] = .tools(id: id, calls: calls + [call])
-                } else {
-                    rows.append(.tools(id: item.id, calls: [call]))
+                var groupID = item.id
+                var calls: [ToolCall] = []
+                var groupSteps: [String: [ToolCall]] = [:]
+                if !lastGroupIsClosed, case let .tools(id, earlier, earlierSteps) = rows.last {
+                    (groupID, calls, groupSteps) = (id, earlier, earlierSteps)
+                    rows.removeLast()
                 }
+                if let own = steps[call.toolCallId] { groupSteps[call.toolCallId] = own }
+                rows.append(.tools(id: groupID, calls: calls + [call], steps: groupSteps))
+            case .userMessage, .agentMessage:
+                break
+            }
+            lastGroupIsClosed = false
+        }
+
+        func flushStretch() {
+            guard !stretch.isEmpty else { return }
+            defer { stretch = [] }
+            guard stretch.count >= ActivityFold.minimumSteps else {
+                stretch.forEach(appendActivity)
+                return
+            }
+            let fold = ActivityFold(items: stretch, isOpen: openFolds.contains(ActivityFold.id(firstItemID: stretch[0].id)))
+            rows.append(.fold(fold))
+            if fold.isOpen {
+                stretch.forEach(appendActivity)
+                lastGroupIsClosed = true
             }
         }
+
+        for (index, item) in items.enumerated() {
+            let isLast = index == items.count - 1
+            if index < liveStart, ActivityFold.canHold(item) {
+                stretch.append(item)
+                continue
+            }
+            switch item {
+            case let .userMessage(message):
+                flushStretch()
+                rows.append(.user(message))
+            case let .agentMessage(message):
+                // An empty message is not on the page, so it does not end a stretch either.
+                guard item.isSpoken else { continue }
+                flushStretch()
+                let nextIsPrompt = if !isLast, case .userMessage = items[index + 1] { true } else { false }
+                rows.append(.agent(message, isStreaming: isLast && isTurnRunning, endsTurn: nextIsPrompt || (isLast && !isTurnRunning)))
+            case .agentThought, .toolCall:
+                flushStretch()
+                appendActivity(item)
+            }
+        }
+        flushStretch()
         return rows
+    }
+
+    /// The transcript without what subagents did, which is shown with the call that started
+    /// each of them instead of in the conversation: a subagent in the background goes on for
+    /// minutes while the main agent talks, and its steps would land between unrelated replies.
+    static func mainItems(of items: [ChatItem]) -> (items: [ChatItem], steps: [String: [ToolCall]]) {
+        // Nearly every transcript has none, and is handed back as it came.
+        guard items.contains(where: { $0.subagentParent != nil }) else { return (items, [:]) }
+        let known = Set(items.compactMap { item in
+            if case let .toolCall(call) = item { call.toolCallId } else { nil }
+        })
+        var main: [ChatItem] = []
+        var steps: [String: [ToolCall]] = [:]
+        for item in items {
+            // A step whose subagent was never announced has nowhere else to go.
+            if case let .toolCall(call) = item, let parent = call.parentToolCallId, known.contains(parent) {
+                steps[parent, default: []].append(call)
+            } else {
+                main.append(item)
+            }
+        }
+        return (main, steps)
     }
 
     private enum Family {
@@ -52,7 +133,7 @@ enum ChatRow: Identifiable, Equatable, Sendable {
         switch self {
         case .user: .user
         case .agent: .agent
-        case .thought, .tools: .activity
+        case .thought, .tools, .fold: .activity
         }
     }
 
@@ -91,8 +172,11 @@ enum ChatRow: Identifiable, Equatable, Sendable {
         switch self {
         case let .user(message), let .agent(message, _, _), let .thought(message, _):
             message.id == itemID
-        case let .tools(_, calls):
+        case let .tools(_, calls, _):
             calls.contains { ChatItem.toolCall($0).id == itemID }
+        case .fold:
+            // Its steps are drawn by the rows after it, or not at all while it is closed.
+            false
         }
     }
 
@@ -102,11 +186,13 @@ enum ChatRow: Identifiable, Equatable, Sendable {
         switch self {
         case let .user(message), let .agent(message, _, _), let .thought(message, _):
             return message.id == match.itemID ? match.position : nil
-        case let .tools(_, calls):
+        case let .tools(_, calls, _):
             // The calls of a group are taken as equally tall, which is right until one is opened
             // and close enough after.
             guard let index = calls.firstIndex(where: { ChatItem.toolCall($0).id == match.itemID }) else { return nil }
             return (Double(index) + match.position) / Double(calls.count)
+        case .fold:
+            return nil
         }
     }
 
@@ -185,5 +271,20 @@ enum ScrollFollowing {
     static func offset(keepingTextAt offset: CGFloat, whenTopInsetChangesBy change: CGFloat) -> CGFloat? {
         guard offset > 0 else { return nil }
         return max(0, offset + change)
+    }
+}
+
+private extension ChatItem {
+    var subagentParent: String? {
+        if case let .toolCall(call) = self { call.parentToolCallId } else { nil }
+    }
+
+    /// A prompt or a reply with something in it: what ends a stretch of activity.
+    var isSpoken: Bool {
+        switch self {
+        case .userMessage: true
+        case let .agentMessage(message): !message.text.isEmpty || !message.attachments.isEmpty
+        case .agentThought, .toolCall: false
+        }
     }
 }

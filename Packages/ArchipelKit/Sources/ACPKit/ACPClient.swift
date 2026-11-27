@@ -17,11 +17,19 @@ public final class ACPClient: Sendable {
 
     /// Negotiates the protocol. Throws `ACPError.unsupportedProtocolVersion` when the agent
     /// answers with a version other than 1; the caller should then shut the agent down.
-    public func initialize(clientInfo: Implementation) async throws -> InitializeResponse {
+    ///
+    /// `rendersTerminalOutput` asks the agent to report a command's output and exit in a tool
+    /// call's `_meta` (`terminal_output`, `terminal_exit`), as Zed's clients do. Claude's agent
+    /// then also reports when a command it left running in the background exits, which it
+    /// otherwise never says.
+    public func initialize(clientInfo: Implementation, rendersTerminalOutput: Bool = false) async throws -> InitializeResponse {
         let params = InitializeRequest(
             protocolVersion: Self.protocolVersion,
             // Files and terminals stay with the agent. Terminal sign-in is something the app can run.
-            clientCapabilities: ClientCapabilities(fs: .init(), terminal: false, auth: .init(terminal: true)),
+            clientCapabilities: ClientCapabilities(
+                fs: .init(), terminal: false, auth: .init(terminal: true),
+                meta: rendersTerminalOutput ? ["terminal_output": true] : nil
+            ),
             clientInfo: clientInfo
         )
         let response = try await connection.request(ACPMethod.initialize, params: params, returning: InitializeResponse.self)

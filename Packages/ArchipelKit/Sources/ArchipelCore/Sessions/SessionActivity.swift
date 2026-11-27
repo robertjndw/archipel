@@ -202,6 +202,10 @@ public struct SessionActivity: Equatable, Sendable {
             awaitsTurnEnd = false
             lastMessage = Self.displayed(message) ?? lastMessage
             if let backgroundTasks { self.backgroundTasks = backgroundTasks }
+        case .backgroundTasksChanged(let count):
+            // Says nothing about the turn, so neither the status nor the unread mark moves.
+            backgroundTasks = count
+            return
         case .turnInterrupted:
             status = .finished
             completedTurn = false

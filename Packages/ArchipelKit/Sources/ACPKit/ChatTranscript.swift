@@ -152,12 +152,14 @@ public struct ChatTranscript: Sendable, Equatable {
                     var replacement = call
                     if replacement.terminalOutput == nil { replacement.terminalOutput = existing.terminalOutput }
                     if replacement.terminalExitCode == nil { replacement.terminalExitCode = existing.terminalExitCode }
+                    replacement.keepBackgroundState(of: existing)
                     existing = replacement
                 }
             } else {
                 appendItem(.toolCall(call))
                 toolCallIndices[call.toolCallId] = items.count - 1
             }
+            noteSubagentHandback(by: call.toolCallId)
         case let .toolCallUpdate(update):
             if let index = toolCallIndices[update.toolCallId] {
                 items[index].modifyToolCall { $0.merge(update) }
@@ -166,6 +168,7 @@ public struct ChatTranscript: Sendable, Equatable {
                 appendItem(.toolCall(update.asToolCall))
                 toolCallIndices[update.toolCallId] = items.count - 1
             }
+            noteSubagentHandback(by: update.toolCallId)
         case let .plan(entries):
             plan = entries
         case let .availableCommands(commands):
@@ -243,6 +246,39 @@ public struct ChatTranscript: Sendable, Equatable {
         isReplaying = false
         startsNewMessage = true
         markUnfinishedToolCallsCancelled()
+        endBackgroundWork()
+    }
+
+    // MARK: Background work
+
+    /// The calls whose command or subagent is still running: shells left in the background, and
+    /// subagents, whether the turn waits for them or not. In the order they started.
+    public var backgroundWork: [ToolCall] {
+        items.compactMap { item in
+            guard case let .toolCall(call) = item else { return nil }
+            return call.isRunningInBackground || (call.startsSubagent && !call.status.isFinished) ? call : nil
+        }
+    }
+
+    /// Takes everything left in the background as over. Nothing outlives the agent's process,
+    /// and a replayed history only tells of work that was started, never of how it ended.
+    public mutating func endBackgroundWork() {
+        for index in toolCallIndices.values {
+            items[index].modifyToolCall { call in
+                if call.isRunningInBackground { call.backgroundWorkEnded = true }
+            }
+        }
+    }
+
+    /// A background subagent's last act is to hand its report back, which is the one sign of
+    /// its end the agent gives. A subagent that is stopped or fails says nothing, and counts as
+    /// running until the agent's process ends.
+    private mutating func noteSubagentHandback(by id: String) {
+        guard let index = toolCallIndices[id], case let .toolCall(call) = items[index],
+              call.toolName == "SubagentHandback", call.status.isFinished,
+              let parent = call.parentToolCallId, let parentIndex = toolCallIndices[parent]
+        else { return }
+        items[parentIndex].modifyToolCall { $0.backgroundWorkEnded = true }
     }
 
     /// After a cancel, calls that never finished will not finish; show them as cancelled.

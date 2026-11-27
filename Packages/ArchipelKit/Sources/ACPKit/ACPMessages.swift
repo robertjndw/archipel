@@ -63,11 +63,19 @@ public struct ClientCapabilities: Sendable, Hashable, Codable {
     public var fs: FileSystem
     public var terminal: Bool
     public var auth: Auth
+    /// Extensions outside the protocol, which an agent that knows them acts on.
+    public var meta: JSONValue?
 
-    public init(fs: FileSystem = FileSystem(), terminal: Bool = false, auth: Auth = Auth()) {
+    public init(fs: FileSystem = FileSystem(), terminal: Bool = false, auth: Auth = Auth(), meta: JSONValue? = nil) {
         self.fs = fs
         self.terminal = terminal
         self.auth = auth
+        self.meta = meta
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case fs, terminal, auth
+        case meta = "_meta"
     }
 }
 

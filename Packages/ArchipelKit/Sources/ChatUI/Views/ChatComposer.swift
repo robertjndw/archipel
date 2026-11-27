@@ -128,6 +128,11 @@ struct ChatComposer: View {
                 // for an empty draft.
                 .environment(\.composerHasRoomForTips, session.draft.isEmpty && session.permissionRequests.isEmpty)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                let backgroundWork = session.transcript.backgroundWork
+                if !backgroundWork.isEmpty {
+                    BackgroundWorkButton(work: backgroundWork, steps: ChatRow.mainItems(of: session.transcript.items).steps)
+                        .transition(.opacity)
+                }
                 if let usage = session.transcript.usage, usage.size > 0 {
                     ContextUsageRing(usage: usage)
                 }

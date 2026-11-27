@@ -89,6 +89,8 @@ extension ChatSession {
         /// the session walks the folder itself. An owner that knows git is missing should throw
         /// without running it, or every call opens the system's install dialog.
         public var listFiles: @Sendable (_ folder: URL) async throws -> [String] = WorktreeFileIndex.gitFiles
+        /// See `ACPClient.initialize(clientInfo:rendersTerminalOutput:)`.
+        public var rendersTerminalOutput = false
 
         public init(
             agentName: String,
@@ -122,6 +124,7 @@ extension ChatSession {
                 clientInfo: clientInfo,
                 resolveLaunch: { progress in try await launcher.resolve(progress: progress) }
             )
+            rendersTerminalOutput = launcher.support.rendersTerminalOutput
         }
     }
 }

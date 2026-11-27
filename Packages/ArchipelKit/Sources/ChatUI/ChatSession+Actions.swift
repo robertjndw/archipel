@@ -205,6 +205,7 @@ extension ChatSession {
         self.client = nil
         self.connection = nil
         transcript.endTurn(.cancelled)
+        transcript.endBackgroundWork()
         endTurnState()
         phase = .ended(ChatEnding(exitCode: nil, isClean: true, message: "\(agentName) was stopped."))
         emit(.agent(.processExited(code: Self.exitCode(reportedFor: .closedByClient))))
