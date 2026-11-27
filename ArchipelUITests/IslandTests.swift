@@ -34,9 +34,15 @@ final class IslandTests: ArchipelUITestCase {
         try launch(with: islandWorkspace([("Personal", long), ("Work", [other]), ("Play", [third])]))
         assertExists(sidebarProject("repo01"), "The first island's projects should be listed.")
 
-        mainWindow.outlines["sidebar"].scroll(byDeltaX: 0, deltaY: -2000)
+        // Scrolled until it moves. On a slow CI runner a single scroll right after launch was
+        // sometimes lost and the list stayed at the top.
+        let sidebar = mainWindow.outlines["sidebar"]
+        waitUntil("the first project is scrolled out of sight") {
+            guard sidebarProject("repo01").isHittable else { return true }
+            sidebar.scroll(byDeltaX: 0, deltaY: -2000)
+            return false
+        }
         assertExists(sidebarProject("repo24"), "Scrolling should reach the last project.")
-        waitUntil("the first project is scrolled out of sight") { !sidebarProject("repo01").isHittable }
 
         chooseMenu("Islands", "Work")
         assertExists(sidebarProject("other"), "The second island's project should be listed.")
