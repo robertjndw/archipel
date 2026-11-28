@@ -16,11 +16,11 @@
 		AA0000000000000000000107 /* GitKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000204 /* GitKit */; };
 		AA0000000000000000000108 /* InspectorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000205 /* InspectorUI */; };
 		AA0000000000000000000109 /* EditorUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000206 /* EditorUI */; };
-		AA000000000000000000010D /* ACPKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000209 /* ACPKit */; };
-		AA000000000000000000010E /* ChatUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000020A /* ChatUI */; };
 		AA000000000000000000010A /* TerminalKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000203 /* TerminalKit */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AA000000000000000000010B /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000207 /* Sparkle */; };
 		AA000000000000000000010C /* ArchipelCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000208 /* ArchipelCore */; };
+		AA000000000000000000010D /* ACPKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000209 /* ACPKit */; };
+		AA000000000000000000010E /* ChatUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000020A /* ChatUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -647,14 +647,6 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = EditorUI;
 		};
-		AA0000000000000000000209 /* ACPKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = ACPKit;
-		};
-		AA000000000000000000020A /* ChatUI */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = ChatUI;
-		};
 		AA0000000000000000000207 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = AA0000000000000000000E03 /* XCRemoteSwiftPackageReference "Sparkle" */;
@@ -663,6 +655,14 @@
 		AA0000000000000000000208 /* ArchipelCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ArchipelCore;
+		};
+		AA0000000000000000000209 /* ACPKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ACPKit;
+		};
+		AA000000000000000000020A /* ChatUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ChatUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
