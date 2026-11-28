@@ -11,12 +11,19 @@ struct RemoveWorktreeSheet: View {
     let worktree: Worktree
 
     @State private var deleteFolder = false
-    @State private var deleteBranch = false
+    @State private var deleteBranch: Bool
     /// Stands in for the count the store has, in previews of folders that do not exist.
     @State private var previewChangeCount: Int?
     @State private var isWorking = false
     @State private var failure: String?
     @State private var outcome: AppModel.BranchRemoval?
+
+    init(worktree: Worktree) {
+        self.worktree = worktree
+        // Nobody picked a generated name, so the branch is rarely worth keeping without its worktree.
+        // It is still deleted with `-d`, which keeps a branch that has unmerged commits.
+        _deleteBranch = State(initialValue: worktree.isOnPlaceholderBranch)
+    }
 
     private var isMissing: Bool { model.missingWorktrees.contains(worktree.id) }
     /// A missing folder that may only be out of reach, on a volume that is not mounted. Looked up

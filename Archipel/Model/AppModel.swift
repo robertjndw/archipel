@@ -110,6 +110,11 @@ final class AppModel {
     /// The worktree the Switch Branch sheet is open for. Opened from the sidebar, the inspector's
     /// branch name, the Project menu and the palette.
     var switchBranchWorktreeID: Worktree.ID?
+    /// The Rename Branch sheet, also opened by Publish for a branch that still has its generated name.
+    var branchNameRequest: BranchNameRequest?
+    /// Projects with a New Worktree still being created. Observed so the command stays disabled and
+    /// the project header shows progress until git is done.
+    var placeholderCreations: Set<Project.ID> = []
     /// Set by Commit… to put the cursor in the inspector's commit message field; the inspector clears it.
     var focusCommitMessageRequest = false
     /// What the menu bar and the palette asked to rename, remove or create. The sidebar and the tab
@@ -987,6 +992,64 @@ final class AppModel {
         return try await createWorktree(in: project, branch: tracking.branch, from: .remoteBranch(tracking.remote))
     }
 
+    /// A worktree on a branch with a generated two-word name, for starting work before knowing what
+    /// to call it. The folder is the bare words (`quiet-harbor`) and the branch gets the configured
+    /// prefix. Publish asks for the real name while the branch still has this one.
+    @discardableResult
+    func createPlaceholderWorktree(in project: Project, fetchDeadline: Duration? = nil) async throws -> WorktreeCreation {
+        try requireGit()
+        let project = workspace.project(id: project.id) ?? project
+        let taken = try await takenBranchNames(in: project)
+        // git keeps a worktree registered after its folder is deleted by hand, and adding another
+        // one at that path fails, so registered paths count as taken alongside folders on disk.
+        var registered = Set(try await git.worktrees(of: project.folderURL).map { Project.worktreeKey($0.path) })
+        registered.formUnion(project.worktrees.map { Project.worktreeKey($0.path) })
+        let parent = worktreesFolder(for: project)
+        var generator = SystemRandomNumberGenerator()
+        let words = PlaceholderName.unused(using: &generator) { words in
+            guard let branch = newBranchName(fromTyped: words), !GitClient.branchNameConflicts(branch, with: taken) else { return true }
+            let folder = parent.appending(path: words, directoryHint: .isDirectory)
+            return registered.contains(Project.worktreeKey(folder)) || FileManager.default.fileExists(atPath: folder.path(percentEncoded: false))
+        }
+        guard let branch = newBranchName(fromTyped: words) else { throw GitError(message: "No name could be generated for the branch.") }
+        return try await createWorktree(in: project, branch: branch, from: .newBranch, folderName: words, placeholder: true, fetchDeadline: fetchDeadline)
+    }
+
+    /// New Worktree from the menu bar, the palette and the project header: no sheet, so anything
+    /// that goes wrong is reported through `problem`. A second one for the same project is ignored
+    /// until the first is done, since the two would race for the same free name.
+    func startPlaceholderWorktree(in project: Project) {
+        guard !placeholderCreations.contains(project.id) else { return }
+        placeholderCreations.insert(project.id)
+        Task {
+            defer { placeholderCreations.remove(project.id) }
+            do {
+                // Without a sheet there is nobody to tell that the base could not be fetched, and
+                // nothing to press Cancel on, so the fetch gets the switch's deadline and a stale
+                // base is accepted silently.
+                try await createPlaceholderWorktree(in: project, fetchDeadline: Self.switchFetchDeadline)
+            } catch is CancellationError {
+                // The project was removed while git worked.
+            } catch {
+                problem = "The worktree could not be created. \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Every name a new branch could collide with: local branches, and remote ones without their
+    /// remote, so a generated or typed name never shadows a branch someone already pushed.
+    func takenBranchNames(in project: Project) async throws -> Set<String> {
+        try requireGit()
+        var names = Set(try await git.localBranches(in: project.folderURL))
+        // Longest remote first: a remote's own name may contain a slash.
+        let remotes = await git.remoteNames(in: project.folderURL).sorted { $0.count > $1.count }
+        for branch in try await git.remoteBranches(in: project.folderURL) {
+            guard let remote = remotes.first(where: { branch.hasPrefix($0 + "/") }) else { continue }
+            names.insert(String(branch.dropFirst(remote.count + 1)))
+        }
+        return names
+    }
+
     private enum WorktreeSource {
         /// `releasingLeftover` is the user's word that a missing worktree holding the branch was deleted.
         case existingBranch(releasingLeftover: Bool)
@@ -996,11 +1059,22 @@ final class AppModel {
         case remoteBranch(String)
     }
 
-    private func createWorktree(in project: Project, branch: String, from source: WorktreeSource) async throws -> WorktreeCreation {
+    /// `folderName` overrides the folder `worktreePath(for:branch:)` would derive from the branch,
+    /// which slugs the whole name, prefix included. `placeholder` marks the branch as one the app
+    /// made up, for Publish to ask for a real name first. `fetchDeadline` bounds the base fetch.
+    private func createWorktree(
+        in project: Project,
+        branch: String,
+        from source: WorktreeSource,
+        folderName: String? = nil,
+        placeholder: Bool = false,
+        fetchDeadline: Duration? = nil
+    ) async throws -> WorktreeCreation {
         try requireGit()
         // The sheet may have been open while the settings changed.
         let project = workspace.project(id: project.id) ?? project
-        let path = worktreePath(for: project, branch: branch)
+        let path = folderName.map { worktreesFolder(for: project).appending(path: $0, directoryHint: .isDirectory) }
+            ?? worktreePath(for: project, branch: branch)
         // git creates the new branch before it notices the folder is taken, leaving the branch behind
         // after a failed add, so the folder is checked first.
         if FileManager.default.fileExists(atPath: path.path) {
@@ -1012,7 +1086,7 @@ final class AppModel {
             // A worktree whose folder was deleted by hand still holds its branch as far as git is concerned.
             try await releasePrunedBranch(branch, in: project, confirmed: releasingLeftover)
         case .newBranch:
-            start = await fetchedWorktreeBase(for: project)
+            start = await fetchedWorktreeBase(for: project, deadline: fetchDeadline)
         case .remoteBranch(let remote):
             // What is known of a remote branch is as old as the last fetch, and the worktree should
             // start where the branch is now.
@@ -1032,7 +1106,7 @@ final class AppModel {
         // The project can have been removed while git worked. The folder is then left as it is,
         // like any other worktree of a repository that is not in the sidebar.
         guard workspace.project(id: project.id) != nil else { throw CancellationError() }
-        let worktree = Worktree(path: path, branch: branch)
+        let worktree = Worktree(path: path, branch: branch, placeholderBranch: placeholder ? branch : nil)
         changingSelection { _ = $0.addWorktree(worktree, to: project.id) }
         if workspace.project(id: project.id)?.scripts.setupCommand != nil {
             startScript(.setup, in: worktree.id)
@@ -1060,15 +1134,19 @@ final class AppModel {
     /// `worktreeBase`, fetched first when it is a remote-tracking branch. A failed fetch (offline,
     /// expired credentials) does not stop the worktree, since a slightly stale base is better than
     /// none, but it is handed back so the user can be told.
-    private func fetchedWorktreeBase(for project: Project) async -> (name: String, fetchFailure: String?)? {
+    private func fetchedWorktreeBase(for project: Project, deadline: Duration? = nil) async -> (name: String, fetchFailure: String?)? {
         guard let base = await worktreeBase(for: project) else { return nil }
         guard let tracking = await git.remoteTrackingBranch(base, in: project.folderURL) else { return (base, nil) }
-        return (base, await fetchFailure(of: tracking, in: project))
+        return (base, await fetchFailure(of: tracking, in: project, deadline: deadline))
     }
 
-    private func fetchFailure(of tracking: (remote: String, branch: String), in project: Project) async -> String? {
+    private func fetchFailure(of tracking: (remote: String, branch: String), in project: Project, deadline: Duration? = nil) async -> String? {
         do {
-            try await git.fetch(branch: tracking.branch, from: tracking.remote, in: project.folderURL)
+            if let deadline {
+                try await git.fetch(branch: tracking.branch, from: tracking.remote, in: project.folderURL, timeout: deadline)
+            } else {
+                try await git.fetch(branch: tracking.branch, from: tracking.remote, in: project.folderURL)
+            }
             return nil
         } catch {
             return error.localizedDescription

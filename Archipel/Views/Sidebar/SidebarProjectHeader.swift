@@ -83,6 +83,10 @@ struct SidebarProjectHeader: View {
         model.isGitAvailable && !model.isPrimaryCheckoutMissing(of: project)
     }
 
+    private var isCreatingWorktree: Bool {
+        model.placeholderCreations.contains(project.id)
+    }
+
     private var removalMessage: String {
         model.removalMessage(for: project)
     }
@@ -98,7 +102,15 @@ struct SidebarProjectHeader: View {
     private func trailing(summary: AttentionSummary) -> some View {
         ZStack(alignment: .trailing) {
             collapsedSignal(summary: summary)
-                .opacity(isHovered ? 0 : 1)
+                .opacity(isHovered || isCreatingWorktree ? 0 : 1)
+            // New Worktree has no sheet to show its progress, and git can take a few seconds to
+            // fetch the base, so the slot the add button lives in says that it is coming.
+            if isCreatingWorktree {
+                ProgressView()
+                    .controlSize(.mini)
+                    .padding(.trailing, 4)
+                    .help("Creating a worktree in \(project.name)")
+            }
             Button("Add Worktree", systemImage: "plus") { model.addWorktreeProjectID = project.id }
                 // Also while hidden: full keyboard access would otherwise stop on a button nobody can see.
                 .disabled(!canAddWorktree || !isHovered)
@@ -110,8 +122,8 @@ struct SidebarProjectHeader: View {
                 .foregroundStyle(.secondary)
                 .padding(.trailing, 4)
                 .help("Add a worktree to \(project.name)")
-                .opacity(isHovered ? 1 : 0)
-                .allowsHitTesting(isHovered)
+                .opacity(isHovered && !isCreatingWorktree ? 1 : 0)
+                .allowsHitTesting(isHovered && !isCreatingWorktree)
                 // Hidden from accessibility even while hovered. Otherwise SwiftUI merges its name
                 // into the title's label ("fixture, Add Worktree"). The header's action covers it.
                 .accessibilityHidden(true)
@@ -147,6 +159,8 @@ struct SidebarProjectHeader: View {
 
     @ViewBuilder
     private var menu: some View {
+        Button("New Worktree", systemImage: "plus.square.dashed") { model.startPlaceholderWorktree(in: project) }
+            .disabled(!canAddWorktree || isCreatingWorktree)
         Button("Add Worktree…", systemImage: "plus") { model.addWorktreeProjectID = project.id }
             .disabled(!canAddWorktree)
         if !project.dismissedWorktreePaths.isEmpty {

@@ -33,7 +33,10 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
   those keys first; <kbd>Ctrl</kbd><kbd>⌘</kbd><kbd>]</kbd> and <kbd>[</kbd> still work.
 - Add a worktree from one search field: pick an existing local or remote branch,
   or type a name to create a new one. Worktrees you made with `git worktree` yourself are picked
-  up too.
+  up too. To start before you know what to call the branch, press Return on the empty field
+  or use New Worktree (<kbd>⌥</kbd><kbd>⌘</kbd><kbd>N</kbd>). The branch gets a generated
+  two-word name like `quiet-harbor`, publishing asks for the real name first, and Rename Branch
+  works until the branch is published.
 - Switch the branch a worktree has checked out with <kbd>⇧</kbd><kbd>⌘</kbd><kbd>B</kbd>,
   from its context menu or by clicking the branch name in the Changes panel. Pick a
   local or remote branch, or type a name to create one. Uncommitted changes come
@@ -91,6 +94,7 @@ sessions, and the sidebar shows which agents are working, waiting for you or don
 | --- | --- |
 | Go to island, worktree, session or command | <kbd>⌘</kbd><kbd>K</kbd> |
 | Open file quickly | <kbd>⌘</kbd><kbd>P</kbd> |
+| New worktree without choosing a branch | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>N</kbd> |
 | New session with your default agent | <kbd>⌘</kbd><kbd>T</kbd> |
 | New session with the other agents | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>T</kbd>, <kbd>⇧</kbd><kbd>⌘</kbd><kbd>T</kbd> |
 | Switch to recent tab | <kbd>Ctrl</kbd><kbd>Tab</kbd> |

@@ -18,18 +18,24 @@ public struct InspectorView: View {
     /// Setting `focusCommitMessage` puts the cursor in the commit message field once the Changes tab
     /// shows it; the inspector sets it back to false.
     /// With `onSwitchBranch`, the branch name in the Changes tab becomes a button that calls it.
+    /// With `onPublishBranch`, publishing a branch that has no upstream calls it instead of pushing,
+    /// for the host to ask for a name first and push itself.
     public init(
         git: GitWorktreeState?,
         focusCommitMessage: Binding<Bool> = .constant(false),
         onOpenFile: @escaping (_ url: URL, _ preview: Bool) -> Void,
         onOpenDiff: @escaping (_ path: String, _ staged: Bool, _ preview: Bool) -> Void,
         onSwitchBranch: (() -> Void)? = nil,
+        onPublishBranch: (() -> Void)? = nil,
         onTrash: @escaping (_ urls: [URL]) -> Void = { _ in },
         onProblem: @escaping (_ message: String) -> Void = { _ in }
     ) {
         self.git = git
         _focusCommitMessage = focusCommitMessage
-        actions = InspectorActions(openFile: onOpenFile, openDiff: onOpenDiff, switchBranch: onSwitchBranch, didTrash: onTrash, reportProblem: onProblem)
+        actions = InspectorActions(
+            openFile: onOpenFile, openDiff: onOpenDiff, switchBranch: onSwitchBranch, publishBranch: onPublishBranch,
+            didTrash: onTrash, reportProblem: onProblem
+        )
     }
 
     public var body: some View {
@@ -219,6 +225,7 @@ struct InspectorActions {
     var openFile: (_ url: URL, _ preview: Bool) -> Void
     var openDiff: (_ path: String, _ staged: Bool, _ preview: Bool) -> Void
     var switchBranch: (() -> Void)? = nil
+    var publishBranch: (() -> Void)? = nil
     /// Lets the app close tabs for whatever was just trashed.
     var didTrash: (_ urls: [URL]) -> Void = { _ in }
     var reportProblem: (_ message: String) -> Void = { _ in }

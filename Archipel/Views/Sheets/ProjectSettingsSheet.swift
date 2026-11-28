@@ -297,7 +297,7 @@ struct ProjectSettingsSheet: View {
             Scripts run with zsh in the worktree folder, as their own session tab. These variables are set:
             ARCHIPEL_WORKTREE_PATH: the worktree folder
             ARCHIPEL_ROOT_PATH: the project's main checkout
-            ARCHIPEL_BRANCH: the worktree's branch, when it has one
+            ARCHIPEL_BRANCH: the worktree's branch when the script started, if it had one
             """)
             .font(.callout)
             .foregroundStyle(.secondary)

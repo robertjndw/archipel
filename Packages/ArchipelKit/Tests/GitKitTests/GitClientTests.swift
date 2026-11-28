@@ -740,6 +740,40 @@ final class GitClientTests {
         #expect(try await git.localBranches(in: repo) == ["ahead", "main"])
     }
 
+    @Test func renameBranchChangesWhatTheLinkedWorktreeReports() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        let wt = base.appending(path: "wt-rename")
+        try await git.addWorktree(repository: repo, path: wt, branch: "quiet-harbor", createBranch: true)
+
+        try await git.renameBranch("quiet-harbor", to: "feature/real", in: wt)
+
+        #expect(await git.currentBranch(in: wt) == "feature/real")
+        #expect(try await git.localBranches(in: repo) == ["feature/real", "main"])
+    }
+
+    @Test func renameBranchToAnExistingNameThrowsAndKeepsBoth() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        try sh("branch", "taken")
+        let wt = base.appending(path: "wt-clash")
+        try await git.addWorktree(repository: repo, path: wt, branch: "quiet-harbor", createBranch: true)
+
+        await #expect(throws: GitError.self) {
+            try await self.git.renameBranch("quiet-harbor", to: "taken", in: wt)
+        }
+        #expect(await git.currentBranch(in: wt) == "quiet-harbor")
+        #expect(try await git.localBranches(in: repo) == ["main", "quiet-harbor", "taken"])
+    }
+
+    @Test func worktreeCreatedFromABaseHasNoUpstream() async throws {
+        try write("a.txt", "a\n")
+        try commitAll()
+        let wt = base.appending(path: "wt-base")
+        try await git.addWorktree(repository: repo, path: wt, branch: "quiet-harbor", createBranch: true, base: "main")
+        #expect(try await git.summary(in: wt).upstream == nil)
+    }
+
     @Test func deleteBranchThrowsForUnknownBranch() async throws {
         try write("a.txt", "a\n")
         try commitAll()

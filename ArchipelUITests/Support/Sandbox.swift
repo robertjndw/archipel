@@ -144,11 +144,13 @@ struct FixtureRepository {
     }
 
     /// Creates a branch with a linked worktree the way `git worktree add` on the command line would,
-    /// for tests that start with one already in the sidebar.
-    func addWorktree(branch: String, in folder: URL) throws -> Worktree {
+    /// for tests that start with one already in the sidebar. With `placeholder` the app is told the
+    /// name was generated, as for a worktree it started without a branch, which makes the names
+    /// of these tests deterministic.
+    func addWorktree(branch: String, in folder: URL, placeholder: Bool = false) throws -> Worktree {
         let path = folder.appending(path: branch, directoryHint: .isDirectory)
         try git("worktree", "add", "-b", branch, path.path)
-        return Worktree(path: path, branch: branch)
+        return Worktree(path: path, branch: branch, placeholderBranch: placeholder ? branch : nil)
     }
 
     var currentBranch: String {

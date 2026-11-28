@@ -11,8 +11,8 @@ struct WorktreeSheet: View {
 
     @State private var query = ""
     @State private var filter = Filter.all
-    /// -1 while the field is empty, so a stray Return on an untouched sheet adds nothing.
-    @State private var selection = -1
+    /// See `initialSelection(query:filter:)`.
+    @State private var selection = WorktreeSheet.initialSelection(query: "", filter: .all)
     @State private var createNameInvalid = false
     @FocusState private var queryFocused: Bool
     @State private var branches: [String] = []
@@ -66,6 +66,8 @@ struct WorktreeSheet: View {
                     if let failure = failure ?? loadFailure {
                         Label(failure, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
+                    } else if showsPlaceholder {
+                        Text("Press Return to start without a branch, or type to find a branch or name a new one.")
                     } else {
                         Text("Find a branch or worktree, or type a name to create a new branch. Use ↑ and ↓ to choose.")
                     }
@@ -135,7 +137,7 @@ struct WorktreeSheet: View {
                 .onKeyPress(.downArrow) { moveSelection(1, count: rows.count); return .handled }
                 .onKeyPress(.upArrow) { moveSelection(-1, count: rows.count); return .handled }
                 .onChange(of: query) {
-                    selection = query.isEmpty ? -1 : 0
+                    selection = Self.initialSelection(query: query, filter: filter)
                     failure = nil
                 }
                 .task(id: createName) { if asksGit { await checkCreateName() } }
@@ -176,7 +178,7 @@ struct WorktreeSheet: View {
         .help("Show only some kinds of results")
         .accessibilityLabel("Filter: \(filter.title)")
         .onChange(of: filter) {
-            selection = query.isEmpty ? -1 : 0
+            selection = Self.initialSelection(query: query, filter: filter)
             queryFocused = true
         }
     }
@@ -201,6 +203,7 @@ struct WorktreeSheet: View {
                         }
                         .onTapGesture { selection = index }
                         .accessibilityAddTraits(index == selection ? [.isButton, .isSelected] : .isButton)
+                        .accessibilityIdentifier(row.kind == .placeholder ? "addWorktree.startWithoutBranch" : "")
                         .help(row.help ?? "")
                     }
                 }
@@ -239,9 +242,21 @@ struct WorktreeSheet: View {
         return rows.indices.contains(selection) ? rows[selection] : nil
     }
 
+    /// Where the selection starts for the query. While the field is empty that is the Start Without
+    /// a Branch row when the filter shows it, and otherwise nothing, so a stray Return on an
+    /// untouched sheet adds nothing. A typed query selects its best match.
+    private static func initialSelection(query: String, filter: Filter) -> Int {
+        guard query.isEmpty else { return 0 }
+        return filter.includes(.create) ? 0 : -1
+    }
+
+    private var showsPlaceholder: Bool {
+        isRepository && query.isEmpty && filter.includes(.create)
+    }
+
     private func actionTitle(for selected: Suggestion?) -> String {
         switch selected?.kind {
-        case .create: "Create"
+        case .create, .placeholder: "Create"
         case .open: "Open"
         default: "Add"
         }
@@ -251,6 +266,7 @@ struct WorktreeSheet: View {
         switch selected?.kind {
         case nil: false
         case .create: !createNameInvalid && loadFailure == nil
+        case .placeholder: isRepository && loadFailure == nil
         default: true
         }
     }
@@ -313,6 +329,16 @@ struct WorktreeSheet: View {
             var row = ranked.item
             row.matches = ranked.match.positions
             return row
+        }
+        // Needs nothing from the branch list, so it is there before the list has loaded and Return
+        // works the moment the sheet is up.
+        if showsPlaceholder {
+            rows.insert(Suggestion(
+                kind: .placeholder,
+                title: "Start Without a Branch",
+                detail: "from \(baseBranch)",
+                help: "Creates a branch with a generated name from \(baseBranch). You choose the real name when you publish it."
+            ), at: 0)
         }
         guard filter.includes(.create), let name = createName else { return rows }
 
@@ -399,7 +425,7 @@ struct WorktreeSheet: View {
 
     private func add(_ suggestion: Suggestion, releasingLeftover: Bool = false) async {
         workingLabel = switch suggestion.kind {
-        case .create, .branch, .remoteBranch: "Creating Worktree…"
+        case .create, .placeholder, .branch, .remoteBranch: "Creating Worktree…"
         case .worktree, .open: "Adding Worktree…"
         }
         defer { isWorking = false }
@@ -408,6 +434,10 @@ struct WorktreeSheet: View {
             switch suggestion.kind {
             case .create:
                 creation = try await model.createWorktree(in: project, branch: suggestion.title, createBranch: true)
+            case .placeholder:
+                // No deadline, unlike New Worktree: the sheet has a spinner and Cancel, and tells
+                // the user when the base could not be fetched.
+                creation = try await model.createPlaceholderWorktree(in: project)
             case .branch:
                 creation = try await model.createWorktree(in: project, branch: suggestion.title, createBranch: false, releasingLeftover: releasingLeftover)
             case .remoteBranch:
@@ -501,6 +531,8 @@ extension WorktreeSheet {
     struct Suggestion: Identifiable, Equatable {
         enum Kind: Equatable {
             case create
+            /// A branch with a generated name, to be named for real when it is published.
+            case placeholder
             case branch
             /// Only on a remote so far; the title is `origin/name`.
             case remoteBranch
@@ -520,6 +552,7 @@ extension WorktreeSheet {
         var id: String {
             switch kind {
             case .create: "create"
+            case .placeholder: "placeholder"
             case .branch: "branch:\(title)"
             case .remoteBranch: "remote:\(title)"
             case .worktree(let path): "worktree:\(path.path)"
@@ -530,6 +563,7 @@ extension WorktreeSheet {
         var symbol: String {
             switch kind {
             case .create: "plus.circle"
+            case .placeholder: "plus.square.dashed"
             case .branch: "arrow.triangle.branch"
             case .remoteBranch: "cloud"
             case .worktree: "folder"
@@ -560,6 +594,9 @@ private struct SuggestionRow: View {
         if suggestion.kind == .create {
             return Text("Create Branch “\(suggestion.title)”")
         }
+        if suggestion.kind == .placeholder {
+            return Text(suggestion.title)
+        }
         return .highlighting(suggestion.title, matches: suggestion.matches)
     }
 }
@@ -583,7 +620,7 @@ extension WorktreeSheet {
         asksGit = false
         _query = State(initialValue: query)
         _filter = State(initialValue: filter)
-        _selection = State(initialValue: query.isEmpty ? -1 : 0)
+        _selection = State(initialValue: Self.initialSelection(query: query, filter: filter))
         _createNameInvalid = State(initialValue: createNameInvalid)
         _branches = State(initialValue: branches)
         _allBranches = State(initialValue: Set(branches))

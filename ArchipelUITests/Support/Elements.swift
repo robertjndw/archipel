@@ -200,6 +200,28 @@ extension ArchipelUITestCase {
     /// The search field of the Add Worktree and Switch Branch sheets.
     var branchField: XCUIElement { sheet.textFields["Branch"] }
 
+    /// The first row of the Add Worktree sheet while its field is empty.
+    var startWithoutBranchRow: XCUIElement {
+        sheet.descendants(matching: .any).matching(identifier: "addWorktree.startWithoutBranch").element(boundBy: 0)
+    }
+
+    /// The Rename Branch and Publish Branch sheet.
+    var branchNameField: XCUIElement {
+        sheet.descendants(matching: .any).matching(identifier: "branchName.field").element(boundBy: 0)
+    }
+
+    var branchNameConfirm: XCUIElement {
+        sheet.descendants(matching: .any).matching(identifier: "branchName.confirm").element(boundBy: 0)
+    }
+
+    var branchNameCancel: XCUIElement {
+        sheet.descendants(matching: .any).matching(identifier: "branchName.cancel").element(boundBy: 0)
+    }
+
+    var branchNameKeepGenerated: XCUIElement {
+        sheet.descendants(matching: .any).matching(identifier: "branchName.keepGenerated").element(boundBy: 0)
+    }
+
     /// Replaces what a focused text field holds.
     func replaceText(with text: String) {
         app.typeKey("a", modifierFlags: .command)

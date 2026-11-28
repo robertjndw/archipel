@@ -33,6 +33,15 @@ extension GitSyncState {
 
     var pushTitle: String { pushTitle(from: .changesTab) }
 
+    /// Whether Publish goes to the host's name sheet instead of pushing. The host offers that only
+    /// while the branch has a name it made up, and a branch with an upstream is past naming.
+    func asksForBranchName(offered: Bool) -> Bool { offered && !isPublished }
+
+    /// With an ellipsis while Publish opens the name sheet first.
+    func pushTitle(asksForBranchName: Bool) -> String {
+        asksForBranchName ? String(localized: "Publish Branch…") : pushTitle
+    }
+
     var help: LocalizedStringKey {
         if isDetached { return "HEAD is detached. Check out a branch to push." }
         if !isPublished {
@@ -168,6 +177,8 @@ struct CommitArea: View {
     @Bindable var model: ChangesModel
     /// Set by the host (the Commit… command) to put the cursor in the message field.
     @Binding var focusRequest: Bool
+    /// Called instead of publishing when the host wants the branch named first.
+    var publishBranch: (() -> Void)? = nil
     @FocusState private var messageFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Push and pull get their flying arrow; a commit gets a brief checkmark in place of the spinner.
@@ -213,7 +224,14 @@ struct CommitArea: View {
     }
 
     private func primaryButton(_ action: PrimaryAction) -> some View {
-        Button(action: model.performPrimaryAction) {
+        let asksForName = model.syncState.asksForBranchName(offered: publishBranch != nil)
+        return Button {
+            if case .publish = action, asksForName, let publishBranch {
+                publishBranch()
+            } else {
+                model.performPrimaryAction()
+            }
+        } label: {
             HStack(spacing: 6) {
                 if showsCommitDone {
                     Image(systemName: "checkmark")
@@ -235,6 +253,8 @@ struct CommitArea: View {
                     Text("Committed")
                 } else if case .pull(let behind, let ahead, _) = action, ahead > 0 {
                     DivergedCounts(behind: behind, ahead: ahead)
+                } else if case .publish = action, asksForName {
+                    Text(verbatim: model.syncState.pushTitle(asksForBranchName: true))
                 } else {
                     Text(action.title)
                 }
@@ -303,6 +323,8 @@ struct CommitArea: View {
 /// button looks like Refresh next to it and opens an NSMenu instead.
 struct SyncMenu: View {
     let model: ChangesModel
+    /// Called instead of publishing when the host wants the branch named first.
+    var publishBranch: (() -> Void)? = nil
     @State private var anchor = MenuAnchor()
 
     var body: some View {
@@ -332,7 +354,9 @@ struct SyncMenu: View {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(ActionMenuItem(String(localized: "Pull"), symbol: "arrow.down", isEnabled: sync.canPull, action: model.pull))
-        menu.addItem(ActionMenuItem(sync.pushTitle, symbol: sync.isPublished ? "arrow.up" : "icloud.and.arrow.up", isEnabled: sync.canPush, action: model.push))
+        let asksForName = sync.asksForBranchName(offered: publishBranch != nil)
+        let push = asksForName ? publishBranch ?? model.push : model.push
+        menu.addItem(ActionMenuItem(sync.pushTitle(asksForBranchName: asksForName), symbol: sync.isPublished ? "arrow.up" : "icloud.and.arrow.up", isEnabled: sync.canPush, action: push))
         menu.addItem(.separator())
         menu.addItem(ActionMenuItem(String(localized: "Fetch"), symbol: "arrow.triangle.2.circlepath", isEnabled: sync.canFetch, action: model.fetch))
         // 9 pt below the button is where a native pull-down puts its menu.

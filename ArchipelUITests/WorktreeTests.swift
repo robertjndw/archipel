@@ -419,4 +419,100 @@ final class WorktreeTests: ArchipelUITestCase {
         assertExists(sidebarWorktree("release"), "The sidebar should show the branch that is checked out now.")
         waitUntil("the new branch is saved") { try sandbox.savedWorkspace().allWorktrees.map(\.branch) == ["release"] }
     }
+
+    /// The branches a test did not make itself: two lowercase words, behind whatever branch prefix
+    /// the app is set to (none in the test configuration).
+    private func generatedBranches(in repository: FixtureRepository) throws -> [String] {
+        try repository.branches.filter { $0.range(of: "^([a-z0-9._-]+/)*[a-z]+-[a-z]+$", options: .regularExpression) != nil && $0 != "main" }
+    }
+
+    func testStartingAWorktreeWithoutABranchFromTheSheet() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try launch(with: repository.workspace())
+
+        openAddWorktreeSheet()
+        assertExists(startWithoutBranchRow, "An empty field should offer to start without a branch.")
+        waitUntil("the row can be created") { self.sheet.buttons["Create"].isEnabled }
+        // Selected from the start, so Return is all it takes.
+        app.typeKey(.return, modifierFlags: [])
+
+        assertGone(sheet, "The sheet should close once the worktree exists.")
+        waitUntil("a second worktree is in the sidebar") { self.sidebarWorktrees.count == 2 }
+        var branches: [String] = []
+        waitUntil("git has the generated branch") {
+            branches = try self.generatedBranches(in: repository)
+            return branches.count == 1
+        }
+        let words = try XCTUnwrap(branches.first?.split(separator: "/").last.map(String.init))
+        XCTAssertEqual(try repository.branches.sorted(), ["main", branches[0]].sorted(), "No other branch should be made.")
+        assertExists(sidebarWorktree(branches[0]), "The row should be titled with the generated branch.")
+        // The folder is the bare words, whatever prefix the branch has.
+        let folder = sandbox.worktreesRoot.appending(path: "fixture/\(words)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path), "The worktree's folder should exist.")
+        XCTAssertEqual(try repository.worktreePaths, [repository.url.path, folder.path])
+    }
+
+    func testNewWorktreeFromTheProjectMenuNeedsNoSheet() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try launch(with: repository.workspace())
+
+        chooseMenu("Project", "New Worktree")
+        waitUntil("a second worktree is in the sidebar") { self.sidebarWorktrees.count == 2 }
+        XCTAssertFalse(sheet.exists, "New Worktree must not ask anything.")
+        waitUntil("git has the generated branch") { try self.generatedBranches(in: repository).count == 1 }
+        XCTAssertEqual(try repository.worktreePaths.count, 2)
+    }
+
+    func testRenamingTheBranchOfAnUnpublishedWorktree() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let generated = try repository.addWorktree(branch: "quiet-harbor", in: sandbox.worktreesRoot, placeholder: true)
+        try launch(with: repository.workspace(linkedWorktrees: [generated]))
+
+        sidebarWorktree("quiet-harbor").click()
+        assertExists(mainWindow(titled: "fixture - quiet-harbor"), "The new worktree should be selected.")
+        // Disabled until the first status poll has said there is no upstream, so the menu is
+        // opened until the item is enabled.
+        waitUntil("the context menu offers Rename Branch…") {
+            self.sidebarWorktree("quiet-harbor").rightClick()
+            defer { self.app.typeKey(.escape, modifierFlags: []) }
+            let rename = self.app.menuItems.matching(NSPredicate(format: "title == %@", "Rename Branch…"))
+                .allElementsBoundByIndex.first(where: \.isHittable)
+            return rename?.isEnabled == true
+        }
+        sidebarWorktree("quiet-harbor").rightClick()
+        chooseContextMenu("Rename Branch…")
+
+        assertExists(branchNameField, "Rename Branch… should open the name sheet.")
+        XCTAssertEqual(branchNameField.value as? String, "quiet-harbor", "A rename starts from the current name.")
+        XCTAssertFalse(branchNameConfirm.isEnabled, "Renaming to the same name has nothing to do.")
+        replaceText(with: "login-flow")
+        waitUntil("the new name is accepted") { self.branchNameConfirm.isEnabled }
+        branchNameConfirm.click()
+
+        assertGone(sheet, "The sheet should close once the branch is renamed.")
+        assertExists(sidebarWorktree("login-flow"), "The row should carry the new name.")
+        XCTAssertEqual(try repository.branches.sorted(), ["login-flow", "main"])
+        XCTAssertEqual(try repository.git(["rev-parse", "--abbrev-ref", "HEAD"], in: generated.path), "login-flow")
+        waitUntil("the new name is saved") {
+            try sandbox.savedWorkspace().allWorktrees.map(\.branch) == ["main", "login-flow"]
+        }
+    }
+
+    func testABranchWithAnUpstreamCannotBeRenamed() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try sandbox.makeRemote(for: repository)
+        let feature = try repository.addWorktree(branch: "feature", in: sandbox.worktreesRoot)
+        try repository.git("push", "--quiet", "--set-upstream", "origin", "feature")
+        try launch(with: repository.workspace(linkedWorktrees: [feature]))
+
+        sidebarWorktree("feature").click()
+        assertExists(mainWindow(titled: "fixture - feature"), "The feature worktree should be selected.")
+        // Push is only titled so once the first status poll has found the upstream. Before that the
+        // item would be disabled for the wrong reason.
+        waitForProjectMenuItem("Push")
+        sidebarWorktree("feature").rightClick()
+        let rename = shownMenuItem("Rename Branch…")
+        XCTAssertEqual(rename?.isEnabled, false, "Renaming a published branch leaves the old one on the remote.")
+        app.typeKey(.escape, modifierFlags: [])
+    }
 }
