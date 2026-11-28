@@ -42,11 +42,9 @@ struct AppearanceSettingsView: View {
                     ) { icon in
                         AppIconPreview(icon: icon)
                     }
-                    .padding(.top, 4)
-                    // Room for the scroller, which would otherwise sit on the titles.
-                    .padding(.bottom, 14)
+                    .padding(.vertical, 4)
                 }
-                // Form rows align content to the trailing edge, so the strip would open scrolled to the end.
+                .scrollIndicators(.hidden)
                 .defaultScrollAnchor(.leading)
                 .accessibilityIdentifier("settings.appIconPicker")
             } header: {
