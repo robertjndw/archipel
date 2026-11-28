@@ -580,7 +580,7 @@ struct ChangesTab: View {
             InspectorHeader(refresh: refresh) {
                 branchTitle
             } accessory: {
-                if model.phase == .ready { SyncMenu(model: model) }
+                if model.phase == .ready { SyncMenu(model: model, publishBranch: actions.publishBranch) }
             }
             if let message = bannerMessage {
                 ErrorBanner(message: message, dismiss: model.actionError == nil ? nil : { model.actionError = nil })
@@ -589,7 +589,7 @@ struct ChangesTab: View {
             content
                 .frame(maxHeight: .infinity)
             if model.phase == .ready {
-                CommitArea(model: model, focusRequest: $focusCommitMessage)
+                CommitArea(model: model, focusRequest: $focusCommitMessage, publishBranch: actions.publishBranch)
             }
         }
         // The banner pushes the list down, so its arrival only animates without Reduce Motion.

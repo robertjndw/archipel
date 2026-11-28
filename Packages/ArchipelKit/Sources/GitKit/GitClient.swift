@@ -214,6 +214,18 @@ public struct GitClient: Sendable {
         return result?.status == 0
     }
 
+    /// Whether `branch` would collide with one of `existing`. Refs are paths, so `a/b` cannot exist
+    /// beside `a`, nor `a` beside `a/b`, and git refuses either with a message about a lock file.
+    public static func branchNameConflicts(_ branch: String, with existing: Set<String>) -> Bool {
+        if existing.contains(branch) { return true }
+        var prefix = Substring(branch)
+        while let slash = prefix.lastIndex(of: "/") {
+            prefix = prefix[..<slash]
+            if existing.contains(String(prefix)) { return true }
+        }
+        return existing.contains { $0.hasPrefix(branch + "/") }
+    }
+
     /// Without `force` git refuses a worktree with uncommitted or untracked changes. Locked worktrees
     /// stay protected either way: git wants `--force` twice for those, and we never send that.
     public func removeWorktree(repository: URL, path: URL, force: Bool = false) async throws {
@@ -237,6 +249,13 @@ public struct GitClient: Sendable {
         // from a missing branch or one checked out elsewhere.
         if result.stderr.contains("not fully merged") { return .keptUnmerged }
         throw GitError(command: "git branch", output: result)
+    }
+
+    /// Plain `-m`, never `-M`: git refusing a name that is already taken is what callers rely on.
+    public func renameBranch(_ branch: String, to name: String, in folder: URL) async throws {
+        // C locale so the message in the error is not translated.
+        let result = try await GitProcess.run(["branch", "-m", "--", branch, name], in: folder, readOnly: false, environment: ["LC_ALL": "C"])
+        guard result.status == 0 else { throw GitError(command: "git branch", output: result) }
     }
 
     /// Lists untracked files one by one (`--untracked-files=all`), which is what the Changes tab

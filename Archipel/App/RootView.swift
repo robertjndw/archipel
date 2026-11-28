@@ -66,6 +66,9 @@ struct RootView: View {
         .sheet(item: worktreeSwitchingBranch) { worktree in
             SwitchBranchSheet(worktree: worktree)
         }
+        .sheet(item: branchNaming) { naming in
+            BranchNameSheet(worktree: naming.worktree, purpose: naming.purpose)
+        }
         // These three are what the menu bar and the palette ask for. The sidebar and the tab bar
         // present the same from their own context menus.
         .sheet(item: $model.worktreeAwaitingRemoval) { worktree in
@@ -191,6 +194,11 @@ struct RootView: View {
                 onSwitchBranch: {
                     if let worktree = model.selectedWorktree { model.switchBranchWorktreeID = worktree.id }
                 },
+                // Only while the branch has its generated name. The inspector calls it in place of
+                // publishing, and only for a branch without an upstream, which is `needsBranchName`.
+                onPublishBranch: model.selectedWorktree?.isOnPlaceholderBranch == true ? {
+                    if let worktree = model.selectedWorktree { model.requestBranchName(for: worktree.id, purpose: .publish) }
+                } : nil,
                 onTrash: { urls in model.closeFileTabs(under: urls) },
                 onProblem: { message in model.problem = message }
             )
@@ -242,6 +250,24 @@ struct RootView: View {
             get: { model.switchBranchWorktreeID.flatMap { model.workspace.worktree(id: $0) } },
             set: { model.switchBranchWorktreeID = $0?.id }
         )
+    }
+
+    /// The worktree is looked up for every read, so a sheet whose worktree was removed meanwhile closes.
+    private var branchNaming: Binding<BranchNaming?> {
+        Binding(
+            get: {
+                model.branchNameRequest.flatMap { request in
+                    model.workspace.worktree(id: request.worktreeID).map { BranchNaming(worktree: $0, purpose: request.purpose) }
+                }
+            },
+            set: { model.branchNameRequest = $0.map { BranchNameRequest(worktreeID: $0.worktree.id, purpose: $0.purpose) } }
+        )
+    }
+
+    private struct BranchNaming: Identifiable {
+        var worktree: Worktree
+        var purpose: BranchNameRequest.Purpose
+        var id: Worktree.ID { worktree.id }
     }
 
     private var projectInSettings: Binding<Project?> {

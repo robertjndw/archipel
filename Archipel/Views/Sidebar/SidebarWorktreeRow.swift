@@ -384,6 +384,11 @@ struct SidebarWorktreeMenu: View {
         if worktree.branch != nil || model.gitState(for: worktree.id)?.status != nil {
             Button("Switch Branch…", systemImage: "arrow.triangle.swap") { model.switchBranchWorktreeID = worktree.id }
                 .disabled(!model.isGitAvailable || isMissing)
+            // Never possible in the primary checkout, so it is left out there rather than shown dimmed for good.
+            if !worktree.isMain {
+                Button("Rename Branch…", systemImage: "pencil") { model.requestBranchName(for: worktree.id, purpose: .rename) }
+                    .disabled(!model.canRenameBranch(worktree.id))
+            }
         }
         if let branch = worktree.branch {
             Button("Copy Branch Name", systemImage: "arrow.triangle.branch") { model.copyToPasteboard(branch) }
@@ -410,8 +415,8 @@ struct SidebarBatchMenu: View {
 
     var body: some View {
         let ids = worktrees.map(\.id)
-        let pullable = ids.count { model.canSync(.pull, $0) }
-        let pushable = ids.count { model.canSync(.push, $0) }
+        let pullable = ids.count { model.canSyncInBatch(.pull, $0) }
+        let pushable = ids.count { model.canSyncInBatch(.push, $0) }
         // Left out rather than disabled when they would act on nothing, so no count reads "0".
         if pullable > 0 {
             Button(pullable == 1 ? "Pull 1 Worktree" : "Pull \(pullable) Worktrees", systemImage: "arrow.down") {

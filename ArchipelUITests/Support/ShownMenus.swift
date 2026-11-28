@@ -34,6 +34,19 @@ extension ArchipelUITestCase {
 }
 
 extension ArchipelUITestCase {
+    /// Pull, Push and Fetch stay disabled until the app's first status poll of the worktree has
+    /// come back, and only that poll tells Push from Publish Branch. The menu is read when it
+    /// opens, so it is opened until the item shows up enabled.
+    func waitForProjectMenuItem(_ item: String, file: StaticString = #filePath, line: UInt = #line) {
+        let entry = menuItem("Project", item)
+        waitUntil("Project > \(item) is enabled", file: file, line: line) {
+            self.app.menuBars.menuBarItems["Project"].click()
+            let ready = entry.exists && entry.isEnabled
+            self.app.typeKey(.escape, modifierFlags: [])
+            return ready
+        }
+    }
+
     /// The header of the unstaged section in the Changes panel.
     var unstagedChangesHeader: XCUIElement {
         mainWindow.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Changes, ")).element(boundBy: 0)

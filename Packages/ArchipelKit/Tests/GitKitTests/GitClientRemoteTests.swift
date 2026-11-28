@@ -89,6 +89,22 @@ final class GitClientRemoteTests {
         #expect(remoteHead == "2")
     }
 
+    @Test func pushAfterRenameLeavesOnlyTheNewNameOnTheRemote() async throws {
+        let remote = try makeBareRemote()
+        try sh("remote", "add", "origin", remote.path)
+        try write("a.txt", "a\n")
+        try await git.stageAll(in: repo)
+        try await git.commit(message: "one", in: repo)
+        let wt = base.appending(path: "wt-renamed")
+        try await git.addWorktree(repository: repo, path: wt, branch: "quiet-harbor", createBranch: true, base: "main")
+
+        try await git.renameBranch("quiet-harbor", to: "feature/real", in: wt)
+        try await git.push(in: wt)
+
+        let heads = try shOutput("--git-dir", remote.path, "for-each-ref", "--format=%(refname:short)", "refs/heads/", dir: false)
+        #expect(heads == "feature/real")
+    }
+
     @Test func pushRefusesDetachedHeadAndMissingOrigin() async throws {
         try write("a.txt", "a\n")
         try await git.stageAll(in: repo)

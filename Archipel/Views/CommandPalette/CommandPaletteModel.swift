@@ -261,7 +261,7 @@ struct PaletteCommand: Identifiable {
             PaletteCommand(id: "pull", title: "Pull", symbol: "arrow.down", isAvailable: model.canSync(.pull, worktreeID)) { actions.sync(.pull) },
             PaletteCommand(
                 id: "push",
-                title: publishes ? "Publish Branch" : "Push",
+                title: model.pushTitle(worktreeID),
                 symbol: publishes ? "icloud.and.arrow.up" : "arrow.up",
                 isAvailable: model.canSync(.push, worktreeID)
             ) { actions.sync(.push) },
@@ -290,6 +290,13 @@ struct PaletteCommand: Identifiable {
                 if let branch = worktree?.branch { model.copyToPasteboard(branch) }
             },
             PaletteCommand(
+                id: "new-worktree",
+                title: "New Worktree",
+                symbol: "plus.square.dashed",
+                shortcutHint: "⌥⌘N",
+                isAvailable: actions.canStartWorktree
+            ) { actions.startWorktree() },
+            PaletteCommand(
                 id: "add-worktree",
                 title: "Add Worktree…",
                 symbol: "plus",
@@ -305,6 +312,13 @@ struct PaletteCommand: Identifiable {
                 isAvailable: actions.worktreeForBranchSwitch != nil,
                 refocusesTab: false
             ) { actions.switchBranch() },
+            PaletteCommand(
+                id: "rename-branch",
+                title: "Rename Branch…",
+                symbol: "pencil",
+                isAvailable: actions.worktreeForBranchRename != nil,
+                refocusesTab: false
+            ) { actions.renameBranch() },
             PaletteCommand(
                 id: "remove-worktree",
                 title: actions.removeWorktreesTitle,

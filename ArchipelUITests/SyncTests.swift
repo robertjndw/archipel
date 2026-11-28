@@ -2,19 +2,6 @@ import ArchipelCore
 import XCTest
 
 final class SyncTests: ArchipelUITestCase {
-    /// Pull, Push and Fetch stay disabled until the app's first status poll of the worktree has
-    /// come back, and only that poll tells Push from Publish Branch. The menu is read when it
-    /// opens, so it is opened until the item shows up enabled.
-    private func waitForProjectMenuItem(_ item: String, file: StaticString = #filePath, line: UInt = #line) {
-        let entry = menuItem("Project", item)
-        waitUntil("Project > \(item) is enabled", file: file, line: line) {
-            self.app.menuBars.menuBarItems["Project"].click()
-            let ready = entry.exists && entry.isEnabled
-            self.app.typeKey(.escape, modifierFlags: [])
-            return ready
-        }
-    }
-
     func testPublishingABranchThatHasNoUpstream() throws {
         let repository = try sandbox.makeRepository(named: "fixture")
         let remote = try sandbox.makeRemote(for: repository)
@@ -177,6 +164,51 @@ final class SyncTests: ArchipelUITestCase {
         waitUntil("the remote has the branch again") { try remote.sha(of: "refs/heads/feature") == local }
         XCTAssertEqual(try repository.upstream(of: "feature"), "origin/feature", "Publishing should set the upstream again.")
         waitUntil("the panel says the branch is up to date") { self.summary(of: sync) == "Up to date with origin/feature" }
+    }
+
+    func testPublishingAGeneratedBranchAsksForItsNameFirst() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        let remote = try sandbox.makeRemote(for: repository)
+        let generated = try repository.addWorktree(branch: "quiet-harbor", in: sandbox.worktreesRoot, placeholder: true)
+        try launch(with: repository.workspace(linkedWorktrees: [generated]))
+
+        sidebarWorktree("quiet-harbor").click()
+        assertExists(mainWindow(titled: "fixture - quiet-harbor"), "The generated worktree should be selected.")
+        waitForProjectMenuItem("Publish Branch…")
+        chooseMenu("Project", "Publish Branch…")
+
+        assertExists(branchNameField, "Publishing a generated name should ask for the real one.")
+        XCTAssertTrue(branchNameConfirm.exists)
+        XCTAssertFalse(branchNameConfirm.isEnabled, "Publish needs a name to publish under.")
+        XCTAssertTrue(branchNameKeepGenerated.exists, "Keeping the generated name should stay a choice.")
+        XCTAssertEqual(try remote.branches, ["main"], "Nothing may be pushed before the name is given.")
+        app.typeText("login-flow")
+        waitUntil("the name is accepted") { self.branchNameConfirm.isEnabled }
+        branchNameConfirm.click()
+
+        assertGone(sheet, "The sheet should close once the branch is published.")
+        waitUntil("the remote has the new name") { try remote.branches.sorted() == ["login-flow", "main"] }
+        XCTAssertEqual(try remote.sha(of: "refs/heads/login-flow"), try repository.sha(of: "login-flow"))
+        XCTAssertEqual(try repository.branches.sorted(), ["login-flow", "main"], "The local branch should be renamed too.")
+        XCTAssertEqual(try repository.upstream(of: "login-flow"), "origin/login-flow")
+    }
+
+    func testPublishStopsAskingOnceTheBranchIsRenamedOutsideTheApp() throws {
+        let repository = try sandbox.makeRepository(named: "fixture")
+        try sandbox.makeRemote(for: repository)
+        let generated = try repository.addWorktree(branch: "quiet-harbor", in: sandbox.worktreesRoot, placeholder: true)
+        try launch(with: repository.workspace(linkedWorktrees: [generated]))
+
+        sidebarWorktree("quiet-harbor").click()
+        assertExists(mainWindow(titled: "fixture - quiet-harbor"), "The generated worktree should be selected.")
+        waitForProjectMenuItem("Publish Branch…")
+
+        try repository.git("branch", "-m", "quiet-harbor", "renamed-by-hand")
+        // A branch renamed by hand counts as named, so Publish stops asking.
+        waitForProjectMenuItem("Publish Branch")
+        app.menuBars.menuBarItems["Project"].click()
+        XCTAssertFalse(menuItem("Project", "Publish Branch…").exists)
+        app.typeKey(.escape, modifierFlags: [])
     }
 
     /// What the sync menu's button reads out: its summary of the branch.

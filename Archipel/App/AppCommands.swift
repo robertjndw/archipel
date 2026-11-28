@@ -223,6 +223,26 @@ struct AppActions {
         if let project = projectForNewWorktree, model.readyForSheet() { model.addWorktreeProjectID = project.id }
     }
 
+    /// New Worktree, which skips the sheet. Off while the last one for the project is still being
+    /// created, so holding the shortcut does not make a row per key repeat.
+    var canStartWorktree: Bool {
+        guard let project = projectForNewWorktree else { return false }
+        return !model.placeholderCreations.contains(project.id)
+    }
+
+    func startWorktree() {
+        if let project = projectForNewWorktree { model.startPlaceholderWorktree(in: project) }
+    }
+
+    var worktreeForBranchRename: Worktree? {
+        guard let worktree = model.selectedWorktree, model.canRenameBranch(worktree.id) else { return nil }
+        return worktree
+    }
+
+    func renameBranch() {
+        if let worktree = worktreeForBranchRename { model.requestBranchName(for: worktree.id, purpose: .rename) }
+    }
+
     var worktreeForBranchSwitch: Worktree? {
         guard model.isGitAvailable, let worktree = model.selectedWorktree, !model.missingWorktrees.contains(worktree.id) else { return nil }
         return worktree
@@ -499,12 +519,17 @@ private struct ProjectMenuItems: View {
         .keyboardShortcut("e", modifiers: [.command, .shift])
         .disabled(worktree == nil || model.preferredEditor == nil)
         Divider()
+        Button("New Worktree", systemImage: "plus.square.dashed") { actions.startWorktree() }
+            .keyboardShortcut("n", modifiers: [.command, .option])
+            .disabled(!actions.canStartWorktree)
         Button("Add Worktree…", systemImage: "plus") { actions.addWorktree() }
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(actions.projectForNewWorktree == nil)
         Button("Switch Branch…", systemImage: "arrow.triangle.swap") { actions.switchBranch() }
             .keyboardShortcut("b", modifiers: [.command, .shift])
             .disabled(actions.worktreeForBranchSwitch == nil)
+        Button("Rename Branch…", systemImage: "pencil") { actions.renameBranch() }
+            .disabled(actions.worktreeForBranchRename == nil)
         Button(actions.removeWorktreesTitle, systemImage: "minus.circle") { actions.removeSelectedWorktree() }
             .disabled(actions.removableWorktrees.isEmpty)
         Divider()
@@ -531,7 +556,7 @@ private struct SyncMenuItems: View {
         let publishes = model.pushPublishes(id)
         Button("Pull", systemImage: "arrow.down") { actions.sync(.pull) }
             .disabled(!model.canSync(.pull, id))
-        Button(publishes ? "Publish Branch" : "Push", systemImage: publishes ? "icloud.and.arrow.up" : "arrow.up") { actions.sync(.push) }
+        Button(model.pushTitle(id), systemImage: publishes ? "icloud.and.arrow.up" : "arrow.up") { actions.sync(.push) }
             .disabled(!model.canSync(.push, id))
         Button("Fetch", systemImage: "arrow.triangle.2.circlepath") { actions.sync(.fetch) }
             .disabled(!model.canSync(.fetch, id))

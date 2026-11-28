@@ -89,6 +89,26 @@ struct SyncStateTests {
         // With nothing to commit and nothing to publish, the button falls back to a disabled Commit.
         #expect(PrimaryAction(commit: idle, sync: ambiguous) == .commit(idle))
     }
+
+    @Test func publishAsksTheHostForANameOnlyForAnUnpublishedBranch() {
+        let unpublished = SyncState(status: GitStatus(branch: "quiet-harbor", staged: [], unstaged: []), remotes: ["origin"], isBusy: false)
+        #expect(unpublished.asksForBranchName(offered: true))
+        #expect(!unpublished.asksForBranchName(offered: false))
+        #expect(unpublished.pushTitle(asksForBranchName: true) == "Publish Branch…")
+        #expect(unpublished.pushTitle(asksForBranchName: false) == "Publish Branch")
+
+        // A gone upstream is unpublished again, so a placeholder branch in that state is asked about too.
+        let gone = SyncState(status: GitStatus(branch: "quiet-harbor", staged: [], unstaged: [], goneUpstream: "origin/quiet-harbor"), remotes: ["origin"], isBusy: false)
+        #expect(gone.asksForBranchName(offered: true))
+
+        // Pushed from a terminal under the generated name: the name stands and Push is a plain push.
+        let published = SyncState(
+            status: GitStatus(branch: "quiet-harbor", staged: [], unstaged: [], upstream: "origin/quiet-harbor", ahead: 1),
+            remotes: ["origin"], isBusy: false
+        )
+        #expect(!published.asksForBranchName(offered: true))
+        #expect(published.pushTitle(asksForBranchName: published.asksForBranchName(offered: true)) == "Push")
+    }
 }
 
 @MainActor
