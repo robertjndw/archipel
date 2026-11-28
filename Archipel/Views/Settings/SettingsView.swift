@@ -33,6 +33,7 @@ struct SettingsView: View {
         .frame(width: pane == .agents ? 720 : 540)
         // Here and not on the main window, which may be closed while Settings is open.
         .onChange(of: model.settings.appearance) { model.applyAppearance() }
+        .onChange(of: model.settings.appIcon) { AppIconChanger.apply(model.settings.appIcon) }
         .onChange(of: model.settings.showsDockBadge) { model.refreshDockBadge() }
     }
 

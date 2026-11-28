@@ -8,6 +8,8 @@ struct TilePicker<Value: Hashable, Preview: View>: View {
     @Binding var selection: Value
     let options: [Value]
     let title: (Value) -> String
+    /// Corner radius of the pictures. Only app icons change it, to follow their own shape.
+    var previewRadius: CGFloat = Chrome.controlRadius - 3
     @ViewBuilder let preview: (Value) -> Preview
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -20,16 +22,16 @@ struct TilePicker<Value: Hashable, Preview: View>: View {
                 } label: {
                     VStack(spacing: 4) {
                         preview(option)
-                            .clipShape(.rect(cornerRadius: Chrome.controlRadius - 3, style: .continuous))
+                            .clipShape(.rect(cornerRadius: previewRadius, style: .continuous))
                             .overlay {
-                                RoundedRectangle(cornerRadius: Chrome.controlRadius - 3, style: .continuous)
+                                RoundedRectangle(cornerRadius: previewRadius, style: .continuous)
                                     .strokeBorder(.separator, lineWidth: 0.5)
                             }
                             // Gap between picture and ring so a dark preview doesn't swallow it.
                             // Outer radius = inner radius + padding.
                             .padding(3)
                             .overlay {
-                                RoundedRectangle(cornerRadius: Chrome.controlRadius, style: .continuous)
+                                RoundedRectangle(cornerRadius: previewRadius + 3, style: .continuous)
                                     .strokeBorder(Color.accentColor, lineWidth: 3)
                                     .opacity(isSelected ? 1 : 0)
                             }
@@ -131,6 +133,43 @@ struct AppearancePreview: View {
         }
 
         private var size: CGSize { AppearancePreview.size }
+    }
+}
+
+/// An app icon as the Dock shows it, cut to the icon's own shape. The renders carry the margin
+/// macOS leaves around every icon, so the image is drawn larger and the margin clipped off.
+/// Auto shows the light and dark render side by side, like the Auto appearance tile.
+struct AppIconPreview: View {
+    let icon: AppSettings.AppIcon
+
+    static let side: CGFloat = 56
+    /// macOS icons fill 824 of a 1024 canvas, with corners about 22% of that.
+    static let radius: CGFloat = side * 0.2237
+    private static let canvas: CGFloat = side * 1024 / 824
+
+    var body: some View {
+        ZStack {
+            render(icon.previewImage)
+            if icon == .system {
+                render(NSImage(named: "AppIconSystemDark"))
+                    .mask(alignment: .trailing) {
+                        Rectangle().frame(width: Self.side / 2)
+                    }
+            }
+        }
+        .frame(width: Self.side, height: Self.side)
+    }
+
+    private func render(_ image: NSImage?) -> some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().interpolation(.high)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: Self.canvas, height: Self.canvas)
+        .frame(width: Self.side, height: Self.side)
     }
 }
 

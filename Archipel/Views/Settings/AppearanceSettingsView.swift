@@ -32,6 +32,29 @@ struct AppearanceSettingsView: View {
                 }
             }
 
+            Section {
+                ScrollView(.horizontal) {
+                    TilePicker(
+                        selection: $settings.appIcon,
+                        options: AppSettings.AppIcon.allCases,
+                        title: \.title,
+                        previewRadius: AppIconPreview.radius
+                    ) { icon in
+                        AppIconPreview(icon: icon)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .scrollIndicators(.hidden)
+                .defaultScrollAnchor(.leading)
+                .accessibilityIdentifier("settings.appIconPicker")
+            } header: {
+                Text("App Icon")
+            } footer: {
+                Text("Auto follows your Mac's icon style, including dark and tinted icons. The others look the same in every style.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Sidebar") {
                 LabeledContent {
                     TilePicker(

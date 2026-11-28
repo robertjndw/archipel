@@ -1,0 +1,101 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "extended-srgb:0.03000,0.09000,0.05000,1.00000",
+      "extended-srgb:0.01000,0.03000,0.02000,1.00000"
+    ],
+    "orientation": {
+      "start": {
+        "x": 0.5,
+        "y": 0
+      },
+      "stop": {
+        "x": 0.5,
+        "y": 1
+      }
+    }
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "scanlines.svg",
+          "name": "scanlines",
+          "glass": false,
+          "opacity": 0.22
+        }
+      ],
+      "name": "scanlines",
+      "specular": false
+    },
+    {
+      "layers": [
+        {
+          "image-name": "island-large.svg",
+          "name": "island-large",
+          "fill": {
+            "solid": "extended-srgb:0.25000,1.00000,0.42000,1.00000"
+          },
+          "glass": false
+        },
+        {
+          "image-name": "island-medium.svg",
+          "name": "island-medium",
+          "fill": {
+            "solid": "extended-srgb:0.25000,1.00000,0.42000,1.00000"
+          },
+          "glass": false
+        },
+        {
+          "image-name": "island-small.svg",
+          "name": "island-small",
+          "fill": {
+            "solid": "extended-srgb:0.25000,1.00000,0.42000,1.00000"
+          },
+          "glass": false
+        }
+      ],
+      "name": "islands",
+      "specular": false
+    },
+    {
+      "layers": [
+        {
+          "image-name": "island-glow.svg",
+          "name": "island-glow",
+          "glass": false,
+          "opacity": 0.8
+        }
+      ],
+      "name": "islands-glow",
+      "specular": false
+    },
+    {
+      "layers": [
+        {
+          "image-name": "shore.svg",
+          "name": "shore",
+          "fill": {
+            "solid": "extended-srgb:0.25000,1.00000,0.42000,1.00000"
+          },
+          "glass": false
+        },
+        {
+          "image-name": "shore-glow.svg",
+          "name": "shore-glow",
+          "glass": false,
+          "opacity": 0.6
+        }
+      ],
+      "name": "shore",
+      "specular": false,
+      "opacity": 0.55
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}
