@@ -1188,7 +1188,17 @@ final class AppModel {
             // left to keep. Failing only means there was no such record.
             if isGitAvailable { try? await git.removeWorktree(repository: project.folderURL, path: worktree.path) }
         } else if deleteFolder, folderExists {
-            try await git.removeWorktree(repository: project.folderURL, path: worktree.path, force: force)
+            // git deletes the files one by one. A status read in the middle of that lists the
+            // ones already gone as deleted, and the sheet and Changes tab would show them.
+            let state = gitState(for: id)
+            state?.holdReads()
+            do {
+                try await git.removeWorktree(repository: project.folderURL, path: worktree.path, force: force)
+            } catch {
+                state?.releaseReads()
+                state?.requestRefresh()
+                throw error
+            }
         }
         // Edits to files that no longer exist cannot be saved anywhere. Kept, they would make every
         // Save All fail and hold up quitting with a prompt nothing can satisfy. Forgotten rather

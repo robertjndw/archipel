@@ -77,6 +77,22 @@ final class GitWorktreeStateTests {
         #expect(state.status?.branch == "other")
     }
 
+    @Test func heldReadsKeepWhatIsShownUntilReleased() async throws {
+        let state = GitWorktreeState(root: repo)
+        await state.refresh()
+        #expect(state.summary?.changedFiles == 0)
+
+        // Like a folder that git is partway through deleting.
+        state.holdReads()
+        try FileManager.default.removeItem(at: repo.appending(path: "a.txt"))
+        await state.refresh()
+        #expect(state.summary?.changedFiles == 0)
+
+        state.releaseReads()
+        await state.refresh()
+        #expect(state.summary?.changedFiles == 1)
+    }
+
     @Test func readsAskedForWhileOneRunsAreServedByTheNextOne() async throws {
         let state = GitWorktreeState(root: repo)
         async let first: Void = state.refresh()
