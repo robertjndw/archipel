@@ -30,12 +30,17 @@ JSON
 
 # 512 pixels covers the Dock at full magnification. 1024 would add about a
 # megabyte per icon to the app.
+#
+# ictool fills the whole canvas, but macOS icons sit in an 824 body on a 1024
+# canvas. Without that margin the icon looks too big next to other apps in the
+# Dock, so render at 412 and pad to 512.
 render() {
     local icon=$1 name=$2 rendition=$3
     local set="$out/$name.imageset"
     mkdir -p "$set"
     "$ictool" "$icon" --export-image --output-file "$set/$name.png" \
-        --platform macOS --rendition "$rendition" --width 512 --height 512 --scale 1 >/dev/null
+        --platform macOS --rendition "$rendition" --width 412 --height 412 --scale 1 >/dev/null
+    sips --padToHeightWidth 512 512 "$set/$name.png" >/dev/null
     cat > "$set/Contents.json" <<JSON
 {
   "images" : [
