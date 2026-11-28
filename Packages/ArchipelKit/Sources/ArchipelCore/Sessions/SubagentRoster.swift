@@ -4,8 +4,12 @@ import Foundation
 ///
 /// Anything still listed when the main turn ends is background work, so the turn end leaves it
 /// alone. Stops do get lost (an interrupted turn, say), so entries expire after ten quiet minutes.
-/// That outlasts any single tool call, since Claude's Bash tool times out at ten minutes. The app
-/// runs a timer for `nextExpiry` because no further hook event may come along to prune them.
+/// The app runs a timer for `nextExpiry` because no further hook event may come along to prune
+/// them.
+///
+/// A subagent can be quiet for longer than that and still be running, say while one tool call
+/// hangs or it waits on a subagent of its own. Claude lists its running subagents when a turn
+/// ends, and that list then replaces the roster.
 public struct SubagentRoster: Equatable, Sendable {
     private var lastSeen: [String: Date] = [:]
 
@@ -37,7 +41,11 @@ public struct SubagentRoster: Equatable, Sendable {
             // An interrupt stops the subagents the turn was waiting on, and their stops are not
             // reported. One that runs in the background shows up again with its next tool call.
             lastSeen = [:]
-        case .promptSubmitted, .activity, .attentionRequested, .attentionReminder, .turnFinished, .backgroundTasksChanged, .terminalNotification, .bell:
+        case .turnFinished(_, _, let running):
+            // Brings back a subagent that expired while it was quiet, and drops one whose stop
+            // got lost. The glow is decided on this event, so the roster has to be right here.
+            if let running { lastSeen = Dictionary(running.map { ($0, now) }) { first, _ in first } }
+        case .promptSubmitted, .activity, .attentionRequested, .attentionReminder, .backgroundTasksChanged, .terminalNotification, .bell:
             break
         }
     }

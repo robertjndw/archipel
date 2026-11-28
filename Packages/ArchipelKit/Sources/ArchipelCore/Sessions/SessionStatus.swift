@@ -49,7 +49,9 @@ public enum AgentEvent: Equatable, Sendable {
     case attentionReminder(AttentionReason, message: String?)
     /// `backgroundTasks` is how many shells, monitors and the like the agent left running, or nil
     /// when the agent does not say. Subagents are not among them: they report themselves.
-    case turnFinished(message: String?, backgroundTasks: Int? = nil)
+    /// `subagents` are the ids of those still running when the turn ends, or nil when the agent
+    /// does not say.
+    case turnFinished(message: String?, backgroundTasks: Int? = nil, subagents: [String]? = nil)
     /// How many shells and the like the agent has running in the background changed, between
     /// turns as well. From an agent that reports each one as it starts and ends.
     case backgroundTasksChanged(Int)

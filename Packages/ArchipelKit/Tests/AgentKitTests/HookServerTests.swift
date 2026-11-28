@@ -131,7 +131,7 @@ struct HookServerTests {
 
         let messages = await collect(ids.count, from: server)
         #expect(Set(messages.map(\.sessionID)) == Set(ids))
-        #expect(messages.allSatisfy { $0.event == .turnFinished(message: "I've completed the refactoring.", backgroundTasks: 0) })
+        #expect(messages.allSatisfy { $0.event == .turnFinished(message: "I've completed the refactoring.", backgroundTasks: 0, subagents: []) })
     }
 
     @Test func garbageIsIgnoredAndServerKeepsWorking() async throws {
@@ -341,7 +341,7 @@ struct HookServerTests {
             stdin: String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
         )
         let message = try #require(await collect(1, from: server).first)
-        guard case .turnFinished(let text?, let backgroundTasks) = message.event else {
+        guard case .turnFinished(let text?, let backgroundTasks, _) = message.event else {
             Issue.record("expected a finished turn with its message, got \(String(describing: message.event))")
             return
         }
