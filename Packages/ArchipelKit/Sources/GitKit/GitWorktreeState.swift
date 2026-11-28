@@ -115,6 +115,8 @@ public final class GitWorktreeState {
     @ObservationIgnored var onStatusRead: ((GitStatus) -> Void)?
     /// Bumped by `invalidatePendingReads()`. A read that started under an older value is dropped.
     @ObservationIgnored private var generation = 0
+    /// See `holdReads()`.
+    @ObservationIgnored private var isHeld = false
     /// Reads run one after another, so a later one always lands after an earlier one. What is asked
     /// for while one runs is merged into the next.
     @ObservationIgnored private var pending: GitRefreshRequest?
@@ -188,6 +190,17 @@ public final class GitWorktreeState {
         generation += 1
     }
 
+    /// Freezes the status until `releaseReads()`, for while the worktree's folder is being deleted.
+    /// Refreshes asked for in between are skipped, and a read already running is thrown away.
+    public func holdReads() {
+        isHeld = true
+        generation += 1
+    }
+
+    public func releaseReads() {
+        isHeld = false
+    }
+
     private func startReading() {
         guard reader == nil else { return }
         reader = Task {
@@ -203,6 +216,7 @@ public final class GitWorktreeState {
     }
 
     private func read(_ request: GitRefreshRequest) async {
+        guard !isHeld else { return }
         let generation = generation
         let git = environment.git
         let root = root
