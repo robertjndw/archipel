@@ -133,6 +133,8 @@ struct PaneTabBar: View {
                             .transition(reduceMotion ? .opacity : .tab)
                             .contextMenu { tabMenu(tab) }
                             .modifier(TabDropTarget(tab: tab))
+                            // Not on the whole row: its empty part should still move the window.
+                            .blocksWindowDrag()
                         }
                         .reorderable()
                     }
@@ -145,6 +147,13 @@ struct PaneTabBar: View {
                         move(difference.sources, to: difference.destination.position)
                     }
                     .dragContainer(for: TabDragItem.self) { ids in ids.map(TabDragItem.init) }
+                    // The tabs' paste targets get in the way of a tab drag, see TabDropTarget.
+                    .onDragSessionUpdated { session in
+                        switch session.phase {
+                        case .initial, .active, .ending: model.isDraggingTab = true
+                        default: model.isDraggingTab = false
+                        }
+                    }
                     // reorderContainer only handles this pane's tabs. This picks up tabs
                     // dragged in from other panes.
                     .dropDestination(for: TabDragItem.self) { items, session in

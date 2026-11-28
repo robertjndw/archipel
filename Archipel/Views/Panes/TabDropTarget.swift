@@ -28,10 +28,19 @@ struct TabDropTarget: ViewModifier {
                 }
             }
             .animation(Motion.hover, value: isTargeted)
-            .onDrop(
-                of: TabDropDelegate.types,
-                delegate: TabDropDelegate(model: model, tab: tab, isTargeted: $isTargeted, springLoad: springLoad(_:))
-            )
+            // A dragged tab also carries its id as text. This target used to grab it as text to
+            // paste and then drop it, so the reorder container never got the tab. Passing no types
+            // while a tab is dragged isn't enough, the target still swallows the drag, so it has
+            // to go away completely. It's an overlay so that removing it doesn't rebuild the tab
+            // in the middle of its own drag.
+            .overlay {
+                if !model.isDraggingTab {
+                    Color.clear.onDrop(
+                        of: TabDropDelegate.types,
+                        delegate: TabDropDelegate(model: model, tab: tab, isTargeted: $isTargeted, springLoad: springLoad(_:))
+                    )
+                }
+            }
             .onDisappear { springLoad(false) }
     }
 
