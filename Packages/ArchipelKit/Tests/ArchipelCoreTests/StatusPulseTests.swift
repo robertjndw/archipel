@@ -114,4 +114,33 @@ struct StatusPulseTests {
         activity.expireSubagents(at: Self.start + 11 * 60)
         #expect(StatusPulse.kind(from: before, to: activity, siblings: []) == nil)
     }
+
+    @Test func aQuietSubagentTheAgentStillListsHoldsTheGlowBack() {
+        var activity = working(subagents: ["quiet", "gone"])
+        // Long past the quiet limit, so the next event drops both from the roster.
+        let late: TimeInterval = 11 * 60
+        #expect(pulse(&activity, .activity, at: late) == nil)
+        #expect(activity.subagents.count == 0)
+        #expect(pulse(&activity, .turnFinished(message: nil, subagents: ["quiet"]), at: late + 1) == nil)
+        #expect(activity.subagents.count == 1)
+        #expect(activity.showsProgress)
+        #expect(!activity.unread)
+
+        // The agent picks up its result and ends the next turn with nothing left running.
+        #expect(pulse(&activity, .subagentFinished(id: "quiet"), at: late + 60) == nil)
+        #expect(pulse(&activity, .promptSubmitted, at: late + 61) == nil)
+        #expect(pulse(&activity, .turnFinished(message: nil, subagents: []), at: late + 70) == .finished)
+    }
+
+    @Test func aSubagentTheAgentNoLongerListsDoesNotHoldTheGlowBack() {
+        var activity = working(subagents: ["lost"])
+        #expect(pulse(&activity, .turnFinished(message: nil, subagents: []), at: 5) == .finished)
+        #expect(activity.subagents.count == 0)
+    }
+
+    @Test func aTurnEndThatListsNothingKeepsTheRoster() {
+        var activity = working(subagents: ["a"])
+        #expect(pulse(&activity, .turnFinished(message: nil), at: 5) == nil)
+        #expect(activity.subagents.count == 1)
+    }
 }

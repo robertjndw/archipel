@@ -226,7 +226,7 @@ struct HookServerEdgeCaseTests {
         let json = #"{"session": "\#(UUID().uuidString)", "source": "claude", "origin": "user-settings"\#(field), "payload": \#(Fixtures.stop)}"#
         let message = try #require(HookServer.decodeEnvelope(Data(json.utf8)))
         #expect(message.ancestorPIDs == expected)
-        #expect(message.event == .turnFinished(message: "I've completed the refactoring.", backgroundTasks: 0))
+        #expect(message.event == .turnFinished(message: "I've completed the refactoring.", backgroundTasks: 0, subagents: []))
     }
 
     // MARK: Helpers

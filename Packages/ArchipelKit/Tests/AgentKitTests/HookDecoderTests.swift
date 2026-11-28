@@ -6,7 +6,7 @@ import Testing
 struct HookDecoderTests {
     @Test func routesBySourceThroughTheRegistry() throws {
         let claude = try #require(HookDecoder.decode(source: "claude", payload: Data(Fixtures.stop.utf8)))
-        #expect(claude.event == .turnFinished(message: "I've completed the refactoring.", backgroundTasks: 0))
+        #expect(claude.event == .turnFinished(message: "I've completed the refactoring.", backgroundTasks: 0, subagents: []))
         let codex = try #require(HookDecoder.decode(source: "codex", payload: Data(Fixtures.codexTurnComplete.utf8)))
         #expect(codex.event == .turnFinished(message: "Rename complete."))
         #expect(HookDecoder.decode(source: "gemini", payload: Data(Fixtures.stop.utf8)) == nil)

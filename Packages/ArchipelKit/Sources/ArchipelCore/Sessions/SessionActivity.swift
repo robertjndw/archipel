@@ -196,7 +196,7 @@ public struct SessionActivity: Equatable, Sendable {
                 status = .needsAttention(reason)
                 lastMessage = message ?? lastMessage
             }
-        case .turnFinished(let message, let backgroundTasks):
+        case .turnFinished(let message, let backgroundTasks, _):
             status = .finished
             completedTurn = true
             awaitsTurnEnd = false

@@ -151,9 +151,13 @@ public struct ClaudeAdapter: AgentAdapter {
                 return nil
             }
         case "Stop", "StopFailure":
+            // StopFailure and older versions of Claude send no list. Both values are nil then,
+            // and what an earlier Stop reported is kept.
+            let tasks = payload["background_tasks"] as? [[String: Any]]
             return .turnFinished(
                 message: HookDecoder.nonEmptyString(payload["last_assistant_message"]),
-                backgroundTasks: backgroundTaskCount(payload["background_tasks"])
+                backgroundTasks: tasks?.count { !isSubagent($0) },
+                subagents: tasks?.filter(isSubagent).compactMap { HookDecoder.nonEmptyString($0["id"]) }
             )
         default:
             // SessionEnd included: the terminal reports the process exit with its real code.
@@ -161,12 +165,10 @@ public struct ClaudeAdapter: AgentAdapter {
         }
     }
 
-    /// Nil when the list is missing, as on StopFailure and older versions of Claude, so that what
-    /// an earlier Stop reported is kept. Subagents are left out because SubagentStart and
-    /// SubagentStop already track them.
-    private static func backgroundTaskCount(_ value: Any?) -> Int? {
-        guard let tasks = value as? [[String: Any]] else { return nil }
-        return tasks.count { $0["type"] as? String != "subagent" }
+    /// Subagents are kept apart from shells and monitors in `background_tasks`. Their `id` is the
+    /// `agent_id` SubagentStart and SubagentStop report, and unlike a dev server they do end.
+    private static func isSubagent(_ task: [String: Any]) -> Bool {
+        task["type"] as? String == "subagent"
     }
 
     /// Claude hook events we subscribe to. PostToolUse and StopFailure are there so a session
