@@ -143,6 +143,10 @@ struct IslandSwitcher: View {
                 }
             }
         }
+        // Same setup as the tab row. Without these two the sidebar's folder drop gets the drag
+        // and rejects it. The destination is empty because the reorder container does the move.
+        .dragContainer(for: IslandDragItem.self) { ids in ids.map(IslandDragItem.init) }
+        .dropDestination(for: IslandDragItem.self, isEnabled: !isTemplate) { _, _ in }
         .padding(2)
     }
 

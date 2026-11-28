@@ -92,6 +92,8 @@ final class AppModel {
     let documents = FileDocumentStore()
     /// Pages of web tabs, for the same reason as `documents`.
     let webPages = WebPageStore()
+    /// Set while a tab is being dragged, in any pane.
+    var isDraggingTab = false
     /// A file tab with unsaved edits that the user asked to close.
     var tabAwaitingCloseDecision: Tab?
     /// A close or restart the user asked for while the session was working or waiting on them.
