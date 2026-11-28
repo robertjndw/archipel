@@ -1,0 +1,107 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "extended-srgb:0.52000,0.98000,0.90000,1.00000",
+      "extended-srgb:0.00000,0.66000,0.70000,1.00000"
+    ],
+    "orientation": {
+      "start": {
+        "x": 0.5,
+        "y": 0
+      },
+      "stop": {
+        "x": 0.5,
+        "y": 1
+      }
+    }
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "island-large.svg",
+          "name": "island-large",
+          "glass": true,
+          "fill": {
+            "solid": "extended-srgb:1.00000,0.94000,0.80000,1.00000"
+          }
+        },
+        {
+          "image-name": "island-medium.svg",
+          "name": "island-medium",
+          "glass": true,
+          "fill": {
+            "solid": "extended-srgb:1.00000,0.94000,0.80000,1.00000"
+          }
+        },
+        {
+          "image-name": "island-small.svg",
+          "name": "island-small",
+          "glass": true,
+          "fill": {
+            "solid": "extended-srgb:1.00000,0.94000,0.80000,1.00000"
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.4
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.25
+      },
+      "specular": true
+    },
+    {
+      "layers": [
+        {
+          "image-name": "shore.svg",
+          "name": "shore",
+          "glass": true,
+          "fill": {
+            "solid": "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.2
+      },
+      "specular": true,
+      "opacity": 0.75
+    },
+    {
+      "layers": [
+        {
+          "image-name": "shallows.svg",
+          "name": "shallows",
+          "glass": false,
+          "fill": {
+            "solid": "extended-srgb:0.70000,1.00000,0.95000,1.00000"
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      },
+      "specular": false,
+      "opacity": 0.35
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

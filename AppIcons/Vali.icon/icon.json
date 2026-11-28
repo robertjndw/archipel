@@ -1,0 +1,124 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "extended-srgb:1.00000,0.81961,0.74118,1.00000",
+      "extended-srgb:0.90588,0.65098,0.93333,1.00000"
+    ],
+    "orientation": {
+      "start": {
+        "x": 0.5,
+        "y": 0
+      },
+      "stop": {
+        "x": 0.5,
+        "y": 1
+      }
+    }
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "island-large.svg",
+          "name": "island-large",
+          "fill": {
+            "linear-gradient": [
+              "extended-srgb:1.00000,0.43529,0.65882,1.00000",
+              "extended-srgb:0.94902,0.21961,0.49804,1.00000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.5,
+                "y": 0
+              },
+              "stop": {
+                "x": 0.5,
+                "y": 1
+              }
+            }
+          },
+          "glass": true
+        },
+        {
+          "image-name": "island-medium.svg",
+          "name": "island-medium",
+          "fill": {
+            "linear-gradient": [
+              "extended-srgb:1.00000,0.69804,0.47843,1.00000",
+              "extended-srgb:1.00000,0.49412,0.37255,1.00000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.5,
+                "y": 0
+              },
+              "stop": {
+                "x": 0.5,
+                "y": 1
+              }
+            }
+          },
+          "glass": true
+        },
+        {
+          "image-name": "island-small.svg",
+          "name": "island-small",
+          "fill": {
+            "linear-gradient": [
+              "extended-srgb:0.65490,0.48235,1.00000,1.00000",
+              "extended-srgb:0.45490,0.27451,0.94118,1.00000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.5,
+                "y": 0
+              },
+              "stop": {
+                "x": 0.5,
+                "y": 1
+              }
+            }
+          },
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.05
+      },
+      "specular": true
+    },
+    {
+      "layers": [
+        {
+          "image-name": "shore.svg",
+          "name": "shore",
+          "fill": {
+            "solid": "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+          },
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.0
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.0
+      },
+      "specular": true,
+      "opacity": 0.95
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

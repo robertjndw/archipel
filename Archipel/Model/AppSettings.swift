@@ -11,6 +11,28 @@ final class AppSettings {
         var id: Self { self }
     }
 
+    /// The Dock and Finder icon. `system` is the real one from Archipel.icon, the only one macOS
+    /// can draw dark, clear or tinted. The others are flat renders of the .icon files in AppIcons/.
+    enum AppIcon: String, CaseIterable, Identifiable {
+        case system, vali, blueprint, monochrome, neon, terminal, sunset, lagoon, midnight, paper
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .system: "Auto"
+            case .vali: "Vali"
+            case .blueprint: "Blueprint"
+            case .monochrome: "Mono"
+            case .neon: "Neon"
+            case .terminal: "Terminal"
+            case .sunset: "Sunset"
+            case .lagoon: "Lagoon"
+            case .midnight: "Midnight"
+            case .paper: "Paper"
+            }
+        }
+    }
+
     /// How much room each project and worktree gets in the sidebar, like Xcode's navigator size.
     enum SidebarDensity: String, CaseIterable, Identifiable {
         case compact, comfortable, spacious
@@ -128,6 +150,7 @@ final class AppSettings {
     // MARK: Appearance
 
     var appearance: Appearance { didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) } }
+    var appIcon: AppIcon { didSet { defaults.set(appIcon.rawValue, forKey: Key.appIcon) } }
     var sidebarDensity: SidebarDensity { didSet { defaults.set(sidebarDensity.rawValue, forKey: Key.sidebarDensity) } }
     var paneStyle: PaneStyle { didSet { defaults.set(paneStyle.rawValue, forKey: Key.paneStyle) } }
     var showsGitStatusInSidebar: Bool { didSet { defaults.set(showsGitStatusInSidebar, forKey: Key.showsGitStatusInSidebar) } }
@@ -272,6 +295,7 @@ final class AppSettings {
         // The browser stays the default for web links: it has the user's logins and extensions.
         webLinkDestination = defaults.string(forKey: Key.webLinkDestination).flatMap(LinkDestination.init) ?? .defaultApp
         appearance = defaults.string(forKey: Key.appearance).flatMap(Appearance.init) ?? .system
+        appIcon = defaults.string(forKey: Key.appIcon).flatMap(AppIcon.init) ?? .system
         sidebarDensity = defaults.string(forKey: Key.sidebarDensity).flatMap(SidebarDensity.init) ?? .comfortable
         paneStyle = defaults.string(forKey: Key.paneStyle).flatMap(PaneStyle.init) ?? .comfortable
         showsGitStatusInSidebar = bool(Key.showsGitStatusInSidebar, true)
@@ -336,6 +360,7 @@ final class AppSettings {
         static let fileLinkDestination = "settings.fileLinkDestination"
         static let webLinkDestination = "settings.webLinkDestination"
         static let appearance = "settings.appearance"
+        static let appIcon = "settings.appIcon"
         static let sidebarDensity = "settings.sidebarDensity"
         static let paneStyle = "settings.paneStyle"
         static let showsGitStatusInSidebar = "settings.showsGitStatusInSidebar"

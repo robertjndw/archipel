@@ -79,6 +79,10 @@ extension AppModel {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var model: AppModel?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if let model { AppIconChanger.apply(model.settings.appIcon, atLaunch: true) }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model else { return .terminateNow }
         if !model.documents.dirtyURLs.isEmpty {
