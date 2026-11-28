@@ -295,6 +295,7 @@ struct MarkdownCodeBlock: View {
     @State private var highlighted: HighlightedCode?
     @State private var isHovering = false
     @State private var copied = false
+    @FocusState private var isCopyFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -304,7 +305,8 @@ struct MarkdownCodeBlock: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    copyButton
+                    // Nothing to cover up here, so no need to hide it until hover.
+                    copyButton(alwaysVisible: true)
                 }
                 .padding(.leading, MarkdownMetrics.codePadding)
                 .padding(.trailing, 6)
@@ -326,7 +328,7 @@ struct MarkdownCodeBlock: View {
             if language == nil {
                 // The backing keeps the button legible when it lands on a long first line. Glass, as
                 // every floating control in the app is; the app uses no materials.
-                copyButton
+                copyButton(alwaysVisible: false)
                     .glassEffect(.regular, in: .capsule)
                     .padding(6)
             }
@@ -338,7 +340,9 @@ struct MarkdownCodeBlock: View {
         }
     }
 
-    private var copyButton: some View {
+    /// Without a header the button sits on top of the code, so it hides until hover. It also
+    /// shows on keyboard focus, otherwise tabbing lands on an invisible button.
+    private func copyButton(alwaysVisible: Bool) -> some View {
         Button(action: copy) {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
                 .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
@@ -349,8 +353,9 @@ struct MarkdownCodeBlock: View {
         .foregroundStyle(.secondary)
         .help("Copy")
         .accessibilityLabel(copied ? "Copied" : "Copy Code")
-        .opacity(isHovering || copied ? 1 : 0)
-        .animation(reduceMotion ? nil : Motion.hover, value: isHovering)
+        .focused($isCopyFocused)
+        .opacity(alwaysVisible || isHovering || isCopyFocused || copied ? 1 : 0)
+        .animation(reduceMotion ? nil : Motion.hover, value: isHovering || isCopyFocused)
         .task(id: copied) {
             guard copied else { return }
             try? await Task.sleep(for: .seconds(1.5))
